@@ -9,10 +9,10 @@
 Зазвичай вхідні зображення для Face Hallucination мають роздільну здатність 32x24 або 16x12 пікселів, а метою є досягнення роздільної здатності 128x96 пікселів або вище.
 
 *Відомі методи*:
--інтерполяція
--методи на основі теореми Баєса
--нейронні мережі (CNN)
--генеративно-змагальні мережахі (GAN).
+- інтерполяція
+- методи на основі теореми Баєса
+- нейронні мережі (CNN)
+- генеративно-змагальні мережахі (GAN).
 
 Архітектури мереж:
 - SRGAN (Super-Resolution Generative Adversarial Network), Real-ESRGAN, SF-SRGAN
@@ -21,10 +21,12 @@
 - C-Face network
 - HiFaceGAN
 
-##DataSet
-Використовувався dataSet зібраний з FFHQ 2, CelebA та зображень з Інтренет. 
-Розмір **209813** зображень розміром 89*109
-[Dataset](https://drive.google.com/file/d/1Qv2c8UN87Wq2qGlyQnPEMh9kj6n87oL8/view?usp=sharing)
+## Dataset [Download](https://drive.google.com/file/d/1Qv2c8UN87Wq2qGlyQnPEMh9kj6n87oL8/view?usp=sharing)
+Використовувався dataSet зібраний з FFHQ 2, CelebA та зображень з Інтренет (**209813** зображень 89*109)
 
-##Результати:
-![Скріншот](images/screenshot.png)
+
+## Результати:
+![CNET](images/CNET.png)
+
+## Плани
+Потрібно спробувати поєднати декілька моделей

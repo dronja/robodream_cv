@@ -1,2 +1,30 @@
-# robodream_cv
-FACE HALLUCINATION
+# Face Hallucination
+
+Низька роздільна здатність зображень облич є поширеною проблемою в багатьох сферах, наприклад системи відеомоніторингу, криміналістика, обробка старих фотографій, системи розпізнавання обличь тощо.
+
+**Face Hallucination** - різновид *super-resolution*, спеціально розроблена для відновлення деталей та підвищення роздільної здатності зображень обличь, заснована на знаннях про їх будову.
+
+Мета - перетворити розмиті або низькоякісні зображення облич у зображення високої роздільної здатності, використовуючи знання про типові риси обличчя зі збереженням ідентичності особи.
+
+Зазвичай вхідні зображення для Face Hallucination мають роздільну здатність 32x24 або 16x12 пікселів, а метою є досягнення роздільної здатності 128x96 пікселів або вище.
+
+*Відомі методи*:
+-інтерполяція
+-методи на основі теореми Баєса
+-нейронні мережі (CNN)
+-генеративно-змагальні мережахі (GAN).
+
+Архітектури мереж:
+- SRGAN (Super-Resolution Generative Adversarial Network), Real-ESRGAN, SF-SRGAN
+- PULSE (Self-Supervised Photo Upsampling via Latent Space Exploration of Generative Models) [GitHub](https://github.com/alex-damian/pulse)
+- Attention-FH
+- C-Face network
+- HiFaceGAN
+
+##DataSet
+Використовувався dataSet зібраний з FFHQ 2, CelebA та зображень з Інтренет. 
+Розмір **209813** зображень розміром 89*109
+[Dataset](https://drive.google.com/file/d/1Qv2c8UN87Wq2qGlyQnPEMh9kj6n87oL8/view?usp=sharing)
+
+##Результати:
+![Скріншот](images/screenshot.png)

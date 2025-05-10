@@ -1,47 +1,91 @@
-# Face Hallucination
+# 🧠 Face Hallucination
 
-Низька роздільна здатність зображень облич є поширеною проблемою в багатьох сферах, наприклад системи відеомоніторингу, криміналістика, обробка старих фотографій, системи розпізнавання облич тощо.
+Low-resolution face images are a common issue in many fields, such as video surveillance systems, forensics, old photo restoration, face recognition systems, and more.
 
-**Face Hallucination** - різновид *super-resolution*, спеціально розроблена для відновлення деталей та підвищення роздільної здатності зображень обличь, заснована на знаннях про їх будову.
+**Face Hallucination** is a type of *super-resolution*, specifically designed to restore details and increase the resolution of face images based on knowledge of facial structure.
 
-Мета - перетворити розмиті або низькоякісні зображення облич у зображення високої роздільної здатності, використовуючи знання про типові риси обличчя зі збереженням ідентичності особи.
+---
 
-Зазвичай вхідні зображення для Face Hallucination мають роздільну здатність 32x24 або 16x12 пікселів, а метою є досягнення роздільної здатності 96x96 пікселів або вище. *Основною проблемою є збереження ідентичності та реалістичності обличчя.*
+## 🎯 Goal
 
-*Відомі методи*:
-- інтерполяція
-- методи на основі теореми Баєса
-- нейронні мережі (CNN)
-- генеративно-змагальні мережахі (GAN).
+Transform blurry or low-quality face images into high-resolution ones using knowledge about typical facial features — while **preserving the identity** of the person.
 
-Архітектури мереж:
-- SRGAN (Super-Resolution Generative Adversarial Network), Real-ESRGAN, SF-SRGAN
-- PULSE (Self-Supervised Photo Upsampling via Latent Space Exploration of Generative Models) [GitHub](https://github.com/alex-damian/pulse)
-- Attention-FH (Attention-Aware Face Hallucination)[Source](https://arxiv.org/abs/1708.03132)
-- SRResNet (Super-Resolution Residual Network) [Source](https://arxiv.org/abs/1609.04802)
-- C-Face network [Source](https://arxiv.org/abs/1503.03832)
+Typical input resolution: `32×24` or `16×12`  
+Target resolution: `96×96` or higher  
+> 🔥 **Main challenge:** identity and realism preservation
 
-## Dataset [download](https://drive.google.com/file/d/1Qv2c8UN87Wq2qGlyQnPEMh9kj6n87oL8/view?usp=sharing)
-Використовувався dataSet зібраний з FFHQ 2, CelebA та зображень з Інтренет (**209813** зображень 89x109)
+---
 
+## 🛠️ Common Methods
 
-## Результати:
-Результат оцінювався субєктивним порівнянням з оригіналом.
+- Traditional interpolation
+- Bayesian-based approaches
+- Convolutional Neural Networks (CNNs)
+- Generative Adversarial Networks (GANs)
 
-**PULSE** модель генерувала реалістичні зображення, які не мали нічого спільного із вхідним зображенням.
+---
+
+## 📐 Network Architectures
+
+| Model | Description | Link |
+|-------|-------------|------|
+| **SRGAN** | Super-Resolution Generative Adversarial Network | [arXiv:1609.04802](https://arxiv.org/abs/1609.04802) |
+| **Real-ESRGAN** | Enhanced SRGAN with real-world degradation handling | |
+| **PULSE** | Self-Supervised Upsampling via Latent Space | [GitHub](https://github.com/alex-damian/pulse) |
+| **Attention-FH** | Attention-Aware Face Hallucination | [arXiv:1708.03132](https://arxiv.org/abs/1708.03132) |
+| **SRResNet** | Residual-based Super-Resolution network | [arXiv:1609.04802](https://arxiv.org/abs/1609.04802) |
+| **C-Face Network** | Shape-controlled face hallucination | [arXiv:1503.03832](https://arxiv.org/abs/1503.03832) |
+
+---
+
+## 📂 Dataset
+
+🗃️ Download: [GDrive](https://drive.google.com/file/d/1Qv2c8UN87Wq2qGlyQnPEMh9kj6n87oL8/view?usp=sharing)  
+Collected from **FFHQ 2**, **CelebA**, and Internet sources  
+- `209,813` face images  
+- Size: `89×109` pixels
+
+---
+
+## 📊 Results
+
+### 🌀 PULSE
+
+Generated realistic but **identity-inconsistent** results:
+
 ![PULSE](images/pulse.jpeg)
 
-Модель *SRGAN* показала дуже погані результати:
+---
+
+### ❌ SRGAN
+
+Performed **very poorly**, not suitable for this task:
+
 ![SRGAN](images/SRgan.png)
-Можна зробити висновок, що даний тип мережі не підходить для вирішення задачі.
 
-Спрощена модель **SRResNet**. 
+---
+
+### ✅ SRResNet (simplified)
+
+Showed **the best result**. Used:
+- Residual connections
+- PixelShuffle (DepthToSpace)
+
 ![SRResNet](images/FNET.png)
-Використовував upsampling через PixelShuffle (DepthToSpace) та ресідуальні з'єднання. Мережа показала найкращий результат.
 
-Спрощена модель **C-Face network**. 
+---
+
+### ⚙️ C-Face (simplified)
+
+Simple encoder-decoder, no residual connections.  
+Performed **slightly worse** than SRResNet.
+
 ![CNET](images/CNET.png)
-Це енкодер-декодерна найпростіша в реалізації модель без ресідуальних з'єднань. Показала трішки гірший результат ніж SRResNet.
 
-## Плани
-Потрібно поєднати C-Face network та SRResNet.
+---
+
+## 📌 Plans
+
+🧬 **Combine SRResNet and C-Face** to leverage both residual learning and explicit shape control.
+
+

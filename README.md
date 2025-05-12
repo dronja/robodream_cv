@@ -53,7 +53,7 @@ Collected from **FFHQ 2**, **CelebA**, and Internet sources
 
 Generated realistic but **identity-inconsistent** results:
 
-![PULSE](images/pulse.jpeg)
+![PULSE](images/PULSE.png)
 
 ---
 

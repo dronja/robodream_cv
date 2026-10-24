@@ -1,13 +1,32 @@
-# Built application files
-.DS_Store
-/build
-/captures
+# Data and experiment outputs
+data/
+runs/
+mlruns/
+outputs/
 
-# Crashlytics configuations
-com_crashlytics_export_strings.xml
+# Model weights and checkpoints (legacy/ is tracked on purpose)
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.keras
+!legacy/**
 
-# Local configuration file (sdk path, etc)
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-.gradle/
+# Notebooks / IDE / OS
 .ipynb_checkpoints/
 .idea/
+.vscode/
+.DS_Store

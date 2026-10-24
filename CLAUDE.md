@@ -1,6 +1,6 @@
 # CLAUDE.md — Face Hallucination (robodream_cv)
 
-> Інструкції для Claude Code. Стан описано на **2026-10-24** (коміт `6c75963`).
+> Інструкції для Claude Code. Стан описано на **2026-10-24** (коміт `6c75963`; Фаза 0 виконана на гілці `chore/phase-0-repo-hygiene`, чекає PR).
 > Це живий документ: після кожної завершеної фази оновлюй §3 «Поточний стан» і чекбокси в §12.
 
 ---
@@ -38,7 +38,7 @@
 
 **Залізо**: NVIDIA RTX 4070 Laptop GPU (8 GB VRAM). Епоха FNet ≈ 4 хв, CNet ≈ 2 хв (≈168k зображень, batch 16).
 
-Немає: тестів, `requirements`/`pyproject`, CI, скриптів підготовки даних. `.gitignore` — шаблон Android-проекту.
+Після Фази 0: файли legacy перенесено в `legacy/`, є `pyproject.toml` (uv), пакет-скелет `src/facehall`, тести, pre-commit, CI (GitHub Actions), Python-`.gitignore`. Досі немає: скриптів підготовки даних і моделей у пакеті. Ваги лишаються в `legacy/` у HEAD (D7).
 
 ## 4. Відомі проблеми legacy-коду (не переносити в новий код)
 
@@ -222,10 +222,10 @@ Quality gates для нової моделі:
 ## 12. Дорожня карта
 
 ### Фаза 0 — гігієна репозиторію
-- [ ] Python-`.gitignore` (`data/`, `runs/`, `mlruns/`, `outputs/`, `*.pth`, `*.ckpt`, `*.onnx`, `*.safetensors`)
-- [ ] Перенести `FH.ipynb`, `*.keras`, `*.pth` у `legacy/`; ваги — у GitHub Releases (D7)
-- [ ] `pyproject.toml`, ruff, mypy, pytest, pre-commit, мінімальний CI
-- [ ] Виправити README (посилання C-Face, розміри входу); створити `docs/DECISIONS.md`
+- [x] Python-`.gitignore` (`data/`, `runs/`, `mlruns/`, `outputs/`, `*.pth`, `*.ckpt`, `*.onnx`, `*.safetensors`)
+- [x] Перенести `FH.ipynb`, `*.keras`, `*.pth` у `legacy/`; ваги — у GitHub Releases (D7)
+- [x] `pyproject.toml`, ruff, mypy, pytest, pre-commit, мінімальний CI
+- [x] Виправити README (посилання C-Face, розміри входу); створити `docs/DECISIONS.md`
 
 **Готово, коли** `uv sync && uv run pytest` проходить на чистій машині, CI зелений.
 
@@ -276,7 +276,7 @@ Quality gates для нової моделі:
 
 ## 13. Команди
 
-**Ще не існують** — створюються у Фазах 0–1. Цільовий інтерфейс:
+**Працюють (Фаза 0):** `uv sync`, `uv run pytest -q`, `uv run pre-commit run --all-files`, `uv run facehall --version`. Решта — створюється у Фазі 1+. Цільовий інтерфейс:
 
 ```bash
 uv sync                                          # залежності

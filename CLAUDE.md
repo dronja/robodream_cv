@@ -1,7 +1,10 @@
 # CLAUDE.md — Face Hallucination (robodream_cv)
 
-> Інструкції для Claude Code. Стан описано на **2026-10-24** (коміт `6c75963`; Фаза 0 виконана на гілці `chore/phase-0-repo-hygiene`, чекає PR).
-> Це живий документ: після кожної завершеної фази оновлюй §3 «Поточний стан» і чекбокси в §12.
+> Інструкції для Claude Code: правила роботи й вимоги до продукту.
+> **Факти, поточний стан, середовище, дані, план і прогрес — у `docs/PROJECT.md`** (єдине джерело правди; підключено нижче). Журнал рішень — `docs/DECISIONS.md`.
+> Не дублюй факти між файлами — посилайся. `docs/PROJECT.md` оновлюй у тому ж PR, що й зміну, яку він описує.
+
+@docs/PROJECT.md
 
 ---
 
@@ -25,20 +28,7 @@
 
 ## 3. Поточний стан репозиторію
 
-| Файл | Що це | Примітки |
-|---|---|---|
-| `FH.ipynb` | Увесь код: TF/Keras-моделі FNet і CNet, PyTorch-генератор SRGAN, навчання, візуалізація | Комірки виконувались не по порядку; навчання SRGAN (дискримінатор, цикл) у ноутбуці відсутнє |
-| `FNet_24.keras` | «Спрощений SRResNet»: 24×24 → 96×96 (×4), 5 residual-блоків з BN, PixelShuffle через `Lambda(depth_to_space)`, sigmoid, MSE | Найкращий результат. Keras 3.9.2, містить стан оптимізатора |
-| `CNet_24.keras` | «Спрощений C-Face»: Conv + `UpSampling2D`, без residual, MSE | Трохи гірше за FNet |
-| `SRgan_20.pth` | `state_dict` PyTorch-генератора SRGAN | Ноутбук вантажить `./best_generator_20.pth` — ім'я не збігається |
-| `images/*.png` | Ілюстрації результатів для README | |
-| `README.md` | Опис, таблиця архітектур, посилання на датасет (GDrive) | |
-
-**Датасет** (поза репо): 209 813 облич, 89×109 px, «FFHQ 2» + CelebA + інтернет; у ноутбуці — `data/my_dataset/img/unknown/`. 89×109 — рівно половина CelebA aligned (178×218), тож основна частина, імовірно, CelebA; точний склад не задокументовано.
-
-**Залізо**: NVIDIA RTX 4070 Laptop GPU (8 GB VRAM). Епоха FNet ≈ 4 хв, CNet ≈ 2 хв (≈168k зображень, batch 16).
-
-Після Фази 0: файли legacy перенесено в `legacy/`, є `pyproject.toml` (uv), пакет-скелет `src/facehall`, тести, pre-commit, CI (GitHub Actions), Python-`.gitignore`. Досі немає: скриптів підготовки даних і моделей у пакеті. Ваги лишаються в `legacy/` у HEAD (D7).
+→ `docs/PROJECT.md`: §2 (стан), §3 (вміст репо), §4 (середовище й залізо), §5 (legacy-файли й датасет), §6 (дані).
 
 ## 4. Відомі проблеми legacy-коду (не переносити в новий код)
 
@@ -66,19 +56,10 @@
 
 ---
 
-## 5. Відкриті рішення — спитай користувача, перш ніж фіксувати
+## 5. Рішення
 
-| ID | Питання | Значення за замовчуванням |
-|---|---|---|
-| D1 | Сценарій і аудиторія: реставрація фото, покращення відео/камер, дослідницький інструмент тощо | Реставрація фото й кадрів, офлайн |
-| D2 | **Комерційне чи некомерційне використання?** Визначає, які датасети й готові моделі взагалі можна брати (§8) | Некомерційне / дослідницьке |
-| D3 | Фреймворк | PyTorch; Keras-код — лише legacy-довідка |
-| D4 | Масштаби й роздільність (16→128 ×8, 32→128 ×4, 128→512 ×4 …) | ×4 і ×8 на вирівняних кропах 128×128; 512 — пізніше |
-| D5 | Розгортання: CLI, REST API, десктоп, мобільний, edge | CLI + REST API в Docker |
-| D6 | Де вчимо: ноутбук (8 GB VRAM) чи хмара | Локально; конфіги під 8 GB VRAM |
-| D7 | Чи переписувати git-історію, щоб прибрати ваги (`git filter-repo`) | Ні; прибрати з HEAD, ваги — в GitHub Releases |
-
-Рішення фіксуй у `docs/DECISIONS.md` (дата, рішення, причина).
+Рішення D1–D12 прийнято: зведення — `docs/PROJECT.md` §7, журнал із причинами — `docs/DECISIONS.md`.
+Нове відкрите питання не вирішуй мовчки: спитай користувача або явно візьми значення за замовчуванням. Поки питання відкрите — тримай його в `docs/PROJECT.md` §11; рішення записуй у `docs/DECISIONS.md` (дата, рішення, причина).
 
 ---
 
@@ -127,7 +108,7 @@ robodream_cv/
 ├── scripts/                  # prepare_dataset.py, download_weights.py
 ├── tests/                    # + tests/fixtures/ з крихітними синтетичними зображеннями
 ├── docker/                   # Dockerfile.cpu, Dockerfile.gpu
-├── docs/                     # DECISIONS, DATA, MODEL_CARD, RESULTS, THIRD_PARTY_LICENSES
+├── docs/                     # PROJECT, DECISIONS, DATA, MODEL_CARD, RESULTS, THIRD_PARTY_LICENSES
 ├── notebooks/                # лише дослідження; логіку сюди не класти
 └── legacy/                   # FH.ipynb, *.keras, *.pth — тільки читати
 ```
@@ -145,7 +126,7 @@ robodream_cv/
 ## 7. Дані
 
 - **Дані не комітимо.** Вони в `data/` (у `.gitignore`) або зовнішньому сховищі. У репо — тільки маніфести (CSV/Parquet: шлях, sha256, джерело, ліцензія, identity_id, split).
-- **Split за особою** (identity-disjoint): для CelebA — офіційний `list_eval_partition.txt` або власний split за `identity_CelebA.txt`; для джерел без ідентичностей — split за джерелом. Test-набір заморожений і не використовується для підбору гіперпараметрів.
+- **Split за особою** (identity-disjoint): для CelebA — офіційний partition (перевірено: особи не перетинаються, D8); для джерел без ідентичностей — split за джерелом. Test-набір заморожений і не використовується для підбору гіперпараметрів.
 - **Пропорції зберігаються**: вирівнювання + квадратний кроп, без непропорційного resize.
 - **HR-еталон не може бути апскейлом**: джерела з роздільністю ≥ цільової (з урахуванням ліцензій, §8).
 - **Деградації — на льоту з конфігу** (`configs/degrade/*.yaml`); для val/test — фіксований seed і збережені параметри:
@@ -221,76 +202,13 @@ Quality gates для нової моделі:
 
 ## 12. Дорожня карта
 
-### Фаза 0 — гігієна репозиторію
-- [x] Python-`.gitignore` (`data/`, `runs/`, `mlruns/`, `outputs/`, `*.pth`, `*.ckpt`, `*.onnx`, `*.safetensors`)
-- [x] Перенести `FH.ipynb`, `*.keras`, `*.pth` у `legacy/`; ваги — у GitHub Releases (D7)
-- [x] `pyproject.toml`, ruff, mypy, pytest, pre-commit, мінімальний CI
-- [x] Виправити README (посилання C-Face, розміри входу); створити `docs/DECISIONS.md`
-
-**Готово, коли** `uv sync && uv run pytest` проходить на чистій машині, CI зелений.
-
-### Фаза 1 — пакет і відтворюваний бейзлайн
-- [ ] `scripts/prepare_dataset.py`: маніфест, identity-disjoint split, вирівнювання й кроп
-- [ ] Dataset + деградація v0 (лише bicubic — для порівняння з legacy)
-- [ ] Порт FNet/CNet у PyTorch, trainer, CLI `train` / `eval`
-- [ ] Метрики PSNR / SSIM / LPIPS / ID-sim; перша таблиця в `RESULTS.md`: bicubic vs FNet vs CNet
-
-**Готово, коли** одна команда відтворює навчання й таблицю результатів.
-
-### Фаза 2 — реалістичні деградації
-- [ ] Повний pipeline деградацій з конфігу; фіксований synthetic test (3 рівні)
-- [ ] Real-world test set
-- [ ] Перенавчити бейзлайн; порівняти «clean vs realistic» навчання на real-world
-
-**Готово, коли** видно й задокументовано вплив деградацій на якість на реальних фото.
-
-### Фаза 3 — якість моделі
-- [ ] SRResNet-v2 (без BN), L1 → perceptual + GAN, EMA
-- [ ] Identity loss
-- [ ] Prior-guided модель (SRResNet + C-Face / shape prior)
-- [ ] Метрики за підгрупами
-
-**Готово, коли** нова модель проходить quality gates (§10).
-
-### Фаза 4 — inference pipeline
-- [ ] Детекція + 5 точок, вирівнювання, paste-back з маскою, fallback на ручний bbox
-- [ ] `facehall enhance` для фото, папок і відео (покадрово; перевірити мерехтіння між кадрами)
-- [ ] Маркування виходу (§11)
-
-**Готово, коли** довільне фото з кількома обличчями обробляється end-to-end.
-
-### Фаза 5 — продукт
-- [ ] ONNX-експорт + parity-тест; ONNX Runtime у pipeline
-- [ ] FastAPI: `/enhance`, `/health`, `/version`; ліміти розміру, таймаути, валідація входу
-- [ ] Docker CPU і GPU; бенчмарк латентності й пам'яті
-- [ ] Gradio-демо (опційно)
-
-**Готово, коли** `docker run` + `curl` повертає покращене зображення, латентність задокументована.
-
-### Фаза 6 — реліз
-- [ ] `MODEL_CARD`, `DATA`, `THIRD_PARTY_LICENSES`, README з реальними результатами
-- [ ] Ваги в GitHub Releases / Hugging Face Hub з checksum; semver для пакета й моделей
-- [ ] `CHANGELOG.md`
+→ `docs/PROJECT.md` §10: фази, критерії «Готово, коли», розбивка на PR і чекбокси прогресу.
 
 ---
 
 ## 13. Команди
 
-**Працюють (Фаза 0):** `uv sync`, `uv run pytest -q`, `uv run pre-commit run --all-files`, `uv run facehall --version`. Решта — створюється у Фазі 1+. Цільовий інтерфейс:
-
-```bash
-uv sync                                          # залежності
-uv run pre-commit run --all-files                # lint / format
-uv run pytest -q                                 # тести (CPU, без датасету)
-uv run facehall train --config configs/train/srresnet_x4.yaml
-uv run facehall train --config configs/train/srresnet_x4.yaml --smoke
-uv run facehall eval --ckpt runs/<id>/best.safetensors --split test
-uv run facehall enhance photo.jpg -o out.png --scale 4
-uv run facehall export onnx --ckpt runs/<id>/best.safetensors --out models/x4.onnx
-uv run facehall serve --port 8000
-```
-
-Коли команди з'являються чи змінюються — онови цей розділ.
+→ `docs/PROJECT.md` §12: робочі й заплановані команди. Коли команди з'являються чи змінюються — онови там.
 
 ## 14. Правила роботи для Claude Code
 
@@ -302,7 +220,7 @@ uv run facehall serve --port 8000
 - **Без підтвердження користувача не можна**: запускати повне навчання; завантажувати великі датасети чи ваги; переписувати git-історію; змінювати публічний CLI/API; додавати залежність або ваги з некомерційною чи невідомою ліцензією.
 - Не вигадувати метрики, посилання на статті чи ліцензії — перевіряти або позначати «потребує перевірки».
 - Відкриті рішення (§5) не приймати мовчки: спитати або явно взяти значення за замовчуванням і записати в `docs/DECISIONS.md`.
-- Після завершення фази — оновити чекбокси в §12 і §3.
+- У кожному PR оновлювати `docs/PROJECT.md` (стан, чекбокси, команди, перевірені факти). Нові факти про проєкт записувати туди, а не в пам'ять сесії.
 
 ## 15. Посилання
 

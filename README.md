@@ -48,8 +48,8 @@ a person or as evidence; at most they are a hint, to be shown next to the origin
 
 ## 🚧 Project status
 
-The repository is being turned into a product-ready package `facehall` (see `CLAUDE.md` and
-`docs/DECISIONS.md`). Phase 0 (repository hygiene) is in progress. The original notebook and
+The repository is being turned into a product-ready package `facehall`. The current state and
+the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`. Phase 0 (repository hygiene) is in progress. The original notebook and
 weights live in `legacy/` and are read only.
 
 ```bash

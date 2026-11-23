@@ -11,14 +11,20 @@ repos:
       - id: check-added-large-files
         args: ["--maxkb=1024"]
         exclude: ^legacy/
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.0
-    hooks:
-      - id: ruff
-        args: ["--fix"]
-      - id: ruff-format
+  # ruff and mypy run from the uv environment, so pre-commit uses the same
+  # versions as CI (pinned in uv.lock).
   - repo: local
     hooks:
+      - id: ruff
+        name: ruff check
+        entry: uv run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi, jupyter]
       - id: mypy
         name: mypy
         entry: uv run mypy

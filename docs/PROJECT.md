@@ -86,6 +86,7 @@ robodream_cv/
 | uv | 0.13.5 in `~/.local/bin` (add it to `PATH` in non-login shells) |
 | Locked dev tools | ruff 0.17.2, mypy 2.4.0, pytest 9.1.1 |
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
+| Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free); the repo `data/` directory is gitignored |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |

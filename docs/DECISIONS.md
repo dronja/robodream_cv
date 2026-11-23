@@ -23,6 +23,7 @@ Log of project decisions: date, decision, reason. Open questions are marked **OP
 **Decision:** x4 and x8 on aligned 128x128 crops; 512 px later.
 **Reason:** 96 px targets are too small for a current product; 512 is deferred until the 128 px pipeline works.
 **OPEN:** the legacy dataset is 89x109 px, so a 128 px HR target built from it would be an upscale, which violates the "HR must not be an upscale" rule. An HR source with resolution >= 128 px (and a compatible license) is needed before Phase 1, or the target must be reduced for the legacy data.
+**Closed 2026-11-23:** see "D4 (update)" below.
 
 ### D5 — Deployment
 **Decision:** CLI + REST API (FastAPI) in Docker (CPU and GPU images).
@@ -39,3 +40,29 @@ Log of project decisions: date, decision, reason. Open questions are marked **OP
 ### Tooling
 **Decision:** package name `facehall`; `uv` for environments (installed to `~/.local/bin`, uv 0.13.5); `requires-python >=3.11`, development on Python 3.12.
 **Reason:** Python 3.14 (system default) is risky for the PyTorch ecosystem.
+
+## 2026-11-23
+
+### D4 (update) — HR source for 128 px
+**Decision:** HR 128x128 crops are built from CelebA aligned (178x218): x4 = 32->128, x8 = 16->128. The OPEN item from 2026-10-24 is closed.
+**Reason:** an FFHQ-style crop from the mean CelebA landmarks is about 154 px and fits inside the image, so 128 px is a x0.83 downscale, not an upscale (`docs/PROJECT.md` §6.3).
+
+### D8 — Phase 1 dataset and split
+**Decision:** CelebA aligned from the Hugging Face mirror `eurecom-ds/celeba`, with the official train/validation/test partition. The test split is frozen.
+**Reason:** the partition was verified to be identity-disjoint (8192 / 985 / 1000 identities, zero overlap), so a custom identity split is not needed, and the official partition keeps results comparable with the literature.
+
+### D9 — Legacy dataset
+**Decision:** the legacy 89x109 dataset (including the "FFHQ 2" and Internet images) is not used in Phase 1.
+**Reason:** its composition, origin and consent are unknown, and 89x109 px is too small for a 128 px HR target.
+
+### D10 — Skin-tone subgroup
+**Decision:** look for an additional skin-tone annotation source; its license is verified and approved by the user before use. Until such a source exists, the missing skin-tone breakdown is documented as a limitation (model card).
+**Reason:** CelebA has no skin-tone annotation; `Pale_Skin` is a binary attribute (4.2% of the test split), not a skin-tone scale.
+
+### D11 — Approved downloads (approved 2026-10-24, recorded now)
+**Decision:** downloading PyTorch, ArcFace weights for the ID-similarity metric and LPIPS weights is approved. The exact ArcFace model is chosen in Phase 1 and recorded in `docs/THIRD_PARTY_LICENSES.md` before merge.
+**Reason:** required for the Phase 1 metrics; the non-commercial terms are compatible with D2.
+
+### D12 — Documentation layout
+**Decision:** `docs/PROJECT.md` is the single source of truth for facts, status, environment, data and the plan. `CLAUDE.md` keeps the rules and requirements and imports `docs/PROJECT.md`; this file keeps the decisions with reasons.
+**Reason:** user request: one place to read the project state instead of re-exploring the code in every session.

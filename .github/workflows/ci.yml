@@ -8,11 +8,17 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # Keep the CPU-only environment created below: without this, `uv run`
+      # would re-sync to the default (CUDA) PyTorch build.
+      UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - name: Install dependencies
-        run: uv sync --locked
+        with:
+          enable-cache: true
+      - name: Install dependencies (CPU-only PyTorch)
+        run: uv sync --locked --extra cpu
       - name: Lint
         run: |
           uv run ruff check .

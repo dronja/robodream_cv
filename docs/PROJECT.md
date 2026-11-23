@@ -34,7 +34,7 @@
 | Facts, status, environment, data, plan, progress | `docs/PROJECT.md` (this file) | every PR |
 | Decisions with date and reason | `docs/DECISIONS.md` | append-only |
 | Dataset composition, how to reproduce it | `docs/DATA.md` | *planned, PR 1.2* |
-| Third-party licenses | `docs/THIRD_PARTY_LICENSES.md` | *planned, PR 1.1* |
+| Third-party licenses | `docs/THIRD_PARTY_LICENSES.md` | every PR that adds a dependency, dataset or weights |
 | Metric tables (generated) | `docs/RESULTS.md` | *planned, PR 1.7* |
 | Model card | `docs/MODEL_CARD.md` | *planned, Phases 3 and 6* |
 
@@ -42,12 +42,10 @@
 
 As of 2026-11-23:
 
-- **Phase 0 (repository hygiene): in review.** Branch `chore/phase-0-repo-hygiene` → PR into
-  `main`. Local checks pass: ruff, ruff format, mypy (strict), pytest (8 tests). Phase 0 is done
-  when CI is green on the PR and the PR is merged.
-- `origin/main` is at `6c75963` — the legacy state before any refactoring.
-- **Phase 1: not started.** Data is downloaded and verified (§6.2); the technical design is
-  agreed (§9).
+- **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
+  commit `0ac43f9`), CI green.
+- **Phase 1: in progress.** PR 1.1 (ML dependencies, branch `build/ml-dependencies`) is in review.
+  Data is downloaded and verified (§6.2); the technical design is agreed (§9).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
 
@@ -63,17 +61,24 @@ robodream_cv/
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (only --version), py.typed
-├── tests/                     # test_import.py, test_cli.py, test_legacy_layout.py
-├── docs/                      # PROJECT.md, DECISIONS.md
+├── scripts/                   # license_report.py (license table from package metadata)
+├── tests/                     # import, CLI, legacy layout, dependency smoke, license report
+├── docs/                      # PROJECT.md, DECISIONS.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
 ```
 
-- Package `facehall` 0.0.0; runtime dependencies: `numpy>=1.26`, `pillow>=10.0`;
-  dev group: ruff, mypy, pytest, pre-commit. Entry point: `facehall = facehall.cli:main`.
-- ruff: line length 100, rules `E F I UP B SIM`, `legacy/` excluded. mypy: strict on `src` and
-  `tests`.
-- CI runs on pushes to `main` and on every pull request.
+- Package `facehall` 0.0.0, Python ≥ 3.12. Runtime dependencies: numpy, omegaconf,
+  opencv-python-headless, pillow, pyarrow, safetensors, torch, torchmetrics[image], torchvision
+  (versions and licenses: `docs/THIRD_PARTY_LICENSES.md` §4.1). Dev group: ruff, mypy, pytest,
+  pre-commit. Entry point: `facehall = facehall.cli:main`.
+- PyTorch build: by default torch comes from PyPI (CUDA 13.2 on Linux). The `cpu` extra switches
+  to the CPU-only build from `download.pytorch.org/whl/cpu`; the `cpu` and `cuda` extras are
+  declared as conflicting, so `uv.lock` holds both builds.
+- ruff: line length 100, rules `E F I UP B SIM`, `legacy/` excluded. mypy: strict on `src`,
+  `tests` and `scripts`; torchvision has no type information and is excluded from import checks.
+- CI runs on pushes to `main` and on every pull request. It installs the CPU build
+  (`uv sync --locked --extra cpu`) and sets `UV_NO_SYNC=1`, so `uv run` keeps that build.
 - The target layout (configs/, data/, align/, models/, …) is described in `CLAUDE.md` §6.
 
 ## 4. Development environment
@@ -82,7 +87,8 @@ robodream_cv/
 |---|---|
 | GPU | NVIDIA RTX 6000 Ada, 48 GB (driver 595.99, CUDA 13.2) |
 | Portable target | RTX 4070 Laptop, 8 GB — every training config needs a profile that fits 8 GB (D6) |
-| Python | 3.12.14 via uv for the project; the system Python 3.14 is not used |
+| Python | 3.12.14 via uv for the project (`requires-python >=3.12`); the system Python 3.14 is not used |
+| PyTorch | torch 2.15.0+cu132 from PyPI; CUDA and bf16 on the RTX 6000 Ada verified 2026-11-23. `.venv` with the CUDA build ≈5.9 GB, CPU-only environment ≈1.5 GB |
 | uv | 0.13.5 in `~/.local/bin` (add it to `PATH` in non-login shells) |
 | Locked dev tools | ruff 0.17.2, mypy 2.4.0, pytest 9.1.1 |
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
@@ -174,9 +180,9 @@ recorded. The exact template is fixed in PR 1.3.
   The plan is in D10.
 - Celebrity photos are not representative of real-world low-quality inputs; the Phase 2
   real-world test set addresses this.
-- CelebA terms: non-commercial research only, no redistribution. The mirror's own license
-  *needs verification*. Consequence: no CelebA images or annotations go into the public repository
-  (Q1, Q2).
+- CelebA terms: non-commercial research only, no redistribution (verified on the official page,
+  quoted in `docs/THIRD_PARTY_LICENSES.md` §2). The mirror states no license of its own.
+  Consequence: no CelebA images or annotations go into the public repository (Q1, Q2).
 
 ### 6.5 Planned layout and manifest (PR 1.2)
 
@@ -216,16 +222,16 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 
 ## 8. Licenses — status
 
-The rules and the known-license table are in `CLAUDE.md` §8. The final record is
-`docs/THIRD_PARTY_LICENSES.md` (created in PR 1.1). These items must be verified before the PR that
-uses them is merged:
+The rules and the known-license table are in `CLAUDE.md` §8. The record for everything in use is
+`docs/THIRD_PARTY_LICENSES.md`. Status of the items that still need work:
 
 | Item | Status |
 |---|---|
-| HF mirror `eurecom-ds/celeba` | The dataset card has no license field — *needs verification*; the original CelebA terms apply |
+| CelebA and the HF mirror | Done: the CelebA terms were verified on the official page; the mirror states no license |
+| Python runtime dependencies | Done in PR 1.1 (`docs/THIRD_PARTY_LICENSES.md` §4) |
 | ArcFace weights (model chosen in PR 1.7) | InsightFace pretrained models: non-commercial research (compatible with D2) |
-| LPIPS weights and torchvision backbone weights | *needs verification* (PR 1.7) |
-| Python dependencies added in PR 1.1 | *needs verification* (PR 1.1) |
+| LPIPS linear weights (bundled in torchmetrics) and torchvision backbone weights | *needs verification* (PR 1.7) |
+| NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Fine for local use; redistribution terms are reviewed before Docker images are published (Phase 5) |
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
 
 ## 9. Phase 1 technical design
@@ -233,11 +239,15 @@ uses them is merged:
 The agreed approach. Details are fixed in the corresponding PRs.
 
 - **General.** PyTorch 2.x, YAML configs with OmegaConf, no magic constants in the code. Every run
-  stores its config, git hash, seed and library versions. MLflow runs locally (`mlruns/`, gitignored).
-- **Dependencies (PR 1.1).** torch and torchvision use the CUDA build locally and the CPU build in
-  CI (uv explicit indexes + extras with `conflicts`), so CI does not download CUDA wheels. The CUDA
-  variant must match the driver (CUDA 13.2). Other dependencies: omegaconf, safetensors, pyarrow,
-  opencv-python-headless (affine warps), torchmetrics[image], mlflow.
+  stores its config, git hash, seed and library versions. Experiment tracking is designed in PR 1.6
+  (MLflow is the default in `CLAUDE.md` §6).
+- **Dependencies (PR 1.1, done).** torch 2.15 / torchvision 0.29: the PyPI build (CUDA 13.2)
+  locally and the CPU build in CI (§3). torch 2.15 CUDA wheels exist only for CUDA 13.2 (PyPI and
+  the `cu132` index), so machines need a driver that supports CUDA 13.2 — check this on the 8 GB
+  laptop. Also added: omegaconf, safetensors, pyarrow, opencv-python-headless (affine warps),
+  torchmetrics[image]. MLflow moved to PR 1.6: it pulls in ~70 more packages (flask, sqlalchemy,
+  docker, databricks-sdk, scikit-learn, …), so the tracking backend is chosen together with the
+  trainer.
 - **Data preparation (PR 1.2).** `scripts/prepare_dataset.py`: parquet → files with the original
   JPEG bytes, plus the manifest (§6.5). Row and identity counts are checked against §6.2. Writes
   `docs/DATA.md`.
@@ -251,7 +261,8 @@ The agreed approach. Details are fixed in the corresponding PRs.
   Validation and test use a fixed seed.
 - **Models (PR 1.5).** The `bicubic` baseline, plus FNet and CNet ported 1:1 from `FH.ipynb`: the
   same layers as in the notebook, including BN and the sigmoid output, parameterised by `scale`.
-- **Trainer + CLI (PR 1.6).** AMP (bf16), gradient accumulation and seeding. Checkpoints `last` and
+- **Trainer + CLI (PR 1.6).** Experiment tracking (MLflow or a lighter option, decided here),
+  AMP (bf16), gradient accumulation and seeding. Checkpoints `last` and
   `best` are saved in safetensors with JSON metadata. `facehall train --config … [--smoke]`.
   Configs `configs/train/{fnet,cnet}_x{4,8}.yaml` come with an 8 GB default and a large profile.
 - **Evaluation (PR 1.7).** PSNR and SSIM on the Y channel, LPIPS, and ID similarity (cosine of
@@ -266,14 +277,14 @@ Each step is compared with the previous best on the same frozen test set. A smok
 hundred images, 1–2 epochs, under 5 min) comes before every full run. Full training (longer than
 ~30 min) starts only after user confirmation.
 
-### Phase 0 — repository hygiene (*in review*)
+### Phase 0 — repository hygiene (*done 2026-11-23*)
 
 - [x] Python `.gitignore` (`data/`, `runs/`, `mlruns/`, `outputs/`, weights and checkpoints)
 - [x] Move `FH.ipynb`, `*.keras`, `*.pth` to `legacy/` (`git mv`)
 - [x] `pyproject.toml` (uv), ruff, mypy, pytest, pre-commit, CI
 - [x] README fixes (C-Face reference, input sizes); `docs/DECISIONS.md`
 - [x] `docs/PROJECT.md` as the single source of truth; pre-commit uses the locked ruff
-- [ ] PR merged with green CI
+- [x] PR merged with green CI (PR #3)
 - [ ] *(not blocking)* Legacy weights uploaded to GitHub Releases with checksums, then removed from
       HEAD (D7, separate confirmation)
 
@@ -281,7 +292,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Phase 1 — package and reproducible baseline
 
-- [ ] **PR 1.1** `build:` ML dependencies (CUDA locally, CPU in CI); `THIRD_PARTY_LICENSES.md`
+- [x] **PR 1.1** `build:` ML dependencies (CUDA locally, CPU in CI); `THIRD_PARTY_LICENSES.md`;
+      `scripts/license_report.py`
 - [ ] **PR 1.2** `feat(data):` `prepare_dataset.py`: files, manifest, official split, frozen test;
       `DATA.md`. Tests use a synthetic parquet fixture
 - [ ] **PR 1.3** `feat(align):` template, similarity transform, warp and inverse warp, jitter.
@@ -290,7 +302,7 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       value ranges
 - [ ] **PR 1.5** `feat(models):` bicubic, FNet, CNet. Tests: output shapes, parameter counts
       against legacy
-- [ ] **PR 1.6** `feat(train):` trainer, checkpoints, MLflow, `facehall train`. Tests: CPU smoke
+- [ ] **PR 1.6** `feat(train):` trainer, checkpoints, experiment tracking, `facehall train`. Tests: CPU smoke
       run on fixtures
 - [ ] **PR 1.7** `feat(eval):` PSNR, SSIM, LPIPS, ID-sim, `facehall eval`, generated
       `RESULTS.md`. Tests: metrics on known pairs
@@ -382,8 +394,7 @@ Ask the user before the PR that needs the answer.
 
 ### Tech debt
 
-- `docs/DATA.md` and `docs/THIRD_PARTY_LICENSES.md` are referenced by `DECISIONS.md` but do not
-  exist yet (PR 1.2 and PR 1.1).
+- `docs/DATA.md` is referenced by `DECISIONS.md` but does not exist yet (PR 1.2).
 - The legacy weights are still in HEAD (D7).
 
 ## 12. Commands
@@ -392,10 +403,13 @@ Working now:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"   # if uv is not on PATH
-uv sync                                # dependencies
+uv sync                                # dependencies; PyTorch from PyPI (CUDA 13.2 on Linux)
+uv sync --extra cpu                    # CPU-only PyTorch; then `uv run --extra cpu ...`
 uv run pytest                          # tests (CPU, no dataset)
 uv run pre-commit run --all-files      # lint, format, type check
 uv run facehall --version
+uv export --no-dev --no-hashes --no-emit-project --extra cuda --format requirements.txt \
+    | uv run python scripts/license_report.py   # license table for THIRD_PARTY_LICENSES.md
 ```
 
 Planned (target interface):

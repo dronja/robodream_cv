@@ -53,10 +53,13 @@ As of 2026-11-24:
   - Baseline results: [`RESULTS.md`](RESULTS.md). FNet is the best of the three baselines on
     every metric at both scales.
 - **Phase 2 (realistic degradations): in progress.**
-  - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`).
-  - In review: PR 2.2 (frozen synthetic test levels; branch `feat/eval-levels`).
-  - Open: the source of the real-world test set (needed by PR 2.3). The quality-gate thresholds
-    for Phase 3 are still to be set (`CLAUDE.md` §10).
+  - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`) and PR 2.2 (frozen synthetic test
+    levels, PR #12, `4701155`).
+  - In review: PR 2.4 (FNet trained on realistic degradations, synthetic comparison; branch
+    `feat/train-realistic`). It was done before PR 2.3 at the user's choice.
+  - Open: the source of the real-world test set (PR 2.3). The real-world comparison and the
+    tuning of the realistic ranges wait for it. The quality-gate thresholds for Phase 3 are still
+    to be set (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -72,6 +75,7 @@ robodream_cv/
 ├── configs/                   # data/celeba_128.yaml, degrade/{bicubic,realistic}.yaml,
 │                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
+│                              # train/fnet_x{4,8}_realistic.yaml,
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
@@ -515,7 +519,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     the drawn parameters to `outputs/degrade/` (local, D19). In the first look, `realistic` leans
     towards heavy blur, so the first-stage maximum sigma was lowered from 1.2 to 1.0 LR px. The
     ranges are initial values, to be tuned against the real-world test set.
-- **Synthetic test levels (PR 2.2, in review).** Details and reasons in `DECISIONS.md`
+- **Synthetic test levels (PR 2.2, done).** Details and reasons in `DECISIONS.md`
   (2026-11-24, "Synthetic test levels").
   - **Levels:** `configs/degrade/levels/{light,medium,heavy}.yaml`. Every sample is blurred,
     resized, noised and JPEG-compressed:
@@ -562,6 +566,54 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
         (skin and wrinkle-like patterns). This was seen on 8 samples and not measured. It
         explains how perceptual sharpness can rise while identity falls.
       - Re-training on realistic degradations (PR 2.4) is measured against these numbers.
+- **FNet trained on realistic degradations (PR 2.4, in review).** Details and reasons in
+  `DECISIONS.md` (2026-11-24, "Realistic training, synthetic comparison").
+  - **Configs:** `configs/train/fnet_x{4,8}_realistic.yaml`. They repeat the FNet legacy recipe of
+    Phase 1 (10 epochs, early stopping 3, batch 16, MSE, Adam 1e-3) and change only the
+    degradation, to `realistic`. CNet is not re-trained: it is 4× longer to train and was the
+    weaker baseline.
+  - **Data loading:** with `realistic`, training runs at about 2,450 img/s at ×4 and 2,800 img/s
+    at ×8 (8 workers), against about 3,700 with bicubic. 16 workers were not faster in a 2-epoch
+    timing run.
+  - **Full runs,** 2026-11-24, from commit `093da00` in a separate worktree:
+
+    | Run | Epochs | Time | Best epoch (val loss) |
+    |---|---|---|---|
+    | `fnet_x4_realistic-20261124-153302` | 10 | 11.3 min | 8 |
+    | `fnet_x8_realistic-20261124-154423` | 10 | 10.0 min | 9 |
+
+  - **Evaluation** on the eight frozen protocols took 3.1–3.6 min per protocol. The tables are in
+    [`RESULTS.md`](RESULTS.md). Compared with the FNet trained on bicubic inputs (PSNR-Y / LPIPS /
+    ID sim):
+
+    | Protocol | ×4 bicubic-trained | ×4 realistic-trained | ×8 bicubic-trained | ×8 realistic-trained |
+    |---|---|---|---|---|
+    | bicubic | 30.40 / 0.132 / 0.741 | 28.56 / 0.184 / 0.584 | 26.29 / 0.240 / 0.349 | 24.81 / 0.314 / 0.209 |
+    | light | 26.60 / 0.270 / 0.449 | 27.66 / 0.217 / 0.428 | 23.21 / 0.414 / 0.134 | 24.13 / 0.338 / 0.155 |
+    | medium | 24.61 / 0.434 / 0.294 | 26.26 / 0.270 / 0.281 | 21.48 / 0.572 / 0.065 | 23.04 / 0.379 / 0.102 |
+    | heavy | 22.74 / 0.547 / 0.170 | 24.54 / 0.327 / 0.180 | 19.85 / 0.674 / 0.039 | 21.64 / 0.428 / 0.070 |
+
+    Plain bicubic upsampling scores ID sim 0.711 / 0.547 / 0.358 / 0.198 at ×4 and 0.316 /
+    0.192 / 0.088 / 0.043 at ×8 on the same four protocols.
+  - **Observations:**
+    - **Degraded inputs:** realistic training improves PSNR-Y by 0.9–1.8 dB and LPIPS clearly
+      on every degraded level, at both scales.
+    - **Identity:** ID similarity barely changes. At ×4 it stays below plain bicubic upsampling
+      on every level. At ×8 it is above bicubic on medium (0.102 against 0.088) and heavy (0.070
+      against 0.043), but not on light.
+    - **Clean inputs:** realistic training costs a lot here: ID sim 0.741 → 0.584 at ×4, now
+      below bicubic's 0.711.
+    - **Local ×4 medium grid** (8 samples, not measured): the realistic-trained model outputs
+      clean, plausible faces that are generic. Older people look younger, and a pair of glasses
+      disappeared. With an MSE loss, a model trained on heavy, ambiguous inputs predicts an
+      average face. That matches the high PSNR and the low identity (a hypothesis, not tested
+      separately).
+    - **Consequences:**
+      - the realistic mix is probably too heavy for clean and light inputs; tune it against the
+        real-world set (PR 2.3);
+      - identity needs the Phase 3 losses (identity, perceptual, adversarial), not only
+        realistic degradations;
+      - the invented details are exactly what `CLAUDE.md` §11 warns about.
 
 ## 10. Roadmap and progress
 
@@ -618,8 +670,10 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       drawn parameters stored per image; input digests; Phase 1 models evaluated on every level
 - [ ] **PR 2.3** Real-world test set (the source is chosen with the user) and no-reference
       metrics (NIQE, FID); library licenses verified
-- [ ] **PR 2.4** Re-train the baseline with realistic degradations (confirm first); compare
-      clean vs realistic training on the synthetic levels and the real-world set
+- [x] **PR 2.4** Re-train FNet ×4 and ×8 with realistic degradations (approved by the user on
+      2026-11-24); compare clean vs realistic training on the synthetic levels
+- [ ] Compare clean vs realistic training on the real-world set and tune the realistic ranges
+      (after PR 2.3)
 
 **Done when** the effect of the degradations on real photos is measured and documented.
 
@@ -697,8 +751,12 @@ with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16.
   revisit this when moving to it.
 - The realistic degradation ranges (§9, Phase 2) are initial values chosen from the literature
   and a visual check. If they do not match real low-quality faces, a model trained on them may
-  over-smooth light inputs or under-restore heavy ones. They are tuned in PR 2.4 against the
-  real-world test set.
+  over-smooth light inputs or under-restore heavy ones. PR 2.4 suggests they are too heavy for
+  clean and light inputs (§9). They are tuned against the real-world test set after PR 2.3.
+- MSE-trained models on heavy inputs invent generic faces: they change apparent age and drop
+  accessories such as glasses (seen in PR 2.4 grids, not measured). Report this in the model
+  card and the UI (`CLAUDE.md` §11). Any identity gate in Phase 3 should be checked on such
+  cases, not only on means.
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -727,6 +785,7 @@ uv export --no-dev --no-hashes --no-emit-project --extra cuda --format requireme
 uv run python scripts/prepare_dataset.py --src /mnt/storage/AI/Face/celeba_eurecom/data \
     --out /mnt/storage/AI/Face/celeba          # CelebA files + manifest (docs/DATA.md §6)
 uv run facehall train --config configs/train/fnet_x4.yaml --smoke   # pipeline check, seconds
+uv run facehall train --config configs/train/fnet_x4_realistic.yaml # realistic degradations, ~11 min
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
 uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
 FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine

@@ -46,10 +46,11 @@ As of 2026-11-24:
   commit `0ac43f9`), CI green.
 - **Phase 1: in progress.**
   - Merged on 2026-11-24: PR 1.1 (ML dependencies, PR #4, `8a0ccce`), PR 1.2 (dataset
-    preparation, PR #5, `6cf65af`) and PR 1.3 (alignment, PR #6, `0a9fc82`). The prepared CelebA
+    preparation, PR #5, `6cf65af`), PR 1.3 (alignment, PR #6, `0a9fc82`) and PR 1.4 (dataset +
+    degradation v0, PR #7, `2ece720`). The prepared CelebA
     dataset is at
     `/mnt/storage/AI/Face/celeba` (§6.2).
-  - In review: PR 1.4 (dataset + degradation v0, branch `feat/dataset-degrade`).
+  - In review: PR 1.5 (models: bicubic, FNet, CNet; branch `feat/models`).
   - The technical design is agreed (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
@@ -63,7 +64,8 @@ robodream_cv/
 ├── README.md                  # public description (English)
 ├── LICENSE
 ├── pyproject.toml, uv.lock    # uv project, hatchling build; ruff, mypy, pytest config
-├── configs/                   # data/celeba_128.yaml, degrade/bicubic.yaml
+├── configs/                   # data/celeba_128.yaml, degrade/bicubic.yaml,
+│                              # model/{bicubic,fnet,cnet}.yaml
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
@@ -72,13 +74,14 @@ robodream_cv/
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # dataset.py (AlignedFaces)
 │   ├── config.py              # load_config: dataclass schema + YAML via OmegaConf
+│   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # license_report.py (license table from package metadata)
 ├── tests/                     # conftest (load_script); import, CLI, legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade,
-│                              # dataset (synthetic prepared dataset)
+│                              # dataset (synthetic prepared dataset), models
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -126,7 +129,7 @@ robodream_cv/
 | `FH.ipynb` (456 KB) | All code: TF/Keras FNet and CNet, PyTorch SRGAN generator, training, visualisation | Cells were run out of order; SRGAN training (discriminator, loop) is missing |
 | `FNet_24.keras` (9.0 MB) | "Simplified SRResNet": 24×24 → 96×96 (×4), 5 residual blocks with BN, PixelShuffle via `Lambda(depth_to_space)`, sigmoid, MSE | Best legacy result. Keras 3.9.2, contains optimizer state, loading needs `safe_mode=False` |
 | `CNet_24.keras` (10.3 MB) | "Simplified C-Face": Conv + `UpSampling2D`, no residual blocks, MSE | Slightly worse than FNet |
-| `SRgan_20.pth` (3.0 MB) | PyTorch SRGAN generator `state_dict` | Architecture equals FNet; the notebook loads `best_generator_20.pth` (name mismatch) |
+| `SRgan_20.pth` (3.0 MB) | PyTorch SRGAN generator `state_dict` | Same layer sequence as FNet, but with one shared PReLU alpha (`nn.PReLU()`) instead of one per channel and a linear output (no sigmoid, no clamp). The notebook loads `best_generator_20.pth` (name mismatch) |
 
 - **Legacy dataset:** 209,813 faces, 89×109 px, "FFHQ 2" + CelebA + Internet images; download link
   (GDrive) in README; the exact composition is undocumented. 89×109 is exactly half of CelebA
@@ -255,6 +258,7 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D14 | Manifests stay next to the data, outside git; the repo holds the generator code, counts and checksums (`docs/DATA.md`) |
 | D15 | `Blurry = 1` images are dropped from train only; evaluation also reports the non-blurry subset |
 | D16 | Crops reaching outside the image use reflect padding and are kept; each sample carries its `padded` fraction; evaluation also reports the unpadded subset |
+| — | Legacy ports keep Keras default initialisation and CNet's per-pixel PReLU (`DECISIONS.md`, 2026-11-24) |
 
 ## 8. Licenses — status
 
@@ -326,8 +330,37 @@ The agreed approach. Details are fixed in the corresponding PRs.
   - Throughput: 909 samples/s single-process. With 8 / 16 DataLoader workers it is 4,200 / 9,900
     samples/s, and 7,700 / 13,100 samples/s when `cv2.setNumThreads(1)` is called in the main
     process first. That is 0.2–0.6 min per train epoch, so data loading is not the bottleneck.
-- **Models (PR 1.5).** The `bicubic` baseline, plus FNet and CNet ported 1:1 from `FH.ipynb`: the
-  same layers as in the notebook, including BN and the sigmoid output, parameterised by `scale`.
+- **Models (PR 1.5, done).** `facehall.models.build_model(config, scale, lr_size)` with
+  `configs/model/{bicubic,fnet,cnet}.yaml`. Input and output are (B, 3, h, w) in [0, 1].
+  - **Baseline:** `bicubic` (torch bicubic upsampling, clamped).
+  - **Ports:** FNet and CNet, layer for layer as in `FH.ipynb`, including BN, the sigmoid output
+    and the Keras defaults (Glorot init, zero bias, BN eps 1e-3 / momentum 0.99, PReLU alpha 0).
+    `scale` is generalised as one ×2 stage per factor of 2.
+  - **Parameter counts:** equal to the notebook's `model.summary()` outputs at 24 px ×4:
+    - FNet: 734,723 trainable + 1,408 BN statistics;
+    - CNet: 854,979 + 384.
+  - **CNet's `PReLU()`** has no `shared_axes`, so it learns one alpha per channel *and* pixel. The
+    port keeps this, so CNet accepts only its LR size, and its size grows with it: 1,457,091
+    parameters at 32 px ×4, 1,510,531 at 16 px ×8. FNet has 734,723 parameters at ×4 and 882,499
+    at ×8.
+  - **Legacy Keras weights** cannot be loaded as they are: the layout is NCHW, and PyTorch's
+    pixel-shuffle channel order differs from `tf.nn.depth_to_space`. They are not needed (§5).
+  - **Training step on the RTX 6000 Ada** (Adam, MSE, 128 px HR):
+
+    | Model | Batch | bf16 | fp32 | Peak memory (bf16 / fp32) |
+    |---|---|---|---|---|
+    | FNet ×4 | 16 / 64 | 3,800 / 3,700 img/s | 2,000 / 1,800 img/s | 0.3 / 1.2 GiB; 2.4 / 3.7 GiB |
+    | FNet ×8 | 16 / 64 | 4,100 / 4,200 img/s | 2,200 / 2,000 img/s | 0.2 / 0.7 GiB; 0.4 / 1.4 GiB |
+    | CNet ×4 | 16 / 64 | 4,000 / 3,000 img/s | 2,800 / 2,400 img/s | 0.5 / 1.9 GiB; 2.7 / 5.4 GiB |
+    | CNet ×8 | 16 / 64 | 3,900 / 3,000 img/s | 2,700 / 2,400 img/s | 0.4 / 1.5 GiB; 0.5 / 1.9 GiB |
+
+    So every configuration fits 8 GB (D6), and one train epoch (154,408 samples) takes about
+    40–50 s in bf16 on this GPU.
+  - **Legacy training recipe** (for the PR 1.6 configs):
+    - inputs in [0, 1], MSE loss;
+    - Adam with Keras defaults (lr 1e-3, β 0.9 / 0.999, ε 1e-7), batch 16;
+    - FNet: 10 epochs with early stopping (patience 3 on val loss);
+    - CNet: 50 epochs.
 - **Trainer + CLI (PR 1.6).** Experiment tracking (MLflow or a lighter option, decided here),
   AMP (bf16), gradient accumulation and seeding. Checkpoints `last` and
   `best` are saved in safetensors with JSON metadata. `facehall train --config … [--smoke]`.
@@ -373,7 +406,7 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       Tests: warp and inverse-warp round trip on synthetic points
 - [x] **PR 1.4** `feat(data):` dataset + degradation v0 (bicubic). Tests: determinism, shapes,
       value ranges
-- [ ] **PR 1.5** `feat(models):` bicubic, FNet, CNet. Tests: output shapes, parameter counts
+- [x] **PR 1.5** `feat(models):` bicubic, FNet, CNet. Tests: output shapes, parameter counts
       against legacy
 - [ ] **PR 1.6** `feat(train):` trainer, checkpoints, experiment tracking, `facehall train`. Tests: CPU smoke
       run on fixtures

@@ -9,6 +9,7 @@ import pytest
 from facehall.data.manifest import (
     MANIFEST_FILE,
     REQUIRED_FIELDS,
+    UNKNOWN_IDENTITY,
     content_sha256,
     read_manifest,
     validate_manifest,
@@ -53,6 +54,10 @@ def test_valid_manifest_round_trips(tmp_path: Path) -> None:
 def test_invalid_manifest_is_rejected(overrides: dict[str, list[object]], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         validate_manifest(make_table(**overrides))
+
+
+def test_unknown_identities_are_not_checked_for_overlap() -> None:
+    validate_manifest(make_table(identity_id=[UNKNOWN_IDENTITY, UNKNOWN_IDENTITY]))
 
 
 def test_missing_column_and_wrong_type_are_rejected() -> None:

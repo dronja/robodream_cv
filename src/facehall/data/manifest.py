@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 
 MANIFEST_FILE = "manifest.parquet"
 SPLITS = ("train", "val", "test")
+UNKNOWN_IDENTITY = -1
 
 REQUIRED_FIELDS = (
     # Image file relative to the dataset root, POSIX separators.
@@ -23,6 +24,8 @@ REQUIRED_FIELDS = (
     pa.field("sha256", pa.string(), nullable=False),
     # One of SPLITS. Splits are identity-disjoint.
     pa.field("split", pa.string(), nullable=False),
+    # UNKNOWN_IDENTITY (-1) for sources without identities; those rows are not checked for
+    # identity overlap, and such sources split by another key (docs/DATA.md).
     pa.field("identity_id", pa.int64(), nullable=False),
     pa.field("width", pa.int32(), nullable=False),
     pa.field("height", pa.int32(), nullable=False),
@@ -94,9 +97,10 @@ def _json_line(value: object) -> bytes:
 
 
 def _identity_overlap(table: pa.Table) -> dict[str, int]:
-    """Number of identities shared by each pair of splits (only non-empty pairs)."""
+    """Number of known identities shared by each pair of splits (only non-empty pairs)."""
     ids = {
         split: set(table.filter(pc.equal(table.column("split"), split))["identity_id"].to_pylist())
+        - {UNKNOWN_IDENTITY}
         for split in SPLITS
     }
     overlap: dict[str, int] = {}

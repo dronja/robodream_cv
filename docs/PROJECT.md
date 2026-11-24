@@ -46,11 +46,14 @@ As of 2026-11-24:
   commit `0ac43f9`), CI green.
 - **Phase 1: in progress.**
   - Merged on 2026-11-24: PR 1.1 (ML dependencies, PR #4, `8a0ccce`), PR 1.2 (dataset
-    preparation, PR #5, `6cf65af`), PR 1.3 (alignment, PR #6, `0a9fc82`) and PR 1.4 (dataset +
-    degradation v0, PR #7, `2ece720`). The prepared CelebA
+    preparation, PR #5, `6cf65af`), PR 1.3 (alignment, PR #6, `0a9fc82`), PR 1.4 (dataset +
+    degradation v0, PR #7, `2ece720`) and PR 1.5 (models, PR #8, `d2a6d1b`). The prepared CelebA
     dataset is at
     `/mnt/storage/AI/Face/celeba` (§6.2).
-  - In review: PR 1.5 (models: bicubic, FNet, CNet; branch `feat/models`).
+  - In review: PR 1.6 (trainer and `facehall train`; branch `feat/train`). Smoke runs on the real
+    data pass for all four configs (§9).
+  - Next: full runs of FNet and CNet × (×4, ×8), after the user confirms them (about 1.6 h in
+    total, §9).
   - The technical design is agreed (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
@@ -65,23 +68,25 @@ robodream_cv/
 ├── LICENSE
 ├── pyproject.toml, uv.lock    # uv project, hatchling build; ruff, mypy, pytest config
 ├── configs/                   # data/celeba_128.yaml, degrade/bicubic.yaml,
-│                              # model/{bicubic,fnet,cnet}.yaml
+│                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
-├── src/facehall/              # __init__.py (version 0.0.0), cli.py (only --version), py.typed
+├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train), py.typed
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # dataset.py (AlignedFaces)
-│   ├── config.py              # load_config: dataclass schema + YAML via OmegaConf
+│   ├── config.py              # load_config: dataclass schema + YAML (include, overrides)
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
+│   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # license_report.py (license table from package metadata)
-├── tests/                     # conftest (load_script); import, CLI, legacy layout, dependency
+├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
+│                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade,
-│                              # dataset (synthetic prepared dataset), models
+│                              # dataset, models, train
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -259,6 +264,7 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D15 | `Blurry = 1` images are dropped from train only; evaluation also reports the non-blurry subset |
 | D16 | Crops reaching outside the image use reflect padding and are kept; each sample carries its `padded` fraction; evaluation also reports the unpadded subset |
 | — | Legacy ports keep Keras default initialisation and CNet's per-pixel PReLU (`DECISIONS.md`, 2026-11-24) |
+| D17 | Experiment tracking: a plain run directory per run (config, provenance, metrics JSONL, checkpoints); no MLflow for now |
 
 ## 8. Licenses — status
 
@@ -279,8 +285,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 The agreed approach. Details are fixed in the corresponding PRs.
 
 - **General.** PyTorch 2.x, YAML configs with OmegaConf, no magic constants in the code. Every run
-  stores its config, git hash, seed and library versions. Experiment tracking is designed in PR 1.6
-  (MLflow is the default in `CLAUDE.md` §6).
+  stores its config, git hash, seed and library versions in its own run directory (D17).
 - **Dependencies (PR 1.1, done).** torch 2.15 / torchvision 0.29: the PyPI build (CUDA 13.2)
   locally and the CPU build in CI (§3). torch 2.15 CUDA wheels exist only for CUDA 13.2 (PyPI and
   the `cu132` index), so machines need a driver that supports CUDA 13.2 — check this on the 8 GB
@@ -361,16 +366,56 @@ The agreed approach. Details are fixed in the corresponding PRs.
     - Adam with Keras defaults (lr 1e-3, β 0.9 / 0.999, ε 1e-7), batch 16;
     - FNet: 10 epochs with early stopping (patience 3 on val loss);
     - CNet: 50 epochs.
-- **Trainer + CLI (PR 1.6).** Experiment tracking (MLflow or a lighter option, decided here),
-  AMP (bf16), gradient accumulation and seeding. Checkpoints `last` and
-  `best` are saved in safetensors with JSON metadata. `facehall train --config … [--smoke]`.
-  Configs `configs/train/{fnet,cnet}_x{4,8}.yaml` come with an 8 GB default and a large profile.
-  DataLoader notes, verified 2026-11-24:
-  - call `cv2.setNumThreads(1)` in the main process before the workers start;
-  - **never call it inside a forked worker**: once the parent has used OpenCV's thread pool,
-    that call deadlocks;
-  - call `dataset.set_epoch(epoch)` every epoch, without persistent workers (or recreate them),
-    so that the workers see the new epoch.
+- **Trainer + CLI (PR 1.6, done).** `facehall train --config configs/train/<name>.yaml [--smoke]
+  [--set key=value …]`, implemented by `facehall.train.train(config)`.
+  - **Configs:** `configs/train/{fnet,cnet}_x{4,8}.yaml` carry the legacy recipe (see "Legacy
+    training recipe" above). They pull in the data, degradation and model configs through
+    `include`, and `--set` overrides any value.
+  - **No separate 48 GB profile:** all four configs fit 8 GB at the recipe batch size of 16 (peak
+    ≤ 2.8 GiB even in fp32, table above). The batch size is part of the recipe, so a larger one
+    is an experiment (`--set train.batch_size=64`), not a profile (D6).
+  - **Run directory** `runs/<name>-<YYYYmmdd-HHMMSS>[-smoke]/` (D17):
+    - `config.yaml`, the resolved config;
+    - `run.json`, provenance: command, git commit, library versions, device, dataset settings and
+      counts, and the manifest checksum;
+    - `metrics.jsonl`, one record per logged step and per epoch;
+    - `train.log`, `summary.json`;
+    - checkpoints `last` and `best` (lowest val loss), each a `.safetensors` file with a `.json`
+      file next to it. The JSON holds the full config and the sha256 of the weights;
+      `load_checkpoint` rebuilds the model from these two files alone.
+  - **Training:**
+    - Adam;
+    - bf16 autocast for the forward pass, with the loss and validation in fp32;
+    - gradient accumulation (`train.grad_accum`);
+    - early stopping on val loss (`train.early_stopping`);
+    - optional EMA of the weights (`train.ema_decay`). With EMA, validation and `best` use the
+      EMA weights, and `last_ema` is saved too.
+  - **Validation:** after every epoch, on the full val split. It reports the mean per-image
+    loss and an RGB PSNR, which is only a monitoring value; the evaluation protocol is PR 1.7.
+  - **Reproducibility:**
+    - the seed fixes model initialisation, sample order (a permutation per `(seed, epoch)`) and
+      augmentation;
+    - on CPU, two runs with one seed give identical weights (tested);
+    - on GPU, cuDNN autotuning allows small differences.
+  - **DataLoader notes,** verified 2026-11-24:
+    - call `cv2.setNumThreads(1)` in the main process before the workers start; the trainer does
+      this;
+    - **never call it inside a forked worker**: once the parent has used OpenCV's thread pool,
+      that call deadlocks;
+    - workers are not persistent, so each epoch's workers see `set_epoch`.
+  - **Smoke runs on the real data,** 2026-11-24 (RTX 6000 Ada, bf16, 8 workers):
+    - **Default `--smoke`** (512 train / 256 val samples, 2 epochs): about 4 s per config, all
+      four configs.
+    - **Timing runs** (40,000 train samples, full val, 2 epochs): 3,600–3,800 train img/s and
+      3.2–3.5 s per validation pass for every config, so a full epoch takes about 45–47 s.
+    - **Estimated full runs:** FNet ×4 / ×8 at most 10 epochs, about 8 min each; CNet ×4 / ×8
+      50 epochs, about 39 min each. About 1.6 h in total when run one after another.
+    - **Early val loss:** in the 32-step default smoke runs, val loss is 1.7–6.8× the train loss. In
+      the 2,500-step timing runs it is already below the train loss, which is computed on
+      augmented samples. This is consistent with BN running statistics that follow slowly
+      (Keras momentum 0.99), but the cause was not checked separately.
+  - **Not done:** resuming from `last`, because the optimizer state is not saved (tech debt,
+    §11).
 - **Evaluation (PR 1.7).** PSNR and SSIM on the Y channel, LPIPS, and ID similarity (cosine of
   ArcFace embeddings, SR vs HR). `facehall eval`. `docs/RESULTS.md` is generated by a script. NME
   moves to Phase 3 because it needs a landmark model.
@@ -408,11 +453,11 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       value ranges
 - [x] **PR 1.5** `feat(models):` bicubic, FNet, CNet. Tests: output shapes, parameter counts
       against legacy
-- [ ] **PR 1.6** `feat(train):` trainer, checkpoints, experiment tracking, `facehall train`. Tests: CPU smoke
+- [x] **PR 1.6** `feat(train):` trainer, checkpoints, experiment tracking, `facehall train`. Tests: CPU smoke
       run on fixtures
 - [ ] **PR 1.7** `feat(eval):` PSNR, SSIM, LPIPS, ID-sim, `facehall eval`, generated
       `RESULTS.md`. Tests: metrics on known pairs
-- [ ] Smoke run on real data; estimate the duration of a full run
+- [x] Smoke run on real data; estimate the duration of a full run (§9: about 1.6 h for all four)
 - [ ] Full runs FNet, CNet × (×4, ×8) — after confirmation
 - [ ] `RESULTS.md` (bicubic vs FNet vs CNet) and `scripts/reproduce_phase1.sh`
 
@@ -495,6 +540,10 @@ Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) b
   will be low. This must be stated clearly (`CLAUDE.md` §11).
 - JPEG artifacts in the HR targets (§6.4) limit perceptual quality.
 - CI time: about 40 s with the CPU build of torch (PR #4); watch it as the tests grow.
+- DataLoader workers use `fork`, the Linux default. Python 3.12 warns that forking a
+  multi-threaded process may deadlock (seen in the tests). The one deadlock found so far is the
+  OpenCV one (§9), and the trainer avoids it. Python 3.14 changes the default to `forkserver`;
+  revisit this when moving to it.
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -504,6 +553,8 @@ Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) b
 - *Needs verification:* whether rows inside each split follow the official file order
   (`docs/DATA.md` §4.4). This is needed before joining annotations keyed by file name (D10).
 - The legacy weights are still in HEAD (D7).
+- Training cannot resume from `last`: the optimizer state is not saved. Add this before runs
+  long enough for interruptions to matter (Phase 3).
 
 ## 12. Commands
 
@@ -520,13 +571,15 @@ uv export --no-dev --no-hashes --no-emit-project --extra cuda --format requireme
     | uv run python scripts/license_report.py   # license table for THIRD_PARTY_LICENSES.md
 uv run python scripts/prepare_dataset.py --src /mnt/storage/AI/Face/celeba_eurecom/data \
     --out /mnt/storage/AI/Face/celeba          # CelebA files + manifest (docs/DATA.md §6)
+uv run facehall train --config configs/train/fnet_x4.yaml --smoke   # pipeline check, seconds
+uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
+uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
+FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine
 ```
 
 Planned (target interface):
 
 ```bash
-uv run facehall train --config configs/train/fnet_x4.yaml --smoke
-uv run facehall train --config configs/train/fnet_x4.yaml
 uv run facehall eval --ckpt runs/<id>/best.safetensors --split test
 uv run facehall enhance photo.jpg -o out.png --scale 4
 uv run facehall export onnx --ckpt runs/<id>/best.safetensors --out models/x4.onnx

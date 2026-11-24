@@ -32,6 +32,54 @@ PSNR-Y / LPIPS / ID sim on all images of each protocol.
 | `fnet_x8-20261124-102817-best` | 26.29 / 0.240 / 0.349 | 23.21 / 0.414 / 0.134 | 21.48 / 0.572 / 0.065 | 19.85 / 0.674 / 0.039 |
 | `fnet_x8_realistic-20261124-154423-best` | 24.81 / 0.314 / 0.209 | 24.13 / 0.338 / 0.155 | 23.04 / 0.379 / 0.102 | 21.64 / 0.428 / 0.070 |
 
+## wider_real_x4 — real-world faces, no reference (test, 8,645 faces, ×4)
+
+Inputs: sha256 `7c88c86d25e37c45b4b9762a08c040cf85b0cc576e9a0f3defa30085a18e914f`. FID and KID compare the outputs with 19,867 real HR faces (CelebA `val` crops); lower is closer. They measure how real the outputs look as a set, not whether they show the right person. LR-PSNR-Y compares the downscaled output with the input; plain upsampling scores high on it.
+
+| Model | Parameters | Checkpoint | FID ↓ | KID ×10³ ↓ | LR-PSNR-Y (dB) ↑ |
+|---|---:|---|---:|---:|---:|
+| bicubic | 0 | — | 201.19 | 206.82 ± 3.78 | 46.35 |
+| cnet | 1,457,091 | `cnet_x4-20261124-103744-best` (epoch 44) | 159.58 | 149.62 ± 3.35 | 50.48 |
+| fnet | 734,723 | `fnet_x4-20261124-101949-best` (epoch 10) | 172.56 | 166.30 ± 3.34 | 53.18 |
+| fnet | 734,723 | `fnet_x4_realistic-20261124-153302-best` (epoch 8) | 96.86 | 95.56 ± 2.29 | 33.14 |
+
+Subsets (KID ×10³ / LR-PSNR-Y; KID only for subsets of enough faces):
+
+| Subset | Faces | bicubic | cnet_x4 | fnet_x4 | fnet_x4_realistic |
+|---|---:|---|---|---|---|
+| all | 8,645 | 206.82 ± 3.78 / 46.35 | 149.62 ± 3.35 / 50.48 | 166.30 ± 3.34 / 53.18 | 95.56 ± 2.29 / 33.14 |
+| blur 0 (clear) | 550 | 177.33 ± 3.32 / 41.06 | 140.67 ± 3.16 / 49.07 | 139.55 ± 3.12 / 51.80 | 102.08 ± 2.51 / 34.88 |
+| blur 1 (normal) | 3,862 | 174.76 ± 2.85 / 44.45 | 131.48 ± 2.70 / 50.24 | 139.22 ± 2.65 / 52.98 | 85.69 ± 2.15 / 33.80 |
+| blur 2 (heavy) | 4,233 | 254.16 ± 3.70 / 48.77 | 180.86 ± 3.06 / 50.88 | 211.12 ± 3.45 / 53.55 | 107.65 ± 2.47 / 32.31 |
+| no occlusion | 6,925 | 199.00 ± 4.14 / 46.22 | 140.68 ± 3.37 / 50.48 | 157.70 ± 3.82 / 53.13 | 88.37 ± 2.12 / 33.15 |
+| partial or heavy occlusion | 1,720 | 247.02 ± 3.38 / 46.87 | 199.73 ± 3.09 / 50.47 | 208.70 ± 3.27 / 53.38 | 135.21 ± 2.52 / 33.10 |
+| atypical pose | 132 | — / 45.40 | — / 49.99 | — / 52.94 | — / 33.82 |
+| no padding | 8,421 | 206.38 ± 3.72 / 46.28 | 149.06 ± 3.23 / 50.46 | 165.59 ± 3.51 / 53.15 | 95.24 ± 2.34 / 33.13 |
+
+## wider_real_x8 — real-world faces, no reference (test, 2,172 faces, ×8)
+
+Inputs: sha256 `f052f971736b460a5a4269e425df3ce30c04989e57fad3fcb4a9f9ba9630862a`. FID and KID compare the outputs with 19,867 real HR faces (CelebA `val` crops); lower is closer. They measure how real the outputs look as a set, not whether they show the right person. LR-PSNR-Y compares the downscaled output with the input; plain upsampling scores high on it.
+
+| Model | Parameters | Checkpoint | FID ↓ | KID ×10³ ↓ | LR-PSNR-Y (dB) ↑ |
+|---|---:|---|---:|---:|---:|
+| bicubic | 0 | — | 317.26 | 379.36 ± 3.23 | 40.94 |
+| cnet | 1,510,531 | `cnet_x8-20261124-111557-best` (epoch 47) | 157.50 | 141.47 ± 2.29 | 46.21 |
+| fnet | 882,499 | `fnet_x8-20261124-102817-best` (epoch 10) | 168.74 | 167.62 ± 2.23 | 48.77 |
+| fnet | 882,499 | `fnet_x8_realistic-20261124-154423-best` (epoch 9) | 106.93 | 101.82 ± 1.61 | 32.03 |
+
+Subsets (KID ×10³ / LR-PSNR-Y; KID only for subsets of enough faces):
+
+| Subset | Faces | bicubic | cnet_x8 | fnet_x8 | fnet_x8_realistic |
+|---|---:|---|---|---|---|
+| all | 2,172 | 379.36 ± 3.23 / 40.94 | 141.47 ± 2.29 / 46.21 | 167.62 ± 2.23 / 48.77 | 101.82 ± 1.61 / 32.03 |
+| blur 0 (clear) | 15 | — / 42.83 | — / 46.48 | — / 48.93 | — / 32.39 |
+| blur 1 (normal) | 535 | 366.65 ± 3.32 / 38.91 | 144.15 ± 3.06 / 45.91 | 159.80 ± 2.92 / 48.35 | 106.45 ± 2.34 / 33.24 |
+| blur 2 (heavy) | 1,622 | 385.38 ± 3.30 / 41.60 | 142.57 ± 2.29 / 46.31 | 172.43 ± 2.53 / 48.90 | 101.83 ± 1.66 / 31.62 |
+| no occlusion | 1,443 | 373.57 ± 2.99 / 40.60 | 129.39 ± 2.15 / 46.13 | 155.51 ± 2.19 / 48.62 | 95.17 ± 1.45 / 32.06 |
+| partial or heavy occlusion | 729 | 391.14 ± 3.08 / 41.62 | 172.14 ± 2.76 / 46.38 | 196.50 ± 2.76 / 49.05 | 119.38 ± 2.10 / 31.95 |
+| atypical pose | 15 | — / 39.73 | — / 45.56 | — / 48.71 | — / 34.05 |
+| no padding | 2,152 | 378.87 ± 3.35 / 40.93 | 141.20 ± 2.35 / 46.21 | 167.28 ± 2.53 / 48.76 | 101.64 ± 1.68 / 32.03 |
+
 ## celeba128_bicubic_x4 — test (19,961 images, ×4)
 
 Level: bicubic. Inputs: sha256 `9f8a12b429ec302d9bda22952e9ad76b00c4732699c168aef500d6d5db2a227c`.
@@ -45,7 +93,7 @@ Level: bicubic. Inputs: sha256 `9f8a12b429ec302d9bda22952e9ad76b00c4732699c168ae
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x4 | fnet_x4 | fnet_x4_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 27.25 / 0.341 / 0.711 | 29.62 / 0.137 / 0.700 | 30.40 / 0.132 / 0.741 | 28.56 / 0.184 / 0.584 |
 | `Blurry` = 0 (D15) | 18,951 | 27.14 / 0.344 / 0.709 | 29.51 / 0.138 / 0.699 | 30.30 / 0.133 / 0.740 | 28.49 / 0.185 / 0.582 |
@@ -68,7 +116,7 @@ Level: light. Inputs: sha256 `44180eab0f553868e75531e1185e7d3f7c4521deb83784a233
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x4 | fnet_x4 | fnet_x4_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 26.24 / 0.437 / 0.547 | 26.73 / 0.240 / 0.442 | 26.60 / 0.270 / 0.449 | 27.66 / 0.217 / 0.428 |
 | `Blurry` = 0 (D15) | 18,951 | 26.15 / 0.441 / 0.545 | 26.65 / 0.242 / 0.440 | 26.51 / 0.272 / 0.447 | 27.59 / 0.218 / 0.427 |
@@ -91,7 +139,7 @@ Level: medium. Inputs: sha256 `2d92aedd26e8a7b6b91f5604a81f3ecba2a3c60ad75a1a762
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x4 | fnet_x4 | fnet_x4_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 24.57 / 0.548 / 0.358 | 24.66 / 0.383 / 0.269 | 24.61 / 0.434 / 0.294 | 26.26 / 0.270 / 0.281 |
 | `Blurry` = 0 (D15) | 18,951 | 24.50 / 0.552 / 0.356 | 24.59 / 0.386 / 0.267 | 24.54 / 0.437 / 0.292 | 26.20 / 0.271 / 0.280 |
@@ -114,7 +162,7 @@ Level: heavy. Inputs: sha256 `784076b85f79d68d5d560c9f4795c93bb3c15207c13d260b9f
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x4 | fnet_x4 | fnet_x4_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 22.83 / 0.630 / 0.198 | 22.75 / 0.499 / 0.152 | 22.74 / 0.547 / 0.170 | 24.54 / 0.327 / 0.180 |
 | `Blurry` = 0 (D15) | 18,951 | 22.77 / 0.634 / 0.196 | 22.70 / 0.502 / 0.150 | 22.69 / 0.551 / 0.168 | 24.48 / 0.328 / 0.179 |
@@ -137,7 +185,7 @@ Level: bicubic. Inputs: sha256 `c36aad932de0604270552f9f0ea247da3f1ea9c6bd1bf493
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x8 | fnet_x8 | fnet_x8_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 23.42 / 0.546 / 0.316 | 25.64 / 0.249 / 0.315 | 26.29 / 0.240 / 0.349 | 24.81 / 0.314 / 0.209 |
 | `Blurry` = 0 (D15) | 18,951 | 23.36 / 0.549 / 0.315 | 25.58 / 0.250 / 0.315 | 26.23 / 0.241 / 0.348 | 24.75 / 0.315 / 0.208 |
@@ -160,7 +208,7 @@ Level: light. Inputs: sha256 `37191baa166d133f101beeb343f9f3710458e23defbdd5af33
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x8 | fnet_x8 | fnet_x8_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 22.74 / 0.642 / 0.192 | 23.30 / 0.370 / 0.137 | 23.21 / 0.414 / 0.134 | 24.13 / 0.338 / 0.155 |
 | `Blurry` = 0 (D15) | 18,951 | 22.68 / 0.645 / 0.191 | 23.25 / 0.371 / 0.136 | 23.16 / 0.415 / 0.133 | 24.08 / 0.339 / 0.155 |
@@ -183,7 +231,7 @@ Level: medium. Inputs: sha256 `82ce87c68ff99a4b342a9f5f3417d77a66c93b32ff33cd4ad
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x8 | fnet_x8 | fnet_x8_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 21.38 / 0.689 / 0.088 | 21.51 / 0.502 / 0.059 | 21.48 / 0.572 / 0.065 | 23.04 / 0.379 / 0.102 |
 | `Blurry` = 0 (D15) | 18,951 | 21.34 / 0.692 / 0.087 | 21.46 / 0.504 / 0.058 | 21.44 / 0.574 / 0.064 | 23.00 / 0.379 / 0.102 |
@@ -206,7 +254,7 @@ Level: heavy. Inputs: sha256 `8b42a6ffac0e258065dfa1b9257a2f8e88d1340624bce8bf15
 
 Subsets (PSNR-Y / LPIPS / ID sim):
 
-| Subset | Images | bicubic | cnet | fnet | fnet |
+| Subset | Images | bicubic | cnet_x8 | fnet_x8 | fnet_x8_realistic |
 |---|---:|---|---|---|---|
 | all | 19,961 | 19.89 / 0.716 / 0.043 | 19.82 / 0.595 / 0.031 | 19.85 / 0.674 / 0.039 | 21.64 / 0.428 / 0.070 |
 | `Blurry` = 0 (D15) | 18,951 | 19.84 / 0.718 / 0.042 | 19.78 / 0.597 / 0.030 | 19.81 / 0.676 / 0.038 | 21.61 / 0.428 / 0.069 |

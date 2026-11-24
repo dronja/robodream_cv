@@ -372,6 +372,16 @@ def test_download_checks_size_and_checksum(tmp_path: Path) -> None:
         download(replace(asset, members=("missing.onnx",)), tmp_path / "third")
 
 
+def test_download_keeps_a_single_file(tmp_path: Path) -> None:
+    source_file = tmp_path / "weights.pth"
+    source_file.write_bytes(b"state dict")
+    digest = hashlib.sha256(b"state dict").hexdigest()
+    asset = Asset("single", source_file.as_uri(), source_file.stat().st_size, digest, (), "test")
+    target = download(asset, tmp_path / "weights")
+    assert sorted(p.name for p in target.iterdir()) == ["SOURCE.json", "weights.pth"]
+    assert json.loads((target / "SOURCE.json").read_text())["files"] == {"weights.pth": digest}
+
+
 def test_reproduce_script_parses() -> None:
     script = Path(__file__).resolve().parents[1] / "scripts" / "reproduce_phase1.sh"
     subprocess.run(["bash", "-n", str(script)], check=True)

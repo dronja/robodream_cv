@@ -55,12 +55,14 @@ As of 2026-11-24:
 - **Phase 2 (realistic degradations): in progress.**
   - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`), PR 2.2 (frozen synthetic test
     levels, PR #12, `4701155`) and PR 2.4 (FNet trained on realistic degradations, PR #13,
-    `e090b74`; done before PR 2.3 at the user's choice).
-  - In review: PR 2.3 (real-world test set from WIDER FACE, D20; branch
-    `feat/realworld-wider`).
-  - Open: the InceptionV3 weights for FID/KID (D11 does not cover them). The no-reference
-    evaluation (PR 2.5), the real-world comparison and the tuning of the realistic ranges wait
-    for it. The quality-gate thresholds for Phase 3 are still to be set (`CLAUDE.md` §10).
+    `e090b74`; done before PR 2.3 at the user's choice) and PR 2.3 (real-world test set from
+    WIDER FACE, D20, PR #14, `06416f3`).
+  - In review: PR 2.5 (evaluation on real-world faces without reference; branch
+    `feat/eval-realworld`). With it, the effect of the degradations on real photos is measured
+    (§9), which is the Phase 2 "done when" criterion.
+  - Open:
+    - whether to tune the realistic ranges against the WIDER `val` part before Phase 3;
+    - the quality-gate thresholds for Phase 3 (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -77,7 +79,8 @@ robodream_cv/
 │                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml,
-│                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml
+│                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
+│                              # eval/wider_real_x{4,8}.yaml (real-world, no reference)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
@@ -85,11 +88,12 @@ robodream_cv/
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
-│   │                          # wider.py (real-world set)
+│   │                          # wider.py (real-world set), realworld.py (RealFaces)
 │   ├── config.py              # load_config: dataclass schema + YAML (include, overrides)
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py
-│   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py
+│   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
+│   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
@@ -101,7 +105,7 @@ robodream_cv/
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
-│                              # dataset, models, train, eval, WIDER preparation
+│                              # dataset, models, train, eval, WIDER preparation, real-world eval
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -137,7 +141,7 @@ robodream_cv/
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
-| Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18). The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
+| Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |
 
 ## 5. Legacy research code
@@ -335,7 +339,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Local use only, nothing is distributed (D13). Review the redistribution terms if that changes |
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
 | WIDER FACE and the RetinaFace annotations (D20) | Done in PR 2.3: CC BY-NC-ND 4.0 and non-commercial research only (`docs/THIRD_PARTY_LICENSES.md` §2) |
-| InceptionV3 weights for FID/KID (torch-fidelity) | Open: the torch-fidelity source says Apache 2.0 for the converted TensorFlow weights; the download needs the user's confirmation (`DECISIONS.md`, "No-reference metrics") |
+| InceptionV3 weights for FID/KID (torch-fidelity) | Approved and downloaded (D21). Apache 2.0 per the torch-fidelity source; the ImageNet terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 
 ## 9. Technical design
 
@@ -654,7 +658,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - identity needs the Phase 3 losses (identity, perceptual, adversarial), not only
         realistic degradations;
       - the invented details are exactly what `CLAUDE.md` §11 warns about.
-- **Real-world test set (PR 2.3, in review).** Data facts in §6.5 and `docs/DATA.md` §7; decision
+- **Real-world test set (PR 2.3, done).** Data facts in §6.5 and `docs/DATA.md` §7; decision
   and reasons in D20.
   - **Source choice:** six public sets were checked on 2026-11-24 (`DECISIONS.md`, D20). The
     user chose WIDER FACE, without LFW and WIDER-Test.
@@ -670,6 +674,57 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **No-reference metrics:** NIQE needs 96 px blocks and cannot be computed on 128 px
     outputs; `pyiqa` is non-commercial and heavy. FID/KID through torchmetrics need the
     InceptionV3 weights (Q6), so the evaluation itself is PR 2.5.
+- **Evaluation on real-world faces (PR 2.5, in review).** Protocol decisions and reasons in
+  `DECISIONS.md` (2026-11-24, D21 and "Real-world evaluation protocol").
+  - **Protocols:** `configs/eval/wider_real_x{4,8}.yaml` (`kind: realworld`) on the frozen WIDER
+    `test` crops: 8,645 faces at ×4, 2,172 at ×8. `facehall eval` dispatches on `kind`.
+  - **Metrics:**
+    - LR-PSNR-Y: consistency with the input, per face;
+    - FID on all faces;
+    - KID per subset;
+    - all against 19,867 real HR faces (CelebA validation crops).
+  - **Code:**
+    - `facehall.eval.noref`: the metrics and the InceptionV3 features;
+    - `facehall.eval.realworld`: config, runner, reference feature cache;
+    - `facehall.data.realworld.RealFaces`: the prepared crops.
+
+    The report adds one section per real-world protocol; grids work without an HR column.
+  - **Run** on 2026-11-24 from commit `98638ec`:
+    - the reference features took 12 s once;
+    - each model took 14–16 s at ×4 and 8–9 s at ×8;
+    - both input digests matched their frozen values.
+  - **Results** (tables with subsets in [`RESULTS.md`](RESULTS.md)). FID / KID ×10³ / LR-PSNR-Y (dB):
+
+    | Model | ×4 | ×8 |
+    |---|---|---|
+    | bicubic | 201.2 / 206.8 / 46.35 | 317.3 / 379.4 / 40.94 |
+    | CNet, bicubic-trained | 159.6 / 149.6 / 50.48 | 157.5 / 141.5 / 46.21 |
+    | FNet, bicubic-trained | 172.6 / 166.3 / 53.18 | 168.7 / 167.6 / 48.77 |
+    | FNet, realistic-trained (PR 2.4) | 96.9 / 95.6 / 33.14 | 106.9 / 101.8 / 32.03 |
+
+  - **Observations:**
+    - **FID and KID:** on real photos, realistic training brings the outputs much closer to
+      real HR faces. ×4 FID falls from 173 (clean FNet) to 97, and ×8 FID from 169 to 107. This
+      holds in every KID subset, including heavy blur and occlusion.
+    - **LR-PSNR-Y:** the models trained on clean bicubic inputs reproduce their input almost
+      exactly (50–53 dB at ×4), noise and compression included. The realistic-trained model
+      changes it more (33 dB), as expected from a model that removes noise and compression.
+      This metric therefore cannot rank restoration quality here.
+    - **Hard subsets:** KID is worst for every model on heavy blur and on occluded faces.
+    - **Local grids** (16 samples per scale, not measured):
+      - the clean-trained models look like bicubic on real photos, with some sharpened
+        artifacts;
+      - the realistic-trained model gives clean, sharp faces;
+      - at ×8 it also invents whole faces: from an input that is a dark blur it drew a
+        specific woman's face with eyes and hair;
+      - at ×4 it smoothed a beard.
+
+      This is the risk named in `CLAUDE.md` §11, and FID rewards it.
+    - **Consequences:**
+      - realistic degradations are the right direction for real photos;
+      - FID and KID against CelebA cannot tell restoration from invention, so Phase 3 needs
+        identity metrics on the synthetic levels and visual checks on the real-world set;
+      - the ×8 outputs must carry the "plausible reconstruction" warning (`CLAUDE.md` §11).
 
 ## 10. Roadmap and progress
 
@@ -726,14 +781,15 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       drawn parameters stored per image; input digests; Phase 1 models evaluated on every level
 - [x] **PR 2.3** Real-world test set: WIDER FACE native low-resolution faces with RetinaFace
       landmarks (D20), `scripts/prepare_wider.py`, `DATA.md` §7. Tests on synthetic archives
-- [ ] **PR 2.5** No-reference evaluation on the real-world set: FID/KID against real HR faces
-      (needs the Inception weights confirmed); breakdown by the WIDER attributes; local grids;
-      bicubic and both FNet variants evaluated. NIQE is not possible on 128 px outputs
-      (`DECISIONS.md`)
+- [x] **PR 2.5** No-reference evaluation on the real-world set: LR-PSNR-Y, FID, KID against
+      CelebA HR faces (Inception weights approved, D21); breakdown by the WIDER attributes;
+      local grids; bicubic, CNet and both FNet variants evaluated. NIQE is not possible on
+      128 px outputs (`DECISIONS.md`)
 - [x] **PR 2.4** Re-train FNet ×4 and ×8 with realistic degradations (approved by the user on
       2026-11-24); compare clean vs realistic training on the synthetic levels
-- [ ] Compare clean vs realistic training on the real-world set and tune the realistic ranges
-      (after PR 2.3)
+- [x] Compare clean vs realistic training on the real-world set (PR 2.5)
+- [ ] *(to decide)* Tune the realistic ranges against the WIDER `val` part, for example by
+      matching real and synthetic LR statistics (KID between real and synthetic LR crops)
 
 **Done when** the effect of the degradations on real photos is measured and documented.
 
@@ -788,11 +844,11 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 ### Open questions
 
 Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
-with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16.
+with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
+weights) by D21.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q6 | Download the InceptionV3 weights for FID/KID (torch-fidelity release, about 100 MB; Apache 2.0 per the torch-fidelity source) | PR 2.5 | Download them, record them with a pinned sha256 like `buffalo_l` |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -817,7 +873,10 @@ with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16.
 - MSE-trained models on heavy inputs invent generic faces: they change apparent age and drop
   accessories such as glasses (seen in PR 2.4 grids, not measured). Report this in the model
   card and the UI (`CLAUDE.md` §11). Any identity gate in Phase 3 should be checked on such
-  cases, not only on means.
+  cases, not only on means. PR 2.5 grids show the same on real photos: at ×8 the
+  realistic-trained model invents whole faces from near-featureless inputs.
+- FID and KID on the real-world set use CelebA as the reference, so they reward CelebA-like,
+  invented faces as much as faithful ones (PR 2.5). They must not be the only real-world gate.
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -853,6 +912,7 @@ uv run facehall train --config configs/train/fnet_x4.yaml           # full run (
 uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
 FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine
 uv run python scripts/download_weights.py buffalo_l                  # recognition model (D18)
+uv run python scripts/download_weights.py inception                  # FID/KID network (D21)
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/
@@ -861,6 +921,8 @@ uv run python scripts/preview_degradations.py --degrade configs/degrade/realisti
                                                # grid + parameters in outputs/degrade/ (local)
 uv run facehall eval --config configs/eval/celeba128_heavy_x8.yaml --model bicubic   # a level
 uv run python scripts/protocol_digest.py configs/eval/*.yaml   # check the frozen inputs
+uv run facehall eval --config configs/eval/wider_real_x4.yaml --ckpt runs/<id>/best.safetensors
+                                               # real-world faces, no reference (~15 s)
 ```
 
 Planned (target interface):

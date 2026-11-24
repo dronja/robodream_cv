@@ -339,4 +339,33 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
 - **pyiqa** (NIQE and other no-reference metrics) is licensed PolyForm-Noncommercial-1.0.0 and has 27 direct requirements (transformers, accelerate, bitsandbytes, facexlib, …). It is not added.
 - **FID and KID** are available through torchmetrics and torch-fidelity 0.4.0 (Apache-2.0), already in the lock file. They need the InceptionV3 weights `weights-inception-2015-12-05-6726825d.pth` from the torch-fidelity GitHub releases. The torch-fidelity source says the weights were "converted from the official TensorFlow weights", "distributed under Apache License 2.0". FID needs at least 2,048 images for a full-rank covariance (TTUR README); the ×8 test split has 2,172.
 
-**OPEN:** downloading the Inception weights (D11 covers ArcFace and LPIPS only). The no-reference evaluation follows in a separate PR once this is answered.
+**Resolved by D21:** the user approved the download of the Inception weights on 2026-11-24.
+
+### D21 — InceptionV3 weights for FID and KID (closes Q6)
+**Decision:** the torch-fidelity InceptionV3 weights are downloaded by `scripts/download_weights.py inception`. Size and sha256 are pinned in `facehall.weights`; terms are in `docs/THIRD_PARTY_LICENSES.md` §3. They are used for non-commercial research only (D2).
+**Reason:**
+- They are the standard FID network, and torchmetrics and torch-fidelity (Apache-2.0) are already in the lock file.
+- The user approved the download on 2026-11-24.
+
+### Real-world evaluation protocol (PR 2.5)
+**Decision:**
+- **Protocols:** `configs/eval/wider_real_x{4,8}.yaml` (`kind: realworld`) score a model on the frozen WIDER FACE `test` crops (D20). The frozen inputs are the sha256 of all LR crops.
+- **Metrics:**
+  - **LR-PSNR-Y**, per face: the SR is downscaled with torch bicubic and antialias, rounded to 8 bit and compared with the input.
+  - **FID**, on all faces, against real HR faces.
+  - **KID**, mean and std over 100 random subsets of up to 1,000 faces, for every subset of at least 200 faces.
+  - The real HR faces are the 19,867 CelebA validation crops at 128 px.
+- **Features:** InceptionV3 pool features (2048-d) with the TensorFlow-compatible bilinear resize to 299 px (`antialias=False`).
+  - FID and KID use the torchmetrics formulas in float64 on stored features.
+  - The reference features are cached per fingerprint.
+- **Subsets:** the WIDER attributes: blur 0 / 1 / 2, occluded or not, atypical pose, unpadded.
+- **Grids:** samples stay local (D20). `RESULTS.md` holds numbers only.
+
+**Reason:**
+- **CelebA validation as the reference:** these are real HR faces with the same template and alignment. The test split stays untouched for tuning, because the WIDER `val` part will be scored against the same reference.
+- **CelebA bias in FID/KID:** the reference is celebrity photos, so FID and KID also reward outputs that look like CelebA. They measure realism of the set, not fidelity to the person. They are read together with LR-PSNR-Y and the grids.
+- **LR-PSNR-Y is consistency, not quality:**
+  - plain upsampling scores high on it;
+  - a model that removes noise or compression scores lower, because the input itself contains them.
+- **KID besides FID:** KID is unbiased in the sample size. Subsets of 15–550 faces cannot support a reliable FID, and the ×8 test split has only 2,172 faces.
+- **Feature cache:** computing the reference features once makes each model evaluation take about 15 s (×4) or 9 s (×8).

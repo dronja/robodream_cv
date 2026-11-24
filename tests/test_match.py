@@ -14,6 +14,7 @@ from facehall.data.realworld import RealFaces
 from facehall.eval.match import (
     GATE,
     crop_box,
+    dotlist,
     expand,
     gate,
     load_spec,
@@ -24,6 +25,7 @@ from facehall.eval.match import (
     winner_yaml,
 )
 
+CONFIGS = Path(__file__).resolve().parents[1] / "configs"
 HR = 32
 ROWS = [("val", False, (i % 4 - 2, i % 3 - 1)) for i in range(12)] + [
     ("test", False, (i % 3 - 1, i % 4 - 2)) for i in range(12)
@@ -189,3 +191,15 @@ def test_script_parses(load_script: Callable[[str], Any]) -> None:
     script = load_script("match_degradations")
     args = script.parse_args(["--spec", "s.yaml", "--real", "r.yaml"])
     assert (args.real_split, args.data_split, args.samples, args.confirm) == ("val", "val", 5000, 5)
+
+
+def test_tuned_x8_config_is_the_accepted_winner() -> None:
+    """configs/degrade/realistic_x8.yaml = the base with the PR 2.6 winner's options."""
+    spec = load_spec(CONFIGS / "degrade/search/realistic.yaml")
+    winner = {"blur": "x0.6", "noise": "s35", "jpeg": "q70", "second": "p0.5"}
+    overrides: dict[str, Any] = {}
+    for axis, option in winner.items():
+        overrides |= spec.axes[axis][option]
+    expected = load_config(spec.base, DegradeConfig, dotlist(overrides))
+    assert load_config(CONFIGS / "degrade/realistic_x8.yaml", DegradeConfig) == expected
+    assert len(expand(spec)) == 135

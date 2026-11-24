@@ -1,7 +1,7 @@
 # facehall — project overview
 
 > **Single source of truth** for facts, current state, environment, data and the work plan.
-> Last updated: **2026-11-23**.
+> Last updated: **2026-11-24**.
 >
 > - Rules of work and product requirements: [`CLAUDE.md`](../CLAUDE.md) (it imports this file).
 > - Decisions with dates and reasons: [`DECISIONS.md`](DECISIONS.md).
@@ -33,19 +33,22 @@
 | Rules of work, product requirements (data, evaluation, responsible use) | `CLAUDE.md` | rarely |
 | Facts, status, environment, data, plan, progress | `docs/PROJECT.md` (this file) | every PR |
 | Decisions with date and reason | `docs/DECISIONS.md` | append-only |
-| Dataset composition, how to reproduce it | `docs/DATA.md` | *planned, PR 1.2* |
+| Dataset composition, verified source facts, layout, checksums, how to reproduce it | `docs/DATA.md` | when data changes |
 | Third-party licenses | `docs/THIRD_PARTY_LICENSES.md` | every PR that adds a dependency, dataset or weights |
 | Metric tables (generated) | `docs/RESULTS.md` | *planned, PR 1.7* |
 | Model card | `docs/MODEL_CARD.md` | *planned, Phases 3 and 6* |
 
 ## 2. Status snapshot
 
-As of 2026-11-23:
+As of 2026-11-24:
 
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
-- **Phase 1: in progress.** PR 1.1 (ML dependencies, branch `build/ml-dependencies`) is in review.
-  Data is downloaded and verified (§6.2); the technical design is agreed (§9).
+- **Phase 1: in progress.** PR 1.1 (ML dependencies) merged via PR #4 on 2026-11-24 (merge commit
+  `8a0ccce`). PR 1.2 (dataset preparation, branch `feat/prepare-dataset`) is in review; the
+  prepared CelebA dataset is at `/mnt/storage/AI/Face/celeba` (§6.2). The technical design is
+  agreed (§9).
+- **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
 
@@ -61,9 +64,13 @@ robodream_cv/
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (only --version), py.typed
-├── scripts/                   # license_report.py (license table from package metadata)
-├── tests/                     # import, CLI, legacy layout, dependency smoke, license report
-├── docs/                      # PROJECT.md, DECISIONS.md, THIRD_PARTY_LICENSES.md
+│   ├── provenance.py          # file sha256, git commit, package versions
+│   └── data/                  # manifest.py (schema, validation, content sha256), celeba.py
+├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
+│                              # license_report.py (license table from package metadata)
+├── tests/                     # conftest (load_script); import, CLI, legacy layout, dependency
+│                              # smoke, license report, provenance, manifest, CelebA preparation
+├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
 ```
@@ -76,7 +83,10 @@ robodream_cv/
   to the CPU-only build from `download.pytorch.org/whl/cpu`; the `cpu` and `cuda` extras are
   declared as conflicting, so `uv.lock` holds both builds.
 - ruff: line length 100, rules `E F I UP B SIM`, `legacy/` excluded. mypy: strict on `src`,
-  `tests` and `scripts`; torchvision has no type information and is excluded from import checks.
+  `tests` and `scripts`; pyarrow and torchvision have no type information and are excluded from
+  import checks.
+- Scripts in `scripts/` are thin command-line wrappers; the logic lives in the package. Tests
+  import scripts through the `load_script` fixture (`tests/conftest.py`).
 - CI runs on pushes to `main` and on every pull request. It installs the CPU build
   (`uv sync --locked --extra cpu`) and sets `UV_NO_SYNC=1`, so `uv run` keeps that build.
 - The target layout (configs/, data/, align/, models/, …) is described in `CLAUDE.md` §6.
@@ -94,7 +104,7 @@ robodream_cv/
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
-| Data root | `/mnt/storage/AI/Face` (~18 TB free); the repo `data/` directory is gitignored |
+| Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2). The repo `data/` directory is gitignored |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |
 
 ## 5. Legacy research code
@@ -123,42 +133,39 @@ robodream_cv/
 
 | Source | Role | Status |
 |---|---|---|
-| CelebA aligned, HF mirror `eurecom-ds/celeba` | Training and evaluation, Phases 1–3 (D8) | Downloaded and verified |
+| CelebA aligned, HF mirror `eurecom-ds/celeba` | Training and evaluation, Phases 1–3 (D8) | Downloaded, verified and prepared (PR 1.2, §6.2) |
 | Legacy 89×109 dataset | — | Excluded (D9) |
 | FFHQ | Candidate HR source for 512 px (later) | Not downloaded; non-commercial |
 | Real-world low-quality test set | Phase 2 | Source not chosen yet: needs known origin and license or consent |
 
-### 6.2 CelebA mirror — verified facts
+### 6.2 CelebA — summary
 
-Verified on 2026-11-23 by reading the parquet files directly.
+Details, per-split counts, checksums and the evidence behind every statement: `docs/DATA.md`.
 
-Location: `/mnt/storage/AI/Face/celeba_eurecom/data/` — 20 parquet shards (train 18, validation 1,
-test 1), 8.4 GB. According to the dataset card, the mirror was produced from
-`torchvision.datasets.CelebA`.
-
-| Split | Images | Identities |
-|---|---|---|
-| train | 162,770 | 8,192 |
-| validation | 19,867 | 985 |
-| test | 19,962 | 1,000 |
-| **total** | **202,599** | **10,177** |
-
-The identity overlap between any two splits is **0**: the official partition is identity-disjoint.
-
-Schema: `image` (struct `bytes`, `path`), `attributes` int8[40], `identity` int64, `bbox` int32[4],
-`landmarks` int32[10].
-
-| Field | Usable | Evidence |
-|---|---|---|
-| `image` | yes | `img_align_celeba`: a sample of 200 images is all JPEG 178×218, mean size 7.0 KB. `path` is empty, so original file names are not stored; the row order probably follows the official file order (*needs verification*) |
-| `landmarks` | yes | Aligned-image coordinates `[lx, ly, rx, ry, nose_x, nose_y, lmouth_x, lmouth_y, rmouth_x, rmouth_y]`. Test split means: eyes (69.3, 111.2) and (107.7, 111.2), nose (88.0, 135.1), mouth (71.2, 152.1) and (105.7, 152.1). Interocular distance: median 39 px, p5 33, p95 43 |
-| `bbox` | **no** | Coordinates of the in-the-wild images, not the aligned ones: max x+w = 4628; 88.5% of test boxes fall outside 178×218 |
-| `attributes` | partly | 40 binary CelebA attributes, values {0, 1}. Test split: `Male` 38.6%, `Young` 75.7%, `Pale_Skin` 4.2% (indices 20, 39, 26 in the CelebA attribute order). `Blurry` (index 10) is also available |
+- **Raw mirror** (read only): `/mnt/storage/AI/Face/celeba_eurecom/data/`, 20 parquet shards,
+  8.92 GB.
+- **Prepared dataset:** `/mnt/storage/AI/Face/celeba/`, built by `scripts/prepare_dataset.py`
+  (§12). It holds `img_align/{train,val,test}/NNNNNN.{png,jpg}`, `manifest.parquet` and
+  `prepare_info.json`. The manifest stays next to the data (D14).
+- **Size:** 202,599 images and 10,177 identities. The official partition is identity-disjoint
+  (D8).
+- **Images:** all RGB 178×218. Train images are PNG files of decoded JPEG pixels; validation and
+  test images are the original JPEG files. The bytes are kept as stored, without re-encoding.
+- **Annotations:**
+  - usable: identity, aligned 5-point landmarks, the 40 binary attributes (in the standard
+    CelebA order);
+  - not usable: `bbox`, which holds in-the-wild coordinates;
+  - not stored: the original file names. Rows are traced by `source_file` + `source_row`.
 
 ### 6.3 Crop geometry: 128 px HR is a downscale
 
+Landmark statistics, test split, aligned-image coordinates:
+- mean positions: eyes (69.3, 111.2) and (107.7, 111.2), nose (88.0, 135.1), mouth corners
+  (71.2, 152.1) and (105.7, 152.1);
+- interocular distance: median 39 px, p5 33, p95 43.
+
 The FFHQ-style alignment (a square built from the eye-to-eye and eye-to-mouth vectors), applied to
-the mean test landmarks, gives a crop of side ≈154 px with x ∈ [11.7, 165.3] and y ∈ [38.5, 192.1].
+the mean landmarks, gives a crop of side ≈154 px with x ∈ [11.7, 165.3] and y ∈ [38.5, 192.1].
 The crop lies fully inside 178×218. Resizing it to 128 px is a ×0.83 downscale, so an HR 128×128
 target does not violate the rule "HR must not be an upscale" (D4).
 
@@ -173,33 +180,19 @@ recorded. The exact template is fixed in PR 1.3.
 
 ### 6.4 Known data limitations
 
-- HR targets are JPEG (≈7 KB per image), so compression artifacts are part of the "ground truth".
-  This is acceptable for 128 px but not for 512 px.
-- Images with `Blurry = 1` are poor HR targets; whether to exclude them is open (Q4).
+- All HR targets carry JPEG compression artifacts. Validation and test images are small JPEG files
+  (≈6.8 KB each), and the train PNGs hold decoded JPEG pixels (`docs/DATA.md` §4.2). This is
+  acceptable for 128 px but not for 512 px.
+- Images with `Blurry = 1` (about 5% of every split) are poor HR targets. The manifest keeps them
+  in the `attr_blurry` column. Whether to filter them is decided in PR 1.4 (Q4).
 - There is no skin-tone annotation: `Pale_Skin` is a binary attribute, not a skin-tone scale.
   The plan is in D10.
 - Celebrity photos are not representative of real-world low-quality inputs; the Phase 2
   real-world test set addresses this.
-- CelebA terms: non-commercial research only, no redistribution (verified on the official page,
-  quoted in `docs/THIRD_PARTY_LICENSES.md` §2). The mirror states no license of its own.
-  Consequence: no CelebA images or annotations go into the public repository (Q1, Q2).
-
-### 6.5 Planned layout and manifest (PR 1.2)
-
-Proposal; final layout recorded in `docs/DATA.md`:
-
-```
-/mnt/storage/AI/Face/
-├── celeba_eurecom/                       # raw download, kept as is, read only
-└── celeba/                               # produced by scripts/prepare_dataset.py
-    ├── img_align/{split}/{index:06d}.jpg # original JPEG bytes, not re-encoded
-    └── manifest.parquet
-```
-
-Manifest columns: `path, sha256, source, license, identity_id, width, height, split, landmarks`,
-plus selected attributes (`male`, `young`, `blurry`). The split is the official partition; the test
-split is frozen and never used for tuning. The code locates the data through a config value
-(`data.root`), not through hard-coded paths.
+- CelebA terms: non-commercial research only, no redistribution. They were verified on the
+  official page and are quoted in `docs/THIRD_PARTY_LICENSES.md` §2. The mirror states no license
+  of its own. Consequence: no CelebA images, annotations or manifests go into the public
+  repository (D14, Q2).
 
 ## 7. Decisions — quick reference
 
@@ -219,6 +212,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D10 | Skin-tone subgroup: look for an additional annotation source (license verified and approved first); until then, document the limitation |
 | D11 | Approved downloads: PyTorch, ArcFace weights for the ID-similarity metric, LPIPS weights |
 | D12 | Documentation layout: this file is the single source of truth for facts, status and the plan |
+| D13 | Local use only: no production deployment, public service or published Docker image |
+| D14 | Manifests stay next to the data, outside git; the repo holds the generator code, counts and checksums (`docs/DATA.md`) |
 
 ## 8. Licenses — status
 
@@ -231,7 +226,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | Python runtime dependencies | Done in PR 1.1 (`docs/THIRD_PARTY_LICENSES.md` §4) |
 | ArcFace weights (model chosen in PR 1.7) | InsightFace pretrained models: non-commercial research (compatible with D2) |
 | LPIPS linear weights (bundled in torchmetrics) and torchvision backbone weights | *needs verification* (PR 1.7) |
-| NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Fine for local use; redistribution terms are reviewed before Docker images are published (Phase 5) |
+| NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Local use only, nothing is distributed (D13). Review the redistribution terms if that changes |
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
 
 ## 9. Phase 1 technical design
@@ -248,17 +243,25 @@ The agreed approach. Details are fixed in the corresponding PRs.
   torchmetrics[image]. MLflow moved to PR 1.6: it pulls in ~70 more packages (flask, sqlalchemy,
   docker, databricks-sdk, scikit-learn, …), so the tracking backend is chosen together with the
   trainer.
-- **Data preparation (PR 1.2).** `scripts/prepare_dataset.py`: parquet → files with the original
-  JPEG bytes, plus the manifest (§6.5). Row and identity counts are checked against §6.2. Writes
-  `docs/DATA.md`.
+- **Data preparation (PR 1.2, done).** `scripts/prepare_dataset.py` wraps
+  `facehall.data.celeba`.
+  - Output: image files with the stored bytes (train PNG, val/test JPEG), `manifest.parquet` and
+    `prepare_info.json`.
+  - Before writing anything, it checks the shard set, the official counts and identity
+    disjointness. Every image is decoded once.
+  - Runtime about 2 min on this machine. Details: `docs/DATA.md`.
 - **Alignment (PR 1.3).** `facehall.align`: a canonical 5-point template for 128×128 (from the
   §6.3 geometry), a similarity transform fitted by least squares (Umeyama), a warp and an inverse
   warp (reused for paste-back in Phase 4), and configurable alignment jitter (shift, rotation,
   scale).
-- **Dataset + degradation v0 (PR 1.4).** Train crops are warped on the fly from the 178×218 source,
-  with jitter. Validation and test crops are deterministic and cached. LR is a bicubic downscale
-  with antialias; the exact function is fixed in `configs/degrade/bicubic.yaml` and recorded.
-  Validation and test use a fixed seed.
+- **Dataset + degradation v0 (PR 1.4).**
+  - Input: the manifest (`read_manifest`), with the dataset root taken from a config value
+    (`data.root`), not from a hard-coded path. PNG (train) and JPEG (val/test) are both decoded.
+  - Filtering `Blurry` images is a config option (Q4).
+  - Train crops are warped on the fly from the 178×218 source, with jitter. Validation and test
+    crops are deterministic and cached.
+  - LR is a bicubic downscale with antialias; the exact function is fixed in
+    `configs/degrade/bicubic.yaml` and recorded. Validation and test use a fixed seed.
 - **Models (PR 1.5).** The `bicubic` baseline, plus FNet and CNet ported 1:1 from `FH.ipynb`: the
   same layers as in the notebook, including BN and the sigmoid output, parameterised by `scale`.
 - **Trainer + CLI (PR 1.6).** Experiment tracking (MLflow or a lighter option, decided here),
@@ -294,7 +297,7 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 - [x] **PR 1.1** `build:` ML dependencies (CUDA locally, CPU in CI); `THIRD_PARTY_LICENSES.md`;
       `scripts/license_report.py`
-- [ ] **PR 1.2** `feat(data):` `prepare_dataset.py`: files, manifest, official split, frozen test;
+- [x] **PR 1.2** `feat(data):` `prepare_dataset.py`: files, manifest, official split, frozen test;
       `DATA.md`. Tests use a synthetic parquet fixture
 - [ ] **PR 1.3** `feat(align):` template, similarity transform, warp and inverse warp, jitter.
       Tests: warp and inverse-warp round trip on synthetic points
@@ -358,7 +361,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [ ] ONNX export + parity test (max abs diff ≤ 1e-3); ONNX Runtime in the pipeline
 - [ ] FastAPI `/enhance`, `/health`, `/version`: size limits, timeouts, input validation; uploaded
       images are not stored, and logs contain no images or faces
-- [ ] Docker CPU and GPU images (install Docker first); latency and memory benchmark
+- [ ] Docker CPU and GPU images for local use, not published (D13; install Docker first); latency
+      and memory benchmark
 - [ ] Gradio demo (optional)
 
 **Done when** `docker run` + `curl` returns an enhanced image and the latency is documented.
@@ -366,35 +370,36 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 ### Phase 6 — release
 
 - [ ] `MODEL_CARD.md`, `DATA.md`, `THIRD_PARTY_LICENSES.md`, README with real results
-- [ ] Weights in GitHub Releases or on the Hugging Face Hub, with checksums; semver for the package
-      and the models
+- [ ] Versioned weights with checksums. Publishing them (GitHub Releases, Hugging Face Hub) needs
+      a separate confirmation (D7, D13). Semver for the package and the models
 - [ ] `CHANGELOG.md`
 
 ## 11. Open questions, risks, tech debt
 
 ### Open questions
 
-Ask the user before the PR that needs the answer.
+Ask the user before the PR that needs the answer. Q1 (manifest in git) was closed by D14.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q1 | CelebA terms forbid redistribution, and a manifest with identity ids and landmarks is part of the dataset. Should the manifest be committed? | PR 1.2 | Keep the full manifest next to the data; commit only the generator script, the counts and the manifest sha256 |
 | Q2 | Comparison grids with CelebA faces in the public `docs/RESULTS.md` | PR 1.7 | Write the grids to `outputs/` (gitignored); public docs show numbers, or images with a permissive license |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
-| Q4 | Exclude CelebA images with `Blurry = 1` from train and/or test? | PR 1.2 | Count them first, then decide |
+| Q4 | Exclude CelebA images with `Blurry = 1` (train 8,362, val 940, test 1,010; about 5% of each split) from train and/or evaluation? | PR 1.4 | Exclude them from train by default (a blurry target teaches blur). Keep val and test complete, so the frozen test stays the official one, and also report metrics on the non-blurry subset |
 
 ### Risks
 
 - ×8 from 16 px means ≈4 px between the eyes: the output is mostly invented, and ID similarity
   will be low. This must be stated clearly (`CLAUDE.md` §11).
 - JPEG artifacts in the HR targets (§6.4) limit perceptual quality.
-- CI time and size grow once torch is added; CPU wheels mitigate this.
+- CI time: about 40 s with the CPU build of torch (PR #4); watch it as the tests grow.
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
-  identity counts; the sha256 of every shard is recorded in PR 1.2.
+  identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
+  the local copy are detectable.
 
 ### Tech debt
 
-- `docs/DATA.md` is referenced by `DECISIONS.md` but does not exist yet (PR 1.2).
+- *Needs verification:* whether rows inside each split follow the official file order
+  (`docs/DATA.md` §4.4). This is needed before joining annotations keyed by file name (D10).
 - The legacy weights are still in HEAD (D7).
 
 ## 12. Commands
@@ -410,13 +415,13 @@ uv run pre-commit run --all-files      # lint, format, type check
 uv run facehall --version
 uv export --no-dev --no-hashes --no-emit-project --extra cuda --format requirements.txt \
     | uv run python scripts/license_report.py   # license table for THIRD_PARTY_LICENSES.md
+uv run python scripts/prepare_dataset.py --src /mnt/storage/AI/Face/celeba_eurecom/data \
+    --out /mnt/storage/AI/Face/celeba          # CelebA files + manifest (docs/DATA.md §6)
 ```
 
 Planned (target interface):
 
 ```bash
-uv run python scripts/prepare_dataset.py --src /mnt/storage/AI/Face/celeba_eurecom/data \
-    --out /mnt/storage/AI/Face/celeba
 uv run facehall train --config configs/train/fnet_x4.yaml --smoke
 uv run facehall train --config configs/train/fnet_x4.yaml
 uv run facehall eval --ckpt runs/<id>/best.safetensors --split test

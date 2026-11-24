@@ -1,6 +1,6 @@
 # Third-party licenses
 
-> This is not legal advice. Last reviewed: **2026-11-23**.
+> This is not legal advice. Last reviewed: **2026-11-24**.
 >
 > - Package licenses come from the installed package metadata, generated with
 >   `scripts/license_report.py` and reviewed by hand.
@@ -23,8 +23,8 @@ by the code license.
 | Hugging Face mirror `eurecom-ds/celeba` | Download source for CelebA | No license is stated in the dataset card or in the Hub metadata; the CelebA terms above apply | Hub API, 2026-11-23 |
 
 Consequence for this public repository: CelebA images, annotations and per-image manifests are not
-committed. Public figures that show CelebA faces need a separate decision (`docs/PROJECT.md` §11,
-Q1–Q3).
+committed (D14); `docs/DATA.md` holds only counts and checksums. Public figures that show CelebA
+faces need a separate decision (`docs/PROJECT.md` §11, Q2 and Q3).
 
 ## 3. Pretrained weights
 
@@ -45,7 +45,7 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 |---|---|---|---|
 | numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | |
 | omegaconf | 2.4.0 | BSD License | From classifiers |
-| opencv-python-headless | 5.1.0.95 | Apache 2.0 | The wheel bundles OpenCV (Apache-2.0), packaging code (MIT), libvpx (BSD-style) and **FFmpeg (LGPL-2.1)**; see `LICENSE-3RD-PARTY.txt` in the wheel. The LGPL obligations apply when Docker images are distributed (Phase 5) |
+| opencv-python-headless | 5.1.0.95 | Apache 2.0 | The wheel bundles OpenCV (Apache-2.0), packaging code (MIT), libvpx (BSD-style) and **FFmpeg (LGPL-2.1)**; see `LICENSE-3RD-PARTY.txt` in the wheel. The LGPL obligations apply to distribution; none is planned (D13, local use only) |
 | pillow | 13.0.0 | MIT-CMU | |
 | pyarrow | 26.0.1 | Apache-2.0 | |
 | safetensors | 0.8.0 | Apache Software License | From classifiers |
@@ -58,9 +58,9 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 On Linux, PyPI torch (the default, and the `cuda` extra) installs the NVIDIA CUDA libraries
 (`nvidia-*`) under **NVIDIA proprietary licenses** (`LicenseRef-NVIDIA-Proprietary`). It also
 installs the `cuda-toolkit` meta-package, which states no license and only pulls in those NVIDIA
-packages. Local use is fine for development; the redistribution terms must be reviewed before a
-GPU Docker image is published (Phase 5). The CPU build (`cpu` extra, used in CI) contains no
-NVIDIA packages.
+packages. The product is used locally only (D13), so no GPU Docker image is published; review the
+redistribution terms if that changes. The CPU build (`cpu` extra, used in CI) contains no NVIDIA
+packages.
 
 ### 4.3 Full list (generated)
 

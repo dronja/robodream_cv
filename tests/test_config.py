@@ -7,6 +7,8 @@ from omegaconf.errors import ConfigKeyError, MissingMandatoryValue, ValidationEr
 
 from facehall.config import load_config
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
+from facehall.data.degrade import build_degradation
+from facehall.eval.config import EvalConfig, validate_eval
 from facehall.train import ExperimentConfig
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -62,3 +64,44 @@ def test_include_file_and_overrides(tmp_path: Path) -> None:
     path.write_text("name: e\nscale: 4\nmodel:\n  name: fnet\ntrain:\n  epochs: 1\n")
     with pytest.raises(ConfigKeyError):
         load_config(path, ExperimentConfig, ["train.epoch=2"])
+
+
+LEVELS = ("light", "medium", "heavy")
+
+
+def test_test_levels_are_graded() -> None:
+    """Every level's ranges lie above the previous level's (stronger), without overlap."""
+    configs = [
+        load_config(CONFIGS / "degrade" / "levels" / f"{n}.yaml", DegradeConfig) for n in LEVELS
+    ]
+    training = load_config(CONFIGS / "degrade" / "realistic.yaml", DegradeConfig)
+    for weaker, stronger in zip(configs, configs[1:], strict=False):
+        a, b = weaker.first, stronger.first
+        assert a.blur.sigma[1] <= b.blur.sigma[0]
+        assert a.blur.motion_length[1] <= b.blur.motion_length[0]
+        assert a.blur.defocus_radius[1] <= b.blur.defocus_radius[0]
+        assert a.noise.sigma[1] <= b.noise.sigma[0]
+        assert a.noise.peak[0] >= b.noise.peak[1]  # fewer photons: more noise
+        assert a.jpeg.quality[0] >= b.jpeg.quality[1]
+    for config in configs:
+        first = config.first
+        assert (first.blur.prob, first.noise.prob, first.jpeg.prob) == (1.0, 1.0, 1.0)
+        assert config.grayscale == 0.0
+        # no stronger than the training mix
+        assert first.blur.sigma[1] <= training.first.blur.sigma[1]
+        assert first.noise.sigma[1] <= training.first.noise.sigma[1]
+        assert first.noise.peak[0] >= training.first.noise.peak[0]
+        assert first.jpeg.quality[0] >= training.first.jpeg.quality[0]
+        build_degradation(config)
+
+
+def test_repository_eval_protocols_load() -> None:
+    names = sorted(p.name for p in (CONFIGS / "eval").glob("*.yaml"))
+    assert len(names) == 8
+    for path in sorted((CONFIGS / "eval").glob("*.yaml")):
+        config = load_config(path, EvalConfig)
+        validate_eval(config)
+        assert config.split == "test" and config.name.endswith(f"_x{config.scale}")
+        assert config.level in ("bicubic", *LEVELS)
+        assert config.name == f"celeba128_{config.level}_x{config.scale}"
+        assert config.inputs_sha256.get("test"), f"{path.name}: inputs are not frozen"

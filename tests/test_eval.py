@@ -36,7 +36,13 @@ from facehall.eval.metrics import (
     ssim_y,
 )
 from facehall.eval.report import collect, comparison_grid, render
-from facehall.eval.runner import Metric, evaluate_model, identity_fingerprint
+from facehall.eval.runner import (
+    InputsChangedError,
+    Metric,
+    evaluate_model,
+    identity_fingerprint,
+    input_digest,
+)
 from facehall.models import ModelConfig, build_model
 from facehall.train import ExperimentConfig, SmokeConfig, TrainConfig, train
 from facehall.weights import Asset, download
@@ -153,6 +159,70 @@ def test_protocol_run(root: Path, tmp_path: Path) -> None:
     assert len(list((out / "samples").glob("*.png"))) == 2
     assert len(list((out.parent / "reference" / "hr").glob("*.png"))) == 2
     assert summary["model"]["name"] == "bicubic" and summary["metric_setup"]["identity"] is None
+    assert summary["level"] == "tiny_x4"  # no level set: the protocol name
+    assert table["degradation"] == ["{}"] * TEST_SAMPLES
+    assert summary["inputs_sha256"] == input_digest(config)
+
+
+NOISY = DegradeConfig(
+    kind="pipeline",
+    first=StageConfig(noise=NoiseConfig(prob=1.0, gaussian=1.0, sigma=[5.0, 5.0])),
+)
+
+
+def test_frozen_inputs(root: Path, tmp_path: Path) -> None:
+    config = protocol(root, tmp_path, degrade=NOISY, level="noisy")
+    digest = input_digest(config)
+    assert input_digest(replace(config, batch_size=3)) == digest  # batch size does not matter
+    assert input_digest(replace(config, workers=2)) == digest
+    assert input_digest(replace(config, seed=1)) != digest
+    model = build_model(ModelConfig(name="bicubic"), 4, 8)
+    metrics: tuple[dict[str, Metric], IdentitySimilarity | None] = ({"psnr_y": psnr_y}, None)
+    frozen = replace(config, inputs_sha256={"test": digest})
+    out = evaluate_model(
+        model, frozen, "bicubic", {"name": "bicubic", "parameters": 0}, metrics=metrics
+    )
+    summary = json.loads((out / "metrics.json").read_text())
+    assert (summary["inputs_sha256"], summary["level"]) == (digest, "noisy")
+    params = [
+        json.loads(p)
+        for p in pq.read_table(out / "per_image.parquet").column("degradation").to_pylist()
+    ]
+    assert all(p["stages"][0]["noise"]["sigma"] == 5.0 for p in params)
+
+    changed = replace(frozen, seed=1, output=str(tmp_path / "changed"))
+    with pytest.raises(InputsChangedError, match="inputs of protocol tiny_x4 changed"):
+        evaluate_model(
+            model, changed, "bicubic", {"name": "bicubic", "parameters": 0}, metrics=metrics
+        )
+    assert not list((tmp_path / "changed").rglob("metrics.json"))
+    other_split = replace(frozen, split="val")  # only the listed split is checked
+    evaluate_model(
+        model, other_split, "bicubic", {"name": "bicubic", "parameters": 0}, metrics=metrics
+    )
+
+
+def test_hr_embeddings_are_shared_between_protocols(root: Path, tmp_path: Path) -> None:
+    weights = tmp_path / "recognition.onnx"
+    weights.write_bytes(b"fingerprinted only")
+    model = build_model(ModelConfig(name="bicubic"), 4, 8)
+    embedded = []
+    for name, degrade in (("clean", DegradeConfig()), ("noisy", NOISY)):
+        config = protocol(
+            root,
+            tmp_path,
+            name=name,
+            degrade=degrade,
+            metrics=MetricsConfig(lpips="", identity=str(weights)),
+        )
+        embedder = MeanColours()
+        metric = IdentitySimilarity(embedder, CELEBA_TEMPLATE, 32)
+        evaluate_model(
+            model, config, "bicubic", {"name": "bicubic", "parameters": 0}, metrics=({}, metric)
+        )
+        embedded.append(sum(shape[0] for shape in embedder.shapes))
+    assert embedded == [2 * TEST_SAMPLES, TEST_SAMPLES]  # the second protocol reuses HR
+    assert len(list((tmp_path / "_cache").glob("identity_hr-*.npz"))) == 1
 
 
 def test_identity_reference_cache(root: Path, tmp_path: Path) -> None:
@@ -237,6 +307,24 @@ def test_checkpoint_model_report_and_grid(root: Path, tmp_path: Path) -> None:
     assert "| `Male` = 1 |" in text
     grid = comparison_grid(summaries, "tiny_x4", "test")
     assert grid.size == (32 * 4, 32 * 2)  # LR, bicubic, fnet, HR; 2 samples
+    assert f"Inputs: sha256 `{summaries[0]['inputs_sha256']}`" in text
+    assert "Summary by degradation level" not in text  # one level only
+
+    noisy = replace(config, name="tiny_noisy_x4", level="medium", degrade=NOISY)
+    evaluate_model(model, noisy, label, info, metrics=metrics)
+    evaluate_model(bicubic, noisy, name, base, metrics=metrics)
+    summaries = collect(tmp_path / "eval")
+    text = render(summaries)
+    lines = text.splitlines()
+    header = lines.index("## Summary by degradation level — ×4")
+    assert lines[header + 4] == "| Model | medium | tiny_x4 |"  # known levels first
+    assert lines[header + 6].startswith("| `bicubic` | ")
+    assert lines[header + 7].startswith(f"| `{label}` | ")
+    assert text.index("## tiny_noisy_x4 — test") < text.index("## tiny_x4 — test")
+
+    summaries[-1]["inputs_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="models were scored on different inputs"):
+        render(summaries)
 
 
 def test_eval_cli(root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -259,6 +347,8 @@ def test_invalid_protocol_settings(root: Path, tmp_path: Path) -> None:
         (replace(config, split="holdout"), "unknown split"),
         (replace(config, metrics=MetricsConfig(lpips="resnet")), "unknown LPIPS network"),
         (replace(config, batch_size=0), "batch_size must be"),
+        (replace(config, inputs_sha256={"test": "abc"}), "must be a lowercase sha256"),
+        (replace(config, inputs_sha256={"holdout": "0" * 64}), "unknown split in inputs_sha256"),
     ):
         with pytest.raises(ValueError, match=message):
             validate_eval(bad)

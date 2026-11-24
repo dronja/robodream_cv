@@ -27,6 +27,7 @@ class EvalConfig:
     """
 
     name: str = MISSING  # protocol name; results go to <output>/<name>/<split>/<model label>/
+    level: str = ""  # degradation level for report tables (e.g. "light"); "": the protocol name
     scale: int = MISSING
     split: str = "test"
     seed: int = 0  # degradation randomness and the grid samples
@@ -36,6 +37,9 @@ class EvalConfig:
     output: str = "outputs/eval"
     grid_samples: int = 8  # images saved for comparison grids, local only (D19); 0 disables
     subgroups: list[str] = field(default_factory=list)  # boolean manifest columns
+    # Frozen inputs: split -> sha256 of every LR and HR crop (facehall.eval.runner.InputDigest).
+    # A split listed here must reproduce its digest exactly, or the evaluation fails.
+    inputs_sha256: dict[str, str] = field(default_factory=dict)
     data: DataConfig = field(default_factory=DataConfig)
     degrade: DegradeConfig = field(default_factory=DegradeConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -43,6 +47,10 @@ class EvalConfig:
 
 def validate_eval(config: EvalConfig) -> None:
     require_choice(config.split, SPLITS, "split")
+    for split, digest in config.inputs_sha256.items():
+        require_choice(split, SPLITS, "split in inputs_sha256")
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ValueError(f"inputs_sha256.{split} must be a lowercase sha256, got {digest!r}")
     if config.metrics.lpips:
         require_choice(config.metrics.lpips, LPIPS_NETS, "LPIPS network")
     for name, value, lowest in (

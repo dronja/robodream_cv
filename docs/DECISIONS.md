@@ -146,3 +146,37 @@ Log of project decisions: date, decision, reason. Open questions are marked **OP
 - Initialisation and BN settings change training behaviour, so they are part of the recipe.
 - The trainable parameter counts equal the notebook's `model.summary()` at 24 px ×4 (FNet 734,723; CNet 854,979).
 - The per-pixel PReLU is a legacy quirk; SRResNet-v2 in Phase 3 drops it together with BN.
+
+### D17 — Experiment tracking: one plain run directory per run
+**Decision:** every run writes `runs/<name>-<timestamp>[-smoke]/`, containing:
+- the resolved config;
+- `run.json` with provenance (command, git commit, library versions, device, dataset settings and counts, manifest checksum);
+- `metrics.jsonl`, the text log and `summary.json`;
+- the checkpoints.
+
+MLflow is not added. It can be added later as an option that reads the same records.
+
+**Reason:**
+- The user chose this option on 2026-11-24.
+- It needs no new dependencies (MLflow pulls in about 70 packages).
+- `RESULTS.md` (PR 1.7) can be generated directly from these files.
+- The product is local only (D13), so a tracking server adds little.
+
+This replaces the MLflow default in `CLAUDE.md` §6.
+
+### Trainer (PR 1.6): differences from the legacy recipe
+**Decision:** the configs follow the legacy recipe (MSE, Adam with Keras defaults, batch 16; FNet 10 epochs with patience 3, CNet 50 epochs), with these differences:
+- the forward pass uses bf16 autocast (legacy: fp32). The loss and validation are in fp32. `--set train.precision=fp32` restores fp32;
+- the train order is shuffled with a permutation per `(seed, epoch)` (legacy: no shuffle, `CLAUDE.md` §4.3);
+- the last incomplete train batch is dropped;
+- the `best` checkpoint (lowest val loss) replaces Keras `restore_best_weights`;
+- there is no separate 48 GB profile.
+
+Configs are composed with a small `include` mechanism plus `--set` overrides, not with Hydra.
+
+**Reason:**
+- bf16 roughly doubles the training speed (PR 1.5 table), and both target GPUs support it.
+- No shuffling was a known legacy bug, not part of the recipe.
+- Dropping the last batch keeps every optimizer step the same size, including with gradient accumulation.
+- Every config fits 8 GB at batch 16, so a larger batch would change the recipe rather than adapt it to the hardware.
+- `include` keeps the data, degradation and model configs reusable without adding a dependency.

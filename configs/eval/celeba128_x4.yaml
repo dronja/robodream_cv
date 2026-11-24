@@ -1,0 +1,15 @@
+# Phase 1 evaluation protocol: the frozen CelebA aligned test split, 128 px HR, x4
+# (32 -> 128 px), bicubic degradation v0. Every model is scored on exactly these inputs.
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/bicubic.yaml
+name: celeba128_bicubic_x4
+scale: 4
+split: test
+seed: 0
+metrics:
+  lpips: alex
+  # InsightFace buffalo_l recognition model (D18): scripts/download_weights.py buffalo_l
+  identity: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/buffalo_l/w600k_r50.onnx
+subgroups: [attr_male, attr_young]
+grid_samples: 8   # written to outputs/ only: CelebA faces are not published (D19)

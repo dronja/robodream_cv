@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
+import pyarrow as pa
 import pyarrow.compute as pc
 import torch
 from PIL import Image
@@ -93,6 +95,7 @@ class AlignedFaces(Dataset[Sample]):
         self.dropped = {"upscale": int(upscale.sum()), "blurry": int(drop_blurry.sum())}
         paths: list[str] = table.column("path").to_pylist()
         self._paths = [p for p, k in zip(paths, keep, strict=True) if k]
+        self._table = table.filter(pa.array(keep))
         self._matrices = matrices[keep]
         self._blurry = blurry[keep]
 
@@ -104,6 +107,10 @@ class AlignedFaces(Dataset[Sample]):
 
     def path(self, index: int) -> Path:
         return self.root / self._paths[index]
+
+    def column(self, name: str) -> npt.NDArray[Any]:
+        """A manifest column for the kept rows, in dataset order (e.g. ``attr_male``)."""
+        return np.asarray(self._table.column(name).to_numpy(zero_copy_only=False))
 
     def __getitem__(self, index: int) -> Sample:
         size = self.config.hr_size

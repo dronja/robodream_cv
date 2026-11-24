@@ -13,6 +13,7 @@ LR-PSNR-Y per model, then KID and LR-PSNR-Y per subset of the WIDER FACE attribu
 """
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ COLUMNS = (  # metric key, header, format, higher is better
     ("identity", "ID sim ↑", "{:.4f}", True),
 )
 LEVELS = ("bicubic", "light", "medium", "heavy")  # column order; other levels follow by name
+RUN_STAMP = re.compile(r"-\d{8}-\d{6}$")  # the timestamp suffix of a run directory name
 REALWORLD = "realworld"
 REALWORLD_SUBSETS = {
     "all": "all",
@@ -109,7 +111,7 @@ def render(summaries: list[dict[str, Any]], *, split: str = "test") -> str:
             "",
             "Subsets (PSNR-Y / LPIPS / ID sim):",
             "",
-            "| Subset | Images | " + " | ".join(s["model"]["name"] for s in rows) + " |",
+            "| Subset | Images | " + " | ".join(short_label(s) for s in rows) + " |",
             "|---|---:|" + "---|" * len(rows),
         ]
         for subset, title in SUBSET_TITLES.items():
@@ -156,7 +158,7 @@ def realworld_section(rows: list[dict[str, Any]], split: str) -> list[str]:
         "",
         "Subsets (KID ×10³ / LR-PSNR-Y; KID only for subsets of enough faces):",
         "",
-        "| Subset | Faces | " + " | ".join(s["model"]["name"] for s in rows) + " |",
+        "| Subset | Faces | " + " | ".join(short_label(s) for s in rows) + " |",
         "|---|---:|" + "---|" * len(rows),
     ]
     for subset, title in REALWORLD_SUBSETS.items():
@@ -171,6 +173,12 @@ def realworld_section(rows: list[dict[str, Any]], split: str) -> list[str]:
         ]
         lines.append(f"| {title} | {stats['count']:,} | " + " | ".join(cells) + " |")
     return lines
+
+
+def short_label(summary: dict[str, Any]) -> str:
+    """The run name without its timestamp (``fnet_x4_realistic``), or the model name."""
+    run = summary["model"].get("run")
+    return RUN_STAMP.sub("", str(run)) if run else str(summary["model"]["name"])
 
 
 def kid_cell(stats: dict[str, Any]) -> str:

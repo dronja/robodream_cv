@@ -133,3 +133,16 @@ Log of project decisions: date, decision, reason. Open questions are marked **OP
 - Bicubic with antialias is the standard "BI" degradation of the SR literature, and the torch function keeps it on the tensor path. Without antialias the result differs from PIL by up to 142 levels (aliasing).
 - The flip is valid because the template is symmetric. The jitter models imprecise landmarks on small faces (`CLAUDE.md` §6).
 - Decoding and warping take about 0.7 ms per image, and a DataLoader with 8 workers delivers about 7,700 samples/s. Caching would add invalidation logic for no measurable gain; it can be added if profiling in PR 1.6 shows a need.
+
+### Legacy model ports (PR 1.5)
+**Decision:**
+- FNet and CNet are ported layer for layer from `legacy/FH.ipynb`.
+- The ports keep the Keras default initialisation and BatchNorm settings: Glorot-uniform weights, zero bias, BN epsilon 1e-3 and momentum 0.99, PReLU alpha initialised to 0.
+- CNet keeps its per-pixel PReLU, so it is built for one LR size.
+- The only generalisation is the scale: one ×2 stage per factor of 2.
+
+**Reason:**
+- Phase 1 measures the legacy architectures on the new protocol, so the ports must not quietly improve them.
+- Initialisation and BN settings change training behaviour, so they are part of the recipe.
+- The trainable parameter counts equal the notebook's `model.summary()` at 24 px ×4 (FNet 734,723; CNet 854,979).
+- The per-pixel PReLU is a legacy quirk; SRResNet-v2 in Phase 3 drops it together with BN.

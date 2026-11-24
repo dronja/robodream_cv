@@ -1,0 +1,4 @@
+# Legacy CNet ("simplified C-Face"), 1:1 port of legacy/FH.ipynb (facehall.models.cnet).
+# Its per-pixel PReLU ties the model to one LR size, given by the data config and the scale.
+name: cnet
+channels: 64

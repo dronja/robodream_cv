@@ -1,23 +1,14 @@
 """Tests for scripts/license_report.py."""
 
-import importlib.util
-import sys
-from pathlib import Path
+from collections.abc import Callable
 from types import ModuleType
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "license_report.py"
-
 
 @pytest.fixture(scope="module")
-def license_report() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("license_report", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+def license_report(load_script: Callable[[str], ModuleType]) -> ModuleType:
+    return load_script("license_report")
 
 
 class FakeMetadata:

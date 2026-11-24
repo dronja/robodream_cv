@@ -4,7 +4,7 @@
 > Last updated: **2026-11-24**.
 >
 > - Every number here comes from reading the source files directly or from a real run of
->   `scripts/prepare_dataset.py`.
+>   `scripts/prepare_dataset.py` or `scripts/prepare_wider.py`.
 > - Status, plan and known data limitations: [`PROJECT.md`](PROJECT.md) §6.
 > - License terms: [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) §2.
 
@@ -16,12 +16,14 @@
 4. [Verified properties of the mirror](#4-verified-properties-of-the-mirror)
 5. [Prepared dataset](#5-prepared-dataset)
 6. [How to reproduce](#6-how-to-reproduce)
+7. [Real-world set: WIDER FACE](#7-real-world-set-wider-face)
 
 ## 1. Datasets in use
 
 | Dataset | Used for | Location | Terms |
 |---|---|---|---|
 | CelebA aligned (`img_align_celeba`) from the Hugging Face mirror `eurecom-ds/celeba` | Training and evaluation, Phases 1–3 (D8) | Raw: `/mnt/storage/AI/Face/celeba_eurecom/data/`. Prepared: `/mnt/storage/AI/Face/celeba/` | Non-commercial research only, no redistribution |
+| WIDER FACE training images + RetinaFace 5-point landmarks | Real-world test set without HR reference (D20, §7) | Raw: `/mnt/storage/AI/Face/wider_face/raw/`. Prepared: `/mnt/storage/AI/Face/wider_face/realworld/` | WIDER FACE: CC BY-NC-ND 4.0. Landmarks: non-commercial research only |
 
 The legacy 89×109 dataset is not used (D9). No image, annotation or manifest of these datasets is
 committed to the repository (D14). This file holds only counts and checksums.
@@ -238,3 +240,129 @@ uv run python scripts/prepare_dataset.py \
 - The script refuses a non-empty output directory unless `--overwrite` is given. It checks the
   shard set, the official counts and identity disjointness before it writes anything.
 - `--no-count-check` skips the count comparison, for partial copies of the mirror.
+
+## 7. Real-world set: WIDER FACE
+
+Real low-quality faces for evaluation without an HR reference (D20). Code:
+`facehall.data.wider`, `scripts/prepare_wider.py`. Nothing in this project trains on WIDER FACE.
+
+### 7.1 Raw archives
+
+Downloaded on 2026-11-24 into `/mnt/storage/AI/Face/wider_face/raw/` and pinned in
+`facehall.data.wider.ARCHIVES`:
+
+| File | Bytes | sha256 | Source |
+|---|---:|---|---|
+| `WIDER_train.zip` | 1,465,602,149 | `e23b76129c825cafae8be944f65310b2e1ba1c76885afe732f179c41e5ed6d59` | Hugging Face dataset `CUHK-CSE/wider_face`, `data/WIDER_train.zip`. The official page links to this dataset |
+| `wider_face_split.zip` | 3,591,642 | `c7561e4f5e7a118c249e0a5c5c902b0de90bbf120d7da9fa28d99041f68a8a5c` | Same dataset, `data/wider_face_split.zip`: official boxes and attributes |
+| `retinaface_gt.zip` | 4,494,280 | `180bacc15fe01ae02c072daf25a9601a3631f4dd3063ac1ffb77133d10b21979` | RetinaFace annotations, Google Drive link in the InsightFace `detection/retinaface` README |
+
+The two Hugging Face files match the sha256 of their Git LFS objects on the Hub.
+
+### 7.2 Verified properties
+
+Checked on 2026-11-24 by reading the archives:
+- **Images:** 12,880 training JPEG files, all RGB. None has an EXIF orientation tag, so the
+  annotations refer to the stored pixel grid.
+- **Official annotation** (`wider_face_train_bbx_gt.txt`): 159,420 faces. Each face line holds
+  the box (x, y, w, h) and six attributes: blur (0 clear, 1 normal, 2 heavy), expression,
+  illumination, invalid, occlusion (0 none, 1 partial, 2 heavy) and pose (0 typical, 1
+  atypical), as defined in `wider_face_split/readme.txt`.
+- **RetinaFace annotation** (`train/label.txt`): the same 12,880 images and 159,424 faces.
+  - Each face line holds the box, five landmarks as (x, y, flag) and one more value.
+  - 75,936 faces have landmarks; the rest have -1. The RetinaFace paper (arXiv:1905.00641)
+    states that the landmarks were annotated manually.
+  - The flag (0 or 1) and the last value are not documented and are not used.
+  - Landmark order: left eye, right eye, nose, left and right mouth corner, as in the image
+    (the eye with the smaller x first). This matches `facehall.align.LANDMARK_NAMES`.
+  - The validation `label.txt` has boxes only, so the set uses the training images.
+- **Matching:** every one of the 75,936 faces with landmarks has the same box as the official
+  face at the same position in its image, so all of them get the official attributes. Four
+  images list a different number of faces in the two files; none of their faces with
+  landmarks is affected.
+
+### 7.3 Selection and split
+
+- **Native size:** for scale *s*, a face is kept when the least-squares similarity that maps its
+  five landmarks to the template (`CELEBA_TEMPLATE`) at the LR size 128 / *s* scales the source
+  by 0.8–1.25 output pixels per source pixel. The crop is then close to the face's native
+  resolution: an interocular distance of about 6.4–10 source px for ×4 and 3.2–5 px for ×8.
+  The two windows do not overlap.
+- **Dropped:** faces marked `invalid` (1 for ×4, 7 for ×8).
+- **Warp:** bicubic, reflect padding (as for CelebA, D16); the padded fraction is stored.
+- **Split:** by source image, so all faces of a photo share a split. An image goes to `test`
+  when the first 32 bits of the sha256 of its name, as a fraction of 2^32, are below 0.5;
+  otherwise to `val`. `val` is for tuning; `test` is frozen.
+
+| Scale | Split | Faces | Images | Events | Blur 0 / 1 / 2 | Occlusion 0 / 1 / 2 | Padded |
+|---|---|---:|---:|---:|---|---|---:|
+| ×4 (32 px) | val | 8,160 | 1,337 | 61 | 377 / 3,606 / 4,177 | 6,422 / 1,014 / 724 | 219 |
+| ×4 (32 px) | test | 8,645 | 1,291 | 59 | 550 / 3,862 / 4,233 | 6,925 / 1,046 / 674 | 224 |
+| ×8 (16 px) | val | 2,752 | 426 | 52 | 16 / 733 / 2,003 | 1,985 / 498 / 269 | 19 |
+| ×8 (16 px) | test | 2,172 | 438 | 55 | 15 / 535 / 1,622 | 1,443 / 468 / 261 | 20 |
+
+- Faces at this size are mostly annotated as blurred: only 4–6% of the ×4 faces and under 1% of
+  the ×8 faces have blur 0.
+- In the template fit, the median RMS landmark distance is 0.029 (×4) and 0.026 (×8) of the
+  crop side.
+
+### 7.4 Prepared set
+
+```
+/mnt/storage/AI/Face/wider_face/realworld/
+├── x4/{val,test}/000000.png …      # 32×32 RGB crops
+├── x8/{val,test}/000000.png …      # 16×16 RGB crops
+├── manifest.parquet                # one row per crop
+└── prepare_info.json               # provenance, settings, counts, checksums
+```
+
+The file index counts crops within the scale and split, in (image, face) order. Disk use: ×4
+37.5 MB, ×8 3.5 MB, manifest 3.1 MB.
+
+Manifest columns, after the required ones (§5.1):
+
+| Column | Type | Meaning |
+|---|---|---|
+| `identity_id` | int64 | Always -1 (`UNKNOWN_IDENTITY`): WIDER FACE has no identities |
+| `width`, `height` | int32 | LR crop side: 32 (×4) or 16 (×8) |
+| `source`, `license` | string | `wider-face-train+retinaface`; the terms in short |
+| `scale` | int32 | 4 or 8 |
+| `source_image`, `event`, `face_index` | string, string, int32 | Image as in the annotations (`<event>/<file>.jpg`), its event folder, the face position in it |
+| `bbox` | int32[4] | Official box x, y, w, h |
+| `landmarks` | float32[10] | RetinaFace landmarks, source pixel coordinates |
+| `align_scale`, `align_angle`, `align_residual` | float32 | Output px per source px; rotation in degrees; RMS landmark distance to the template as a fraction of the crop side |
+| `padded` | float32 | Fraction of crop pixels outside the source image |
+| `attr_blur`, `attr_expression`, `attr_illumination`, `attr_occlusion`, `attr_pose` | int8 | Official attributes (§7.2) |
+
+`prepare_info.json` records:
+- the archive checksums, the git commit and library versions (numpy, OpenCV, pillow,
+  pyarrow);
+- the settings: scales, HR size, native range, test fraction, template, interpolation, border;
+- the annotation, selection and split counts;
+- the manifest checksums (§5.2).
+
+### 7.5 How to reproduce
+
+```bash
+RAW=/mnt/storage/AI/Face/wider_face/raw && mkdir -p $RAW
+for f in WIDER_train.zip wider_face_split.zip; do
+  curl -L -o $RAW/$f https://huggingface.co/datasets/CUHK-CSE/wider_face/resolve/main/data/$f
+done
+curl -L -o $RAW/retinaface_gt.zip \
+  "https://drive.usercontent.google.com/download?id=1BbXxIiY-F74SumCNG6iwmJJ5K3heoemT&export=download&confirm=t"
+uv run python scripts/prepare_wider.py --raw $RAW --out /mnt/storage/AI/Face/wider_face/realworld
+```
+
+- Runtime: about 10 s; the archives are read without extracting them.
+- The script checks the three archive checksums first (`--no-checksum` skips this) and refuses a
+  non-empty output directory unless `--overwrite` is given.
+- Expected `manifest.content_sha256`:
+
+  ```
+  b9214f0260e0ceec8214862868f988cb98fd0d13940c7c8df479af96c6ce76b6
+  ```
+
+- Reference run: commit `5cd571b`, 2026-11-24T14:39:35+00:00, with numpy 2.5.4, OpenCV
+  5.1.0.95, pillow 13.0.0 and pyarrow 26.0.1. A second run gave the same content checksum.
+- The PNG bytes, and so `file_sha256` and the per-file `sha256`, may change with the zlib or
+  pillow version; the pixels do not.

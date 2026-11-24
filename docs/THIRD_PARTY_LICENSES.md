@@ -21,10 +21,15 @@ by the code license.
 |---|---|---|---|
 | CelebA: aligned images, identities, landmarks, attributes | Training and evaluation, Phases 1–3 | "available for non-commercial research purposes only"; "You agree not to reproduce, duplicate, copy, sell, trade, resell or exploit for any commercial purposes, any portion of the images and any portion of derived data"; "You agree not to further copy, publish or distribute any portion of the CelebA dataset", except for copies for internal use at a single site within the same organization | [Official page](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html), 2026-11-23 |
 | Hugging Face mirror `eurecom-ds/celeba` | Download source for CelebA | No license is stated in the dataset card or in the Hub metadata; the CelebA terms above apply | Hub API, 2026-11-23 |
+| WIDER FACE: training images, boxes and attributes | Real-world test set (D20) | Official page, section "License": "Creative Common License (cc by-nc-nd)". The same page: "images are selected from the publicly available WIDER dataset". The page links to the Hugging Face dataset `CUHK-CSE/wider_face`, whose Hub metadata states `cc-by-nc-nd-4.0` | [Official page](http://shuoyang1213.me/WIDERFACE/) and Hub API, 2026-11-24 |
+| RetinaFace annotations of WIDER FACE (`retinaface_gt.zip`: boxes and five landmarks) | Alignment of the real-world test set (D20) | No license file comes with the annotations. The [InsightFace README](https://github.com/deepinsight/insightface), section "License": "The training data containing the annotation (and the models trained with these data) are available for non-commercial research purposes only." The [RetinaFace README](https://github.com/deepinsight/insightface/tree/master/detection/retinaface) links the download | READMEs, 2026-11-24 |
 
 Consequence for this public repository: CelebA images, annotations and per-image manifests are not
 committed (D14); `docs/DATA.md` holds only counts and checksums. Public figures that show CelebA
-faces need a separate decision (`docs/PROJECT.md` §11, Q2 and Q3).
+faces need a separate decision (`docs/PROJECT.md` §11, Q2 and Q3). The same applies to WIDER FACE:
+its crops, the manifest and any figure that shows its faces stay local. "NoDerivatives" forbids
+sharing adapted material such as crops, and the people in the photos gave no consent to this use
+(D20).
 
 ## 3. Pretrained weights
 

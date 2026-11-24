@@ -225,3 +225,47 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
 - The fixed recognition alignment is exact for our aligned crops, and it avoids detector failures on SR outputs.
 - Per-image results allow any later breakdown without re-running.
 - Sanity check on 2026-11-24 (60 val identities, two images each): same-identity HR pairs scored a mean cosine of 0.565, different-identity pairs a mean of 0.015 (max 0.143), and identical crops 1.0. This confirms the alignment and preprocessing.
+
+### Degradation pipeline (PR 2.1)
+**Decision:**
+- **Pipeline:** degradations are drawn per sample from a config (`kind: pipeline`). The order is:
+  1. optional grayscale;
+  2. stage 1: blur → resize → noise → JPEG;
+  3. an optional second stage in the Real-ESRGAN style (arXiv:2107.10833), so the first stage ends at an intermediate size;
+  4. an optional colour shift;
+  5. 8-bit rounding.
+- **Blur units:** sizes are in LR pixels and are scaled to each stage's working resolution.
+- **Grayscale:** turns the HR target grey as well.
+- **Colour shift:** shifts the LR only, and is implemented but off in `configs/degrade/realistic.yaml`.
+- **Parameters:** the drawn parameters of every sample are returned as JSON.
+- **Initial ranges** for `realistic.yaml`:
+
+  | Stage | Blur | Noise | JPEG |
+  |---|---|---|---|
+  | First | p 0.9; σ 0.1–1.0 LR px | p 0.7 | p 0.8, quality 30–95 |
+  | Second (p 0.5) | p 0.5; σ 0.1–0.6 | p 0.5 | p 0.8 |
+
+  - First-stage blur also includes motion 0.5–3 px and defocus 0.3–1.5 px. Its noise is Gaussian σ 1–15 levels or Poisson with 100–3000 photons at white, grey with p 0.4.
+  - Resize mix: bicubic 0.4, bilinear 0.3, area 0.2, nearest 0.1; antialias p 0.7.
+  - Grayscale p 0.02.
+- **Not implemented:** H.264/H.265 (optional) and the sinc filter.
+
+**Reason:**
+- **The order follows image formation:** optics and motion blur before sampling, sensor noise after it, then compression. The second stage models images that were resized and recompressed again (`CLAUDE.md` §7).
+- **LR-pixel units:** real blur is set by the camera, in pixels of the captured image, whatever the size of the face. They also let one config serve ×4 and ×8, whereas HR-pixel units would make ×8 inputs twice as sharp relative to their pixels.
+- **Grey target:** for a grey input the model must not invent colours. GFPGAN keeps colour targets by default, which trains colourisation, and offers `gt_gray` as an option.
+- **Colour shift off:** an LR-only colour shift trains the model to replace colours with typical ones, which is invention. It stays available for experiments.
+- **Initial ranges:**
+  - They take the literature as a starting point. Training configs checked on 2026-11-24:
+    - Real-ESRGAN `options/train_realesrgan_x4plus.yml`:
+      - `blur_sigma: [0.2, 3]` in HR px at ×4 (about 0.05–0.75 LR px), `blur_sigma2: [0.2, 1.5]`;
+      - `noise_range: [1, 30]`, `noise_range2: [1, 25]`;
+      - `gray_noise_prob: 0.4`, `jpeg_range: [30, 95]`.
+    - GFPGAN `options/train_gfpgan_v1.yml`, 512 px faces:
+      - `blur_sigma: [0.1, 10]` before `downsample_range: [0.8, 8]`, so the blur reaches several LR px;
+      - `noise_range: [0, 20]`, `jpeg_range: [60, 100]`;
+      - `gray_prob: 0.01`, `color_jitter_prob: 0.3`.
+  - Our JPEG range and grey-noise probability follow Real-ESRGAN. The Gaussian noise range (1–15 levels) is half of Real-ESRGAN's, as a lighter start for faces of 16–32 px.
+  - In a visual check on 8 val crops, an upper σ of 1.2 LR px made most samples very blurry, so it was lowered to 1.0.
+  - They are tuned in PR 2.4 against the real-world test set, so they are a default, not a finding.
+- **Parameters per sample:** so validation and test results can be broken down by degradation (PR 2.2).

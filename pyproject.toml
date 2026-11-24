@@ -3,11 +3,32 @@ name = "facehall"
 version = "0.0.0"
 description = "Face hallucination: identity-preserving face super-resolution."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
+# Lower bounds are the versions the project is tested with (see uv.lock).
 dependencies = [
-    "numpy>=1.26",
-    "pillow>=10.0",
+    "numpy>=2.5",
+    "omegaconf>=2.4",
+    "opencv-python-headless>=5.1",
+    "pillow>=13.0",
+    "pyarrow>=26.0",
+    "safetensors>=0.8",
+    "torch>=2.15",
+    "torchmetrics[image]>=1.9",
+    "torchvision>=0.29",
+]
+
+[project.optional-dependencies]
+# PyTorch build selection (mutually exclusive, see [tool.uv] conflicts):
+#   cpu  - CPU-only build from the PyTorch index (CI, CPU Docker image);
+#   cuda - PyPI build (CUDA 13.2 on Linux). Without an extra, torch also comes from PyPI.
+cpu = [
+    "torch>=2.15",
+    "torchvision>=0.29",
+]
+cuda = [
+    "torch>=2.15",
+    "torchvision>=0.29",
 ]
 
 [project.scripts]
@@ -28,9 +49,21 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/facehall"]
 
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", extra = "cpu" }]
+torchvision = [{ index = "pytorch-cpu", extra = "cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "scripts"]
 extend-exclude = ["legacy"]
 
 [tool.ruff.lint]
@@ -38,7 +71,12 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
+
+# Packages without type information (no py.typed marker).
+[[tool.mypy.overrides]]
+module = ["torchvision", "torchvision.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

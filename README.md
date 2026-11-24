@@ -49,11 +49,13 @@ a person or as evidence; at most they are a hint, to be shown next to the origin
 ## 🚧 Project status
 
 The repository is being turned into a product-ready package `facehall`. The current state and
-the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`. Phase 0 (repository hygiene) is in progress. The original notebook and
+the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`. Phase 0 (repository
+hygiene) is done; Phase 1 (reproducible baseline) is in progress. The original notebook and
 weights live in `legacy/` and are read only.
 
 ```bash
-uv sync
+uv sync                  # PyTorch from PyPI (CUDA build on Linux)
+uv sync --extra cpu      # or: CPU-only PyTorch (then use `uv run --extra cpu ...`)
 uv run pytest
 uv run facehall --version
 ```

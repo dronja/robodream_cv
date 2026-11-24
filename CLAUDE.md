@@ -115,7 +115,7 @@ robodream_cv/
 
 ### Стек за замовчуванням
 
-- Python 3.11+, `uv`, PyTorch 2.x, AMP (bf16/fp16)
+- Python 3.12+, `uv`, PyTorch 2.x, AMP (bf16/fp16)
 - Конфіги: YAML + OmegaConf; трекінг експериментів: MLflow (локально, офлайн)
 - Метрики: `torchmetrics[image]` (PSNR, SSIM, LPIPS, FID)
 - Inference: ONNX Runtime (CPU/CUDA); API: FastAPI; демо: Gradio (опційно)

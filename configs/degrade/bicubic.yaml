@@ -1,0 +1,6 @@
+# Degradation v0 (PR 1.4): bicubic downscale of the HR crop, then 8-bit quantization.
+# Implementation: torch.nn.functional.interpolate(mode="bicubic", antialias=True,
+# align_corners=False); it matches PIL's BICUBIC resize within 1 8-bit level (docs/PROJECT.md §9).
+kind: bicubic
+antialias: true
+quantize: true

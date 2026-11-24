@@ -45,10 +45,11 @@ As of 2026-11-24:
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
 - **Phase 1: in progress.**
-  - Merged on 2026-11-24: PR 1.1 (ML dependencies, PR #4, `8a0ccce`) and PR 1.2 (dataset
-    preparation, PR #5, `6cf65af`). The prepared CelebA dataset is at
+  - Merged on 2026-11-24: PR 1.1 (ML dependencies, PR #4, `8a0ccce`), PR 1.2 (dataset
+    preparation, PR #5, `6cf65af`) and PR 1.3 (alignment, PR #6, `0a9fc82`). The prepared CelebA
+    dataset is at
     `/mnt/storage/AI/Face/celeba` (§6.2).
-  - In review: PR 1.3 (alignment, branch `feat/align`).
+  - In review: PR 1.4 (dataset + degradation v0, branch `feat/dataset-degrade`).
   - The technical design is agreed (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
@@ -62,18 +63,22 @@ robodream_cv/
 ├── README.md                  # public description (English)
 ├── LICENSE
 ├── pyproject.toml, uv.lock    # uv project, hatchling build; ruff, mypy, pytest config
+├── configs/                   # data/celeba_128.yaml, degrade/bicubic.yaml
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (only --version), py.typed
 │   ├── provenance.py          # file sha256, git commit, package versions
-│   ├── data/                  # manifest.py (schema, validation, content sha256), celeba.py
+│   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
+│   │                          # dataset.py (AlignedFaces)
+│   ├── config.py              # load_config: dataclass schema + YAML via OmegaConf
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # license_report.py (license table from package metadata)
 ├── tests/                     # conftest (load_script); import, CLI, legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
-│                              # alignment (similarity, template, warp)
+│                              # alignment (similarity, template, warp), config, degrade,
+│                              # dataset (synthetic prepared dataset)
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -217,6 +222,10 @@ template.
   in the `attr_blurry` column. Whether to filter them is decided in PR 1.4 (Q4).
 - There is no skin-tone annotation: `Pale_Skin` is a binary attribute, not a skin-tone scale.
   The plan is in D10.
+- Some CelebA aligned images already contain stretched, streaky borders from the dataset's own
+  alignment. Seen on 2026-11-24 in a train crop whose `padded` fraction was 0: the streaks come
+  from the source image, not from our crop. How often this happens is not measured yet; `padded`
+  (D16) covers only our crop reaching outside 178×218.
 - Celebrity photos are not representative of real-world low-quality inputs; the Phase 2
   real-world test set addresses this.
 - CelebA terms: non-commercial research only, no redistribution. They were verified on the
@@ -244,6 +253,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D12 | Documentation layout: this file is the single source of truth for facts, status and the plan |
 | D13 | Local use only: no production deployment, public service or published Docker image |
 | D14 | Manifests stay next to the data, outside git; the repo holds the generator code, counts and checksums (`docs/DATA.md`) |
+| D15 | `Blurry = 1` images are dropped from train only; evaluation also reports the non-blurry subset |
+| D16 | Crops reaching outside the image use reflect padding and are kept; each sample carries its `padded` fraction; evaluation also reports the unpadded subset |
 
 ## 8. Licenses — status
 
@@ -290,22 +301,43 @@ The agreed approach. Details are fixed in the corresponding PRs.
   - `Jitter`: a random similarity about the crop centre, with shift, rotation and log-uniform
     scale. Its limits are set in the PR 1.4 config. Every sample draws four numbers, so the random
     stream does not depend on the settings.
-- **Dataset + degradation v0 (PR 1.4).**
-  - Input: the manifest (`read_manifest`), with the dataset root taken from a config value
-    (`data.root`), not from a hard-coded path. PNG (train) and JPEG (val/test) are both decoded.
-  - Filtering `Blurry` images is a config option (Q4). Samples whose crop would make HR an
-    upscale are dropped, per the `CLAUDE.md` §7 rule; this removes exactly one test image, which
-    has broken landmarks. The padding policy is open (Q5).
-  - Train crops are warped on the fly from the 178×218 source, with jitter. Validation and test
-    crops are deterministic and cached.
-  - LR is a bicubic downscale with antialias; the exact function is fixed in
-    `configs/degrade/bicubic.yaml` and recorded. Validation and test use a fixed seed.
+- **Dataset + degradation v0 (PR 1.4, done).** `facehall.data.dataset.AlignedFaces(data, degrade,
+  split, scale, seed=…)`, configured by `configs/data/celeba_128.yaml` and
+  `configs/degrade/bicubic.yaml` (`facehall.config.load_config`).
+  - Data root: `${FACEHALL_DATA:-/mnt/storage/AI/Face}/celeba`.
+  - Dropped samples:
+    - HR crops that would be upscales (`CLAUDE.md` §7): one test image;
+    - `Blurry = 1` images in train (D15).
+  - Resulting sizes: train 154,408, val 19,867, test 19,961 (`docs/DATA.md` §3).
+  - Each sample:
+    - the source is warped once with the alignment matrix, composed in train with jitter and a
+      horizontal flip;
+    - padding is reflect (D16);
+    - LR is the degradation of the HR crop;
+    - output: `hr` (3×128×128) and `lr` (3×32×32 or 3×16×16), both float32 in [0, 1] on 8-bit
+      levels, plus `index`, `padded` and `blurry`.
+  - Degradation v0: torch bicubic with antialias, then 8-bit quantization. It matches PIL
+    `BICUBIC` within 1 level; without antialias the difference reaches 142 levels. Each run
+    records the exact function (`describe()`).
+  - Randomness: a per-sample generator seeded with `(seed, epoch, index)` in train (call
+    `set_epoch`) and `(seed, index)` in val/test, so samples do not depend on workers or order.
+  - Validation and test crops are computed on the fly, deterministically, not cached (see
+    `DECISIONS.md`).
+  - Throughput: 909 samples/s single-process. With 8 / 16 DataLoader workers it is 4,200 / 9,900
+    samples/s, and 7,700 / 13,100 samples/s when `cv2.setNumThreads(1)` is called in the main
+    process first. That is 0.2–0.6 min per train epoch, so data loading is not the bottleneck.
 - **Models (PR 1.5).** The `bicubic` baseline, plus FNet and CNet ported 1:1 from `FH.ipynb`: the
   same layers as in the notebook, including BN and the sigmoid output, parameterised by `scale`.
 - **Trainer + CLI (PR 1.6).** Experiment tracking (MLflow or a lighter option, decided here),
   AMP (bf16), gradient accumulation and seeding. Checkpoints `last` and
   `best` are saved in safetensors with JSON metadata. `facehall train --config … [--smoke]`.
   Configs `configs/train/{fnet,cnet}_x{4,8}.yaml` come with an 8 GB default and a large profile.
+  DataLoader notes, verified 2026-11-24:
+  - call `cv2.setNumThreads(1)` in the main process before the workers start;
+  - **never call it inside a forked worker**: once the parent has used OpenCV's thread pool,
+    that call deadlocks;
+  - call `dataset.set_epoch(epoch)` every epoch, without persistent workers (or recreate them),
+    so that the workers see the new epoch.
 - **Evaluation (PR 1.7).** PSNR and SSIM on the Y channel, LPIPS, and ID similarity (cosine of
   ArcFace embeddings, SR vs HR). `facehall eval`. `docs/RESULTS.md` is generated by a script. NME
   moves to Phase 3 because it needs a landmark model.
@@ -339,7 +371,7 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       `DATA.md`. Tests use a synthetic parquet fixture
 - [x] **PR 1.3** `feat(align):` template, similarity transform, warp and inverse warp, jitter.
       Tests: warp and inverse-warp round trip on synthetic points
-- [ ] **PR 1.4** `feat(data):` dataset + degradation v0 (bicubic). Tests: determinism, shapes,
+- [x] **PR 1.4** `feat(data):` dataset + degradation v0 (bicubic). Tests: determinism, shapes,
       value ranges
 - [ ] **PR 1.5** `feat(models):` bicubic, FNet, CNet. Tests: output shapes, parameter counts
       against legacy
@@ -416,14 +448,13 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Open questions
 
-Ask the user before the PR that needs the answer. Q1 (manifest in git) was closed by D14.
+Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q4
+(`Blurry` images) by D15, Q5 (padding) by D16.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
 | Q2 | Comparison grids with CelebA faces in the public `docs/RESULTS.md` | PR 1.7 | Write the grids to `outputs/` (gitignored); public docs show numbers, or images with a permissive license |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
-| Q4 | Exclude CelebA images with `Blurry = 1` (train 8,362, val 940, test 1,010; about 5% of each split) from train and/or evaluation? | PR 1.4 | Exclude them from train by default (a blurry target teaches blur). Keep val and test complete, so the frozen test stays the official one, and also report metrics on the non-blurry subset |
-| Q5 | Crops that reach outside the image (2.4–2.8% per split, §6.3): how to fill and score them? | PR 1.4 | Train: reflect padding, as in FFHQ. Val/test: keep all crops, store the padded fraction with the cached crops, and also report metrics on the unpadded subset (same approach as Q4) |
 
 ### Risks
 

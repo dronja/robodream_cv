@@ -111,3 +111,25 @@ Log of project decisions: date, decision, reason. Open questions are marked **OP
 - Umeyama on 5 points uses the nose and every mouth corner rather than only eye and mouth midpoints, and needs no special cases.
 - Normalized coordinates give the same face region at 32, 128 and 512 px.
 - Reflect padding follows FFHQ; the padding policy for training and evaluation is open (Q5).
+
+### D15 — `Blurry` images (closes Q4)
+**Decision:** images with `Blurry = 1` are dropped from train (`exclude_blurry: [train]` in `configs/data/celeba_128.yaml`). Validation and test keep them; evaluation also reports metrics on the non-blurry subset (every sample carries a `blurry` flag).
+**Reason:** a blurry HR target teaches the model to produce blur; keeping val and test complete keeps the frozen test close to the official one. The user accepted the proposal on 2026-11-24.
+
+### D16 — Crops that reach outside the image (closes Q5)
+**Decision:** crops are filled with reflect padding in every split. No crop is dropped for padding; every sample carries the fraction of padded HR pixels (`padded`), and evaluation also reports metrics on the unpadded subset.
+**Reason:** reflect padding follows FFHQ and affects 2.4–2.8% of crops (`docs/PROJECT.md` §6.3); keeping the crops keeps the test set complete. The user accepted the proposal on 2026-11-24.
+
+### Test set: one image removed by the upscale rule
+**Decision:** the dataset drops every sample whose HR crop would be an upscale of the source (`CLAUDE.md` §7). In the current data this removes exactly one image, `img_align/test/001557.jpg`, whose landmarks are broken (`docs/DATA.md` §4.5). The frozen test set is therefore the official test split minus this image: 19,961 images.
+**Reason:** the rule is a project requirement, and the crop of this image is a ×3.3 zoom into the eye region, not a face. The user did not object when asked on 2026-11-24.
+
+### Dataset v0 settings (PR 1.4)
+**Decision:**
+- Degradation v0 is `torch.nn.functional.interpolate(mode="bicubic", antialias=True, align_corners=False)`, clamped to [0, 1] and quantized to 8-bit levels. It matches PIL's `BICUBIC` resize within 1 8-bit level.
+- Train augmentation: horizontal flip with p = 0.5; jitter of up to 3% shift, 5° rotation and a ×1.05 scale. These are initial values, to be tuned.
+- Validation and test crops are computed on the fly, deterministically, instead of being cached as planned.
+**Reason:**
+- Bicubic with antialias is the standard "BI" degradation of the SR literature, and the torch function keeps it on the tensor path. Without antialias the result differs from PIL by up to 142 levels (aliasing).
+- The flip is valid because the template is symmetric. The jitter models imprecise landmarks on small faces (`CLAUDE.md` §6).
+- Decoding and warping take about 0.7 ms per image, and a DataLoader with 8 workers delivers about 7,700 samples/s. Caching would add invalidation logic for no measurable gain; it can be added if profiling in PR 1.6 shows a need.

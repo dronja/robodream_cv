@@ -70,10 +70,19 @@ The official CelebA partition (D8):
 | test | 19,962 | 1,000 | 1,010 (5.06%) | JPEG |
 | **total** | **202,599** | **10,177** | **10,312** (5.09%) | |
 
+Samples used by `facehall.data.dataset.AlignedFaces` with `configs/data/celeba_128.yaml`:
+
+| Split | Samples | Dropped |
+|---|---|---|
+| train | 154,408 | 8,362 with `Blurry = 1` (D15) |
+| val | 19,867 | none |
+| test | 19,961 | 1, `img_align/test/001557.jpg`: broken landmarks, its crop would be an upscale (§4.5) |
+
 - **Identity-disjoint:** no identity appears in two splits. `scripts/prepare_dataset.py` checks
   this on every run, and the manifest validation checks it again on every read.
 - **Usage:** train is for training; validation is for model selection and tuning. The test
-  split is frozen: it is used only for the final comparison of models and never for tuning.
+  split is frozen: it is used only for the final comparison of models and never for tuning. The
+  frozen test set is the official test split minus the one image above.
 
 ## 4. Verified properties of the mirror
 

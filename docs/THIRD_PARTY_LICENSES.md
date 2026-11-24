@@ -30,9 +30,9 @@ faces need a separate decision (`docs/PROJECT.md` §11, Q2 and Q3).
 
 | Weights | Shipped by | Status |
 |---|---|---|
-| LPIPS linear layers (`alex.pth`, `vgg.pth`, `squeeze.pth`) | Bundled in torchmetrics 1.9.0 (`torchmetrics/functional/image/lpips_models/`) | Not used yet. Origin and license *need verification* before use (PR 1.7) |
-| LPIPS backbones (ImageNet AlexNet/VGG) | Downloaded by torchvision at runtime | Not used yet; *needs verification* (PR 1.7) |
-| ArcFace (ID-similarity metric) | InsightFace | Model not chosen yet. Pretrained InsightFace models are non-commercial research only (`CLAUDE.md` §8); the exact model and terms are recorded in PR 1.7 |
+| LPIPS linear layers (`alex.pth`; `vgg.pth` and `squeeze.pth` are not used) | Bundled in torchmetrics 1.9.0 (`torchmetrics/functional/image/lpips_models/`). Used by the LPIPS metric (PR 1.7) | torchmetrics' LPIPS code cites the LPIPS project, [richzhang/PerceptualSimilarity](https://github.com/richzhang/PerceptualSimilarity). Its [LICENSE](https://github.com/richzhang/PerceptualSimilarity/blob/master/LICENSE) is BSD-style with two conditions (BSD 2-Clause; the SPDX name is not stated): "Copyright (c) 2018, Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, Oliver Wang". That the bundled files are exactly the LPIPS release weights *needs verification*. Checked 2026-11-24 |
+| LPIPS backbone: torchvision `AlexNet_Weights.DEFAULT` (`alexnet-owt-7be5be79.pth`, 233 MB, ImageNet) | Downloaded by torchvision into the torch hub cache (`~/.cache/torch/hub/checkpoints/`) on first use (D11) | [torchvision docs](https://docs.pytorch.org/vision/stable/models.html): "The pre-trained models provided in this library may have their own licenses or terms and conditions derived from the dataset used for training. It is your responsibility to determine whether you have permission to use the models for your use case." The ImageNet terms *need verification*. Used for non-commercial research only (D2). Checked 2026-11-24 |
+| InsightFace `buffalo_l` recognition model `w600k_r50.onnx` (ArcFace, ResNet50 trained on WebFace600K) | ID-similarity metric (PR 1.7, D18). Downloaded by `scripts/download_weights.py` from `github.com/deepinsight/insightface/releases/download/model-zoo/buffalo_l.zip`: 288,621,354 bytes, sha256 `80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f`. Only `w600k_r50.onnx` is kept (sha256 `4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43`), in `$FACEHALL_WEIGHTS/buffalo_l/` | **Non-commercial research only.** [README](https://github.com/deepinsight/insightface): "The training data containing the annotation (and the models trained with these data) are available for non-commercial research purposes only." [python-package README](https://github.com/deepinsight/insightface/tree/master/python-package): "The pretrained models provided with this library are for non-commercial research only, whether downloaded automatically or manually." **Open point:** the README's "2025-11-24 Update" adds "For open-sourced face recognition models (e.g., buffalo_l package), please contact recognition-oss-pack@insightface.ai for licensing." It does not say whether research use needs that separate license. The user chose to use the model for non-commercial research (D2) and record this point (D18). The InsightFace code (MIT) is not used. Checked 2026-11-24 |
 | Legacy weights (`legacy/*.keras`, `legacy/*.pth`) | This project (legacy notebook) | Trained on the legacy dataset, which includes CelebA, so treated as non-commercial research only (§1) |
 
 ## 4. Python runtime dependencies
@@ -45,6 +45,7 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 |---|---|---|---|
 | numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | |
 | omegaconf | 2.4.0 | BSD License | From classifiers |
+| onnxruntime | 1.32.0 | MIT License | Runs the recognition model (PR 1.7). Adds flatbuffers and protobuf. CPU build; [PyPI](https://pypi.org/project/onnxruntime/) also states MIT |
 | opencv-python-headless | 5.1.0.95 | Apache 2.0 | The wheel bundles OpenCV (Apache-2.0), packaging code (MIT), libvpx (BSD-style) and **FFmpeg (LGPL-2.1)**; see `LICENSE-3RD-PARTY.txt` in the wheel. The LGPL obligations apply to distribution; none is planned (D13, local use only) |
 | pillow | 13.0.0 | MIT-CMU | |
 | pyarrow | 26.0.1 | Apache-2.0 | |
@@ -74,6 +75,7 @@ marked with †.
 | cuda-pathfinder | 1.9.1 | Apache-2.0 |
 | cuda-toolkit | 13.2.2 | Not stated † (meta-package for the NVIDIA packages below) |
 | filelock | 4.2.4 | MIT |
+| flatbuffers | 25.12.19 | Apache 2.0 |
 | fsspec | 2026.9.0 | BSD-3-Clause |
 | jinja2 | 3.1.6 | BSD License |
 | lightning-utilities | 0.15.3 | Apache-2.0 |
@@ -97,9 +99,11 @@ marked with †.
 | nvidia-nvshmem-cu13 | 3.7.2 | LicenseRef-NVIDIA-Proprietary |
 | nvidia-nvtx | 13.2.86 | LicenseRef-NVIDIA-Proprietary |
 | omegaconf | 2.4.0 | BSD License |
+| onnxruntime | 1.32.0 | MIT License |
 | opencv-python-headless | 5.1.0.95 | Apache 2.0 |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause |
 | pillow | 13.0.0 | MIT-CMU |
+| protobuf | 7.36.2 | 3-Clause BSD License |
 | pyarrow | 26.0.1 | Apache-2.0 |
 | pyyaml | 6.0.3 | MIT |
 | safetensors | 0.8.0 | Apache Software License |

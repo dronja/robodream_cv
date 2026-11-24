@@ -53,13 +53,14 @@ As of 2026-11-24:
   - Baseline results: [`RESULTS.md`](RESULTS.md). FNet is the best of the three baselines on
     every metric at both scales.
 - **Phase 2 (realistic degradations): in progress.**
-  - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`) and PR 2.2 (frozen synthetic test
-    levels, PR #12, `4701155`).
-  - In review: PR 2.4 (FNet trained on realistic degradations, synthetic comparison; branch
-    `feat/train-realistic`). It was done before PR 2.3 at the user's choice.
-  - Open: the source of the real-world test set (PR 2.3). The real-world comparison and the
-    tuning of the realistic ranges wait for it. The quality-gate thresholds for Phase 3 are still
-    to be set (`CLAUDE.md` §10).
+  - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`), PR 2.2 (frozen synthetic test
+    levels, PR #12, `4701155`) and PR 2.4 (FNet trained on realistic degradations, PR #13,
+    `e090b74`; done before PR 2.3 at the user's choice).
+  - In review: PR 2.3 (real-world test set from WIDER FACE, D20; branch
+    `feat/realworld-wider`).
+  - Open: the InceptionV3 weights for FID/KID (D11 does not cover them). The no-reference
+    evaluation (PR 2.5), the real-world comparison and the tuning of the realistic ranges wait
+    for it. The quality-gate thresholds for Phase 3 are still to be set (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -83,7 +84,8 @@ robodream_cv/
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train, eval)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
-│   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py
+│   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
+│   │                          # wider.py (real-world set)
 │   ├── config.py              # load_config: dataclass schema + YAML (include, overrides)
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py
@@ -91,6 +93,7 @@ robodream_cv/
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
+│                              # prepare_wider.py (WIDER FACE → real-world LR crops),
 │                              # license_report.py (license table from package metadata),
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
 │                              # preview_degradations.py, protocol_digest.py
@@ -98,7 +101,7 @@ robodream_cv/
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
-│                              # dataset, models, train, eval
+│                              # dataset, models, train, eval, WIDER preparation
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -133,7 +136,7 @@ robodream_cv/
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
-| Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2). The repo `data/` directory is gitignored |
+| Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
 | Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18). The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |
 
@@ -166,7 +169,8 @@ robodream_cv/
 | CelebA aligned, HF mirror `eurecom-ds/celeba` | Training and evaluation, Phases 1–3 (D8) | Downloaded, verified and prepared (PR 1.2, §6.2) |
 | Legacy 89×109 dataset | — | Excluded (D9) |
 | FFHQ | Candidate HR source for 512 px (later) | Not downloaded; non-commercial |
-| Real-world low-quality test set | Phase 2 | Source not chosen yet: needs known origin and license or consent |
+| WIDER FACE training images + RetinaFace landmarks | Real-world test set without HR, Phase 2 (D20) | Downloaded, verified and prepared (PR 2.3, §6.5) |
+| LFW, WIDER-Test, WebPhoto-Test, CelebChild-Test, TinyFace, QMUL-SurvFace | — | Not used (D20) |
 
 ### 6.2 CelebA — summary
 
@@ -236,6 +240,8 @@ template.
 
 ### 6.4 Known data limitations
 
+The limitations of the real-world set are listed in §6.5.
+
 - All HR targets carry JPEG compression artifacts. Validation and test images are small JPEG files
   (≈6.8 KB each), and the train PNGs hold decoded JPEG pixels (`docs/DATA.md` §4.2). This is
   acceptable for 128 px but not for 512 px.
@@ -253,6 +259,37 @@ template.
   official page and are quoted in `docs/THIRD_PARTY_LICENSES.md` §2. The mirror states no license
   of its own. Consequence: no CelebA images, annotations or manifests go into the public
   repository (D14, Q2).
+
+### 6.5 Real-world set — summary
+
+Details, counts, checksums and the evidence: `docs/DATA.md` §7. Decision and reasons: D20.
+
+- **What:** faces from the WIDER FACE training photos whose native size already matches the
+  model input. The alignment to the 32 px (×4) or 16 px (×8) template scales the source by
+  0.8–1.25, so the inputs are not synthetic resizes. There is no HR reference.
+- **Alignment:** the five RetinaFace landmarks, annotated manually and released only for the
+  training images. Nothing here trains on WIDER FACE.
+- **Prepared:** `/mnt/storage/AI/Face/wider_face/realworld/`, built by
+  `scripts/prepare_wider.py` in about 10 s. It holds `x{4,8}/{val,test}/NNNNNN.png`,
+  `manifest.parquet` and `prepare_info.json`.
+- **Split:** by source image, 50/50; `val` for tuning, `test` frozen.
+
+  | Scale | val | test |
+  |---|---:|---:|
+  | ×4 | 8,160 faces, 1,337 photos | 8,645 faces, 1,291 photos |
+  | ×8 | 2,752 faces, 426 photos | 2,172 faces, 438 photos |
+
+- **Stored per face:** the official attributes blur, expression, illumination, occlusion and pose,
+  the alignment scale, angle and residual, and the padded fraction.
+- **Limitations:**
+  - no identities, so no ID similarity;
+  - only 4–6% of the ×4 faces and under 1% of the ×8 faces are annotated as not blurred;
+  - landmarks on faces with 3–5 px between the eyes are necessarily coarse, so some ×8 crops are
+    misaligned;
+  - by visual check on 48 samples per scale (not measured), the set covers a wider range of
+    ages and skin tones than CelebA.
+- **Terms:** WIDER FACE is CC BY-NC-ND 4.0, the landmarks are non-commercial research only.
+  Crops, the manifest and grids stay local.
 
 ## 7. Decisions — quick reference
 
@@ -280,6 +317,7 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D17 | Experiment tracking: a plain run directory per run (config, provenance, metrics JSONL, checkpoints); no MLflow for now |
 | D18 | ID similarity: InsightFace `buffalo_l` recognition model (ArcFace R50, WebFace600K) via ONNX Runtime, non-commercial research; licensing note recorded |
 | D19 | Comparison grids with CelebA faces stay in `outputs/`; `RESULTS.md` holds numbers only |
+| D20 | Real-world test set: native low-resolution faces from WIDER FACE (training photos) with RetinaFace landmarks; split by photo into val (tuning) and test (frozen); stays local |
 | — | Evaluation protocol: Y-channel PSNR/SSIM, LPIPS (AlexNet), ArcFace cosine; SR quantized to 8 bit; subsets (`DECISIONS.md`, 2026-11-24) |
 
 ## 8. Licenses — status
@@ -296,6 +334,8 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | onnxruntime | MIT (PR 1.7) |
 | NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Local use only, nothing is distributed (D13). Review the redistribution terms if that changes |
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
+| WIDER FACE and the RetinaFace annotations (D20) | Done in PR 2.3: CC BY-NC-ND 4.0 and non-commercial research only (`docs/THIRD_PARTY_LICENSES.md` §2) |
+| InceptionV3 weights for FID/KID (torch-fidelity) | Open: the torch-fidelity source says Apache 2.0 for the converted TensorFlow weights; the download needs the user's confirmation (`DECISIONS.md`, "No-reference metrics") |
 
 ## 9. Technical design
 
@@ -566,7 +606,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
         (skin and wrinkle-like patterns). This was seen on 8 samples and not measured. It
         explains how perceptual sharpness can rise while identity falls.
       - Re-training on realistic degradations (PR 2.4) is measured against these numbers.
-- **FNet trained on realistic degradations (PR 2.4, in review).** Details and reasons in
+- **FNet trained on realistic degradations (PR 2.4, done).** Details and reasons in
   `DECISIONS.md` (2026-11-24, "Realistic training, synthetic comparison").
   - **Configs:** `configs/train/fnet_x{4,8}_realistic.yaml`. They repeat the FNet legacy recipe of
     Phase 1 (10 epochs, early stopping 3, batch 16, MSE, Adam 1e-3) and change only the
@@ -614,6 +654,22 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - identity needs the Phase 3 losses (identity, perceptual, adversarial), not only
         realistic degradations;
       - the invented details are exactly what `CLAUDE.md` §11 warns about.
+- **Real-world test set (PR 2.3, in review).** Data facts in §6.5 and `docs/DATA.md` §7; decision
+  and reasons in D20.
+  - **Source choice:** six public sets were checked on 2026-11-24 (`DECISIONS.md`, D20). The
+    user chose WIDER FACE, without LFW and WIDER-Test.
+  - **Code:** `facehall.data.wider` reads the three raw archives without extracting them:
+    - parses the official and the RetinaFace annotations and matches them by box;
+    - selects the native-size faces per scale;
+    - warps each face once with `facehall.align`;
+    - writes the PNG crops, the manifest and `prepare_info.json`.
+  - **Manifests:** `identity_id` = -1 (`UNKNOWN_IDENTITY`) now marks sources without
+    identities; such rows are left out of the identity-overlap check.
+  - **Checks:** the archives are pinned by sha256; two runs give the same manifest content
+    checksum.
+  - **No-reference metrics:** NIQE needs 96 px blocks and cannot be computed on 128 px
+    outputs; `pyiqa` is non-commercial and heavy. FID/KID through torchmetrics need the
+    InceptionV3 weights (Q6), so the evaluation itself is PR 2.5.
 
 ## 10. Roadmap and progress
 
@@ -668,8 +724,12 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [ ] *(optional)* H.264/H.265 compression
 - [x] **PR 2.2** `feat(eval):` frozen synthetic test with 3 levels (light, medium, heavy); the
       drawn parameters stored per image; input digests; Phase 1 models evaluated on every level
-- [ ] **PR 2.3** Real-world test set (the source is chosen with the user) and no-reference
-      metrics (NIQE, FID); library licenses verified
+- [x] **PR 2.3** Real-world test set: WIDER FACE native low-resolution faces with RetinaFace
+      landmarks (D20), `scripts/prepare_wider.py`, `DATA.md` §7. Tests on synthetic archives
+- [ ] **PR 2.5** No-reference evaluation on the real-world set: FID/KID against real HR faces
+      (needs the Inception weights confirmed); breakdown by the WIDER attributes; local grids;
+      bicubic and both FNet variants evaluated. NIQE is not possible on 128 px outputs
+      (`DECISIONS.md`)
 - [x] **PR 2.4** Re-train FNet ×4 and ×8 with realistic degradations (approved by the user on
       2026-11-24); compare clean vs realistic training on the synthetic levels
 - [ ] Compare clean vs realistic training on the real-world set and tune the realistic ranges
@@ -732,6 +792,7 @@ with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
+| Q6 | Download the InceptionV3 weights for FID/KID (torch-fidelity release, about 100 MB; Apache 2.0 per the torch-fidelity source) | PR 2.5 | Download them, record them with a pinned sha256 like `buffalo_l` |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -784,6 +845,8 @@ uv export --no-dev --no-hashes --no-emit-project --extra cuda --format requireme
     | uv run python scripts/license_report.py   # license table for THIRD_PARTY_LICENSES.md
 uv run python scripts/prepare_dataset.py --src /mnt/storage/AI/Face/celeba_eurecom/data \
     --out /mnt/storage/AI/Face/celeba          # CelebA files + manifest (docs/DATA.md §6)
+uv run python scripts/prepare_wider.py --raw /mnt/storage/AI/Face/wider_face/raw \
+    --out /mnt/storage/AI/Face/wider_face/realworld   # real-world LR crops (docs/DATA.md §7)
 uv run facehall train --config configs/train/fnet_x4.yaml --smoke   # pipeline check, seconds
 uv run facehall train --config configs/train/fnet_x4_realistic.yaml # realistic degradations, ~11 min
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)

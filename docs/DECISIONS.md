@@ -309,3 +309,34 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
   - it barely changes ID similarity, which at ×4 stays below plain bicubic upsampling;
   - it loses a lot on clean inputs.
   - The next steps are therefore range tuning (after PR 2.3) and identity-aware losses (Phase 3).
+
+### D20 — Real-world test set: native low-resolution faces from WIDER FACE
+**Decision:**
+- **Source:** the WIDER FACE training images, aligned with the manually annotated RetinaFace landmarks. Both are non-commercial research only (`docs/THIRD_PARTY_LICENSES.md` §2).
+- **Selection:** faces whose native size already matches the model input. The alignment to the 32 px (×4) or 16 px (×8) template must scale the source by 0.8–1.25, so the LR input is not synthetically resized. Faces marked `invalid` are dropped.
+- **Storage:** the LR crops are prepared once and stored as PNG with a manifest (`scripts/prepare_wider.py`, `docs/DATA.md` §7).
+- **Split:** by source image, 50/50 from a hash of the image name. `val` is for tuning (for example the degradation ranges), `test` is frozen.
+- **Stays local:** crops, the manifest and grids showing these faces, as for CelebA (D19).
+- **Not used:**
+  - LFW and WIDER-Test, by the user's choice;
+  - WebPhoto-Test and CelebChild-Test: photos crawled from the Internet, origin and terms unknown;
+  - TinyFace: no terms stated; part of it comes from MegaFace, which is no longer distributed;
+  - QMUL-SurvFace: surveillance footage, which conflicts with `CLAUDE.md` §11.
+
+**Defaults taken without a separate question:** the native range 0.8–1.25, the 50/50 split and keeping occluded and blurred faces. Their attributes are stored, so results can be broken down by them.
+
+**Reason:**
+- **Native resolution:** the faces have the same pixel count as our input and carry real camera blur, noise and compression. They are not a synthetic downscale.
+- **Clear terms:** CC BY-NC-ND fits non-commercial research (D2) and local use (D13).
+- **Training images:** RetinaFace released landmarks only for the training images. Nothing in this project trains on WIDER FACE.
+- **Split by image:** WIDER FACE has no identities. Splitting by image keeps the faces of one photo together. The same people may still appear in several photos of one event. That matters little, because the `val` part is used only to tune a few degradation parameters.
+- **Size:** ×4: val 8,160 and test 8,645 faces. ×8: val 2,752 and test 2,172 faces (`docs/DATA.md` §7.3).
+- The user chose WIDER FACE, without LFW and WIDER-Test, on 2026-11-24.
+
+### No-reference metrics for the real-world set (PR 2.3)
+**Facts checked on 2026-11-24:**
+- **NIQE** cannot be computed on our crops. The reference implementation (BasicSR `niqe.py`) splits the image into 96×96 blocks and needs the covariance over blocks; a 128 px output has one block.
+- **pyiqa** (NIQE and other no-reference metrics) is licensed PolyForm-Noncommercial-1.0.0 and has 27 direct requirements (transformers, accelerate, bitsandbytes, facexlib, …). It is not added.
+- **FID and KID** are available through torchmetrics and torch-fidelity 0.4.0 (Apache-2.0), already in the lock file. They need the InceptionV3 weights `weights-inception-2015-12-05-6726825d.pth` from the torch-fidelity GitHub releases. The torch-fidelity source says the weights were "converted from the official TensorFlow weights", "distributed under Apache License 2.0". FID needs at least 2,048 images for a full-rank covariance (TTUR README); the ×8 test split has 2,172.
+
+**OPEN:** downloading the Inception weights (D11 covers ArcFace and LPIPS only). The no-reference evaluation follows in a separate PR once this is answered.

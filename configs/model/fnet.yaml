@@ -1,0 +1,4 @@
+# Legacy FNet ("simplified SRResNet"), 1:1 port of legacy/FH.ipynb (facehall.models.fnet).
+name: fnet
+channels: 64
+residual_blocks: 5

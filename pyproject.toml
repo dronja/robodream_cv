@@ -75,7 +75,7 @@ files = ["src", "tests", "scripts"]
 
 # Packages without type information (no py.typed marker).
 [[tool.mypy.overrides]]
-module = ["torchvision", "torchvision.*"]
+module = ["pyarrow", "pyarrow.*", "torchvision", "torchvision.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

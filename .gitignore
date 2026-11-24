@@ -1,5 +1,6 @@
 # Data and experiment outputs
-data/
+# Repo-root data/ only: src/facehall/data/ is package code
+/data/
 runs/
 mlruns/
 outputs/

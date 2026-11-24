@@ -47,9 +47,12 @@ def synthetic_image(seed: int) -> Image.Image:
 
 
 def write_synthetic_dataset(root: Path, rows: Sequence[Row]) -> Path:
-    """Images (train PNG, val/test JPEG) and a manifest with landmarks and attr_blurry."""
+    """Images (train PNG, val/test JPEG) and a manifest with landmarks and three attributes:
+    ``attr_blurry`` from the row, ``attr_male`` = even row, ``attr_young`` = row not divisible
+    by 3."""
     columns: dict[str, list[object]] = {f.name: [] for f in REQUIRED_FIELDS}
-    columns["landmarks"], columns["attr_blurry"] = [], []
+    for name in ("landmarks", "attr_blurry", "attr_male", "attr_young"):
+        columns[name] = []
     for i, (split, blurry, offset) in enumerate(rows):
         suffix = ".png" if split == "train" else ".jpg"
         path = f"img_align/{split}/{i:06d}{suffix}"
@@ -71,6 +74,8 @@ def write_synthetic_dataset(root: Path, rows: Sequence[Row]) -> Path:
             "license": "test",
             "landmarks": landmarks,
             "attr_blurry": blurry,
+            "attr_male": i % 2 == 0,
+            "attr_young": i % 3 != 0,
         }
         for name, value in values.items():
             columns[name].append(value)
@@ -79,6 +84,8 @@ def write_synthetic_dataset(root: Path, rows: Sequence[Row]) -> Path:
             *REQUIRED_FIELDS,
             pa.field("landmarks", pa.list_(pa.int32(), 10)),
             pa.field("attr_blurry", pa.bool_()),
+            pa.field("attr_male", pa.bool_()),
+            pa.field("attr_young", pa.bool_()),
         ]
     )
     write_manifest(pa.Table.from_pydict(columns, schema=schema), root)

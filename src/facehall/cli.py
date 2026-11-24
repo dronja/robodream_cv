@@ -34,6 +34,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="override a config value, e.g. --set train.batch_size=32 (repeatable)",
     )
 
+    evaluate = commands.add_parser(
+        "eval",
+        help="score a model on an evaluation protocol",
+        description="Score a checkpoint (--ckpt) or a parameter-free baseline (--model) on an "
+        "evaluation protocol (configs/eval/*.yaml). Writes metrics.json and per_image.parquet "
+        "to <output>/<protocol>/<split>/<model label>/.",
+    )
+    evaluate.add_argument("--config", type=Path, required=True, help="protocol config (YAML)")
+    source = evaluate.add_mutually_exclusive_group(required=True)
+    source.add_argument("--ckpt", type=Path, help="checkpoint (.safetensors) written by train")
+    source.add_argument("--model", help="parameter-free baseline, e.g. bicubic")
+    evaluate.add_argument("--split", help="override the protocol split (e.g. val)")
+    evaluate.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a protocol value (repeatable)",
+    )
+
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -47,4 +68,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         config = load_experiment(args.config, args.overrides)
         print(run_training(config, smoke=args.smoke))
+    elif args.command == "eval":
+        from facehall.eval.cli import run_eval
+
+        overrides = [*args.overrides, *([f"split={args.split}"] if args.split else [])]
+        print(run_eval(args.config, overrides, checkpoint=args.ckpt, baseline=args.model))
     return 0

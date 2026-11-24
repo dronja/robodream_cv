@@ -180,3 +180,48 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
 - Dropping the last batch keeps every optimizer step the same size, including with gradient accumulation.
 - Every config fits 8 GB at batch 16, so a larger batch would change the recipe rather than adapt it to the hardware.
 - `include` keeps the data, degradation and model configs reusable without adding a dependency.
+
+### D18 — ID-similarity model: InsightFace `buffalo_l` recognition model
+**Decision:** the ID-similarity metric uses `w600k_r50.onnx` from the InsightFace `buffalo_l` pack (ArcFace, ResNet50 trained on WebFace600K). It runs through ONNX Runtime (MIT) on CPU and is used for non-commercial research only (D2).
+- Download: `scripts/download_weights.py buffalo_l`, with a pinned size and sha256.
+- Only the recognition model is kept from the pack.
+- Terms and checksums: `docs/THIRD_PARTY_LICENSES.md` §3.
+
+**Open point:** the InsightFace README says these models are for non-commercial research only. Its "2025-11-24 Update" also asks users to contact recognition-oss-pack@insightface.ai "for licensing" of `buffalo_l`, without saying whether research use needs that separate license. The user may ask InsightFace; revisit this decision if they answer.
+
+**Reason:**
+- ArcFace embeddings are the usual identity metric in face SR papers, so our numbers stay comparable with them.
+- The alternatives checked on 2026-11-24 do not state a weight license either:
+  - facenet-pytorch (FaceNet trained on VGGFace2);
+  - AdaFace (weights on Google Drive only).
+- The user chose this option on 2026-11-24.
+
+### D19 — Comparison grids with CelebA faces stay local (closes Q2)
+**Decision:** grids and sample crops are written only to `outputs/` (gitignored). `docs/RESULTS.md` contains numbers only.
+**Reason:** the CelebA terms forbid publishing or distributing any portion of the dataset (`docs/THIRD_PARTY_LICENSES.md` §2), and SR outputs of CelebA faces are derived data. The user accepted the proposal on 2026-11-24.
+
+### Evaluation protocol (PR 1.7)
+**Decision:**
+- **Protocol and checkpoint:** a protocol (`configs/eval/celeba128_x{4,8}.yaml`) fixes the split, data, degradation, seed and metrics. A checkpoint contributes only the model, and its scale and HR size must match. Phase 1 protocols use the frozen test split.
+- **SR output:** SR is rounded to 8-bit levels before scoring, as a saved image would be.
+- **PSNR and SSIM:** on the BT.601 luma Y in [16, 235], with peak 255 and no border crop. SSIM uses torchmetrics (Gaussian window 11, σ 1.5). PSNR is capped at about 148 dB for identical images (MSE floor 1e-10).
+- **LPIPS:** the AlexNet variant (the torchmetrics default) on RGB.
+- **ID similarity:**
+  - the cosine of ArcFace embeddings of SR and HR;
+  - both crops are mapped to the ArcFace 112 px template with one fixed similarity derived from our template (bilinear, black border, as InsightFace `norm_crop`), so no face detector is involved;
+  - preprocessing is RGB and (x − 127.5) / 127.5, as InsightFace selects for this model;
+  - HR embeddings are cached per protocol and split, with a fingerprint of everything they depend on.
+- **Subsets:**
+  - all;
+  - `Blurry` = 0 (D15);
+  - no padding (D16);
+  - the CelebA attributes `Male` and `Young` (= 1 / = 0).
+  - There is no skin-tone subgroup yet (D10).
+- **Outputs and report:** results go to `outputs/eval/<protocol>/<split>/<model>/` (`metrics.json`, `per_image.parquet`). `docs/RESULTS.md` is generated from these files only.
+
+**Reason:**
+- Y-channel PSNR and SSIM without border handling tricks are the SR-literature convention for comparisons.
+- Quantizing SR measures what a user would actually get.
+- The fixed recognition alignment is exact for our aligned crops, and it avoids detector failures on SR outputs.
+- Per-image results allow any later breakdown without re-running.
+- Sanity check on 2026-11-24 (60 val identities, two images each): same-identity HR pairs scored a mean cosine of 0.565, different-identity pairs a mean of 0.015 (max 0.143), and identical crops 1.0. This confirms the alignment and preprocessing.

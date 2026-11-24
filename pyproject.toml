@@ -9,6 +9,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "numpy>=2.5",
     "omegaconf>=2.4",
+    "onnxruntime>=1.32.0",
     "opencv-python-headless>=5.1",
     "pillow>=13.0",
     "pyarrow>=26.0",
@@ -75,7 +76,7 @@ files = ["src", "tests", "scripts"]
 
 # Packages without type information (no py.typed marker).
 [[tool.mypy.overrides]]
-module = ["pyarrow", "pyarrow.*", "torchvision", "torchvision.*"]
+module = ["onnxruntime", "onnxruntime.*", "pyarrow", "pyarrow.*", "torchvision", "torchvision.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

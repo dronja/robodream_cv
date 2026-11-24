@@ -44,10 +44,12 @@ As of 2026-11-24:
 
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
-- **Phase 1: in progress.** PR 1.1 (ML dependencies) merged via PR #4 on 2026-11-24 (merge commit
-  `8a0ccce`). PR 1.2 (dataset preparation, branch `feat/prepare-dataset`) is in review; the
-  prepared CelebA dataset is at `/mnt/storage/AI/Face/celeba` (§6.2). The technical design is
-  agreed (§9).
+- **Phase 1: in progress.**
+  - Merged on 2026-11-24: PR 1.1 (ML dependencies, PR #4, `8a0ccce`) and PR 1.2 (dataset
+    preparation, PR #5, `6cf65af`). The prepared CelebA dataset is at
+    `/mnt/storage/AI/Face/celeba` (§6.2).
+  - In review: PR 1.3 (alignment, branch `feat/align`).
+  - The technical design is agreed (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -65,11 +67,13 @@ robodream_cv/
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (only --version), py.typed
 │   ├── provenance.py          # file sha256, git commit, package versions
-│   └── data/                  # manifest.py (schema, validation, content sha256), celeba.py
+│   ├── data/                  # manifest.py (schema, validation, content sha256), celeba.py
+│   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # license_report.py (license table from package metadata)
 ├── tests/                     # conftest (load_script); import, CLI, legacy layout, dependency
-│                              # smoke, license report, provenance, manifest, CelebA preparation
+│                              # smoke, license report, provenance, manifest, CelebA preparation,
+│                              # alignment (similarity, template, warp)
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -157,26 +161,52 @@ Details, per-split counts, checksums and the evidence behind every statement: `d
   - not usable: `bbox`, which holds in-the-wild coordinates;
   - not stored: the original file names. Rows are traced by `source_file` + `source_row`.
 
-### 6.3 Crop geometry: 128 px HR is a downscale
+### 6.3 Alignment and crop geometry
 
-Landmark statistics, test split, aligned-image coordinates:
-- mean positions: eyes (69.3, 111.2) and (107.7, 111.2), nose (88.0, 135.1), mouth corners
-  (71.2, 152.1) and (105.7, 152.1);
-- interocular distance: median 39 px, p5 33, p95 43.
+The geometry the alignment code (`facehall.align`, PR 1.3) builds on. Measured on 2026-11-24 over
+the prepared manifest.
 
-The FFHQ-style alignment (a square built from the eye-to-eye and eye-to-mouth vectors), applied to
-the mean landmarks, gives a crop of side ≈154 px with x ∈ [11.7, 165.3] and y ∈ [38.5, 192.1].
-The crop lies fully inside 178×218. Resizing it to 128 px is a ×0.83 downscale, so an HR 128×128
-target does not violate the rule "HR must not be an upscale" (D4).
+**Conventions**
+- Landmarks and crops use pixel-centre coordinates (OpenCV). The CelebA landmark convention is
+  not documented: the pixel-centre reading is an assumption, and its effect is at most 0.5 source
+  px.
+- The template uses normalized crop coordinates: (0, 0) is the top-left corner of the crop and
+  (1, 1) its bottom-right corner. One template therefore serves every crop size (32, 128, 512).
 
-| Scale | LR | HR | Interocular distance |
+**Template** (`facehall.align.CELEBA_TEMPLATE`)
+- Derived from the train-split mean landmarks, so the test split is not used for design.
+- Construction: the FFHQ alignment rule reduced to 5 points, a square of side
+  max(4 × eye distance, 3.6 × eye-to-mouth distance).
+- Then averaged with its mirror image, so that a horizontal flip commutes with alignment. This
+  moves no point by more than 0.34 px at 128.
+- Normalized (x, y): eyes (0.375, 0.47323) and (0.625, 0.47323), nose (0.5, 0.62947), mouth
+  corners (0.388, 0.74094) and (0.612, 0.74094).
+- On the mean train landmarks, the rule gives a square of side 153.1 px with x ∈ [12.0, 165.1] and
+  y ∈ [38.7, 191.8], inside 178×218.
+
+**Per-image alignment:** a least-squares similarity (Umeyama) maps the 5 landmarks to the
+template.
+
+| | train | val | test |
 |---|---|---|---|
-| ×4 | 32×32 | 128×128 | ≈8 px in LR, ≈32 px in HR |
-| ×8 | 16×16 | 128×128 | ≈4 px in LR, ≈32 px in HR |
+| Crop side in the source, median (min – max) | 155.8 px (143.4 – 256.9) | 155.9 px (144.4 – 234.7) | 156.0 px (39.3 – 247.8) |
+| Crops whose HR 128 would be an upscale (side < 128) | 0 | 0 | 1 |
+| Crops that need padding | 4,543 (2.79%) | 479 (2.41%) | 540 (2.71%) |
+| Padded area of those crops: mean / p95 / max | 2.8% / 11.8% / 41.6% | 2.6% / 11.6% / 29.6% | 2.9% / 13.6% / 36.8% |
+| Crops with more than 10% padding | 331 | 32 | 48 |
 
-Faces with a large interocular distance (p95 = 43 px gives a crop side of ≈172 px) or faces offset
-from the mean can touch the image border. Such crops need padding, and the padded area should be
-recorded. The exact template is fixed in PR 1.3.
+- **Upscale check:** so HR 128 is a downscale (×0.82 at the median) for every crop except the one
+  test image with broken landmarks (`docs/DATA.md` §4.5). This confirms D4.
+- **Large crops** come from profile and small faces: the 5 points fit the frontal template worse,
+  and the face appears smaller in the crop.
+- **Rotation** from the alignment is small, because the source is already aligned: median |angle|
+  0.47°, p95 1.6°.
+- **Cost:** decode 0.6 ms and align + warp 0.08 ms per image (single core).
+
+| Scale | LR | HR | Interocular distance at the template |
+|---|---|---|---|
+| ×4 | 32×32 | 128×128 | 8 px in LR, 32 px in HR |
+| ×8 | 16×16 | 128×128 | 4 px in LR, 32 px in HR |
 
 ### 6.4 Known data limitations
 
@@ -250,14 +280,22 @@ The agreed approach. Details are fixed in the corresponding PRs.
   - Before writing anything, it checks the shard set, the official counts and identity
     disjointness. Every image is decoded once.
   - Runtime about 2 min on this machine. Details: `docs/DATA.md`.
-- **Alignment (PR 1.3).** `facehall.align`: a canonical 5-point template for 128×128 (from the
-  §6.3 geometry), a similarity transform fitted by least squares (Umeyama), a warp and an inverse
-  warp (reused for paste-back in Phase 4), and configurable alignment jitter (shift, rotation,
-  scale).
+- **Alignment (PR 1.3, done).** `facehall.align` holds:
+  - the template and its derivation (§6.3);
+  - `umeyama` and matrix helpers;
+  - `alignment_matrix(landmarks, template, size)`;
+  - `warp`: bicubic by default; border reflect, constant or replicate;
+  - `unwarp`, the inverse warp for paste-back in Phase 4;
+  - `valid_mask`, which marks padded pixels;
+  - `Jitter`: a random similarity about the crop centre, with shift, rotation and log-uniform
+    scale. Its limits are set in the PR 1.4 config. Every sample draws four numbers, so the random
+    stream does not depend on the settings.
 - **Dataset + degradation v0 (PR 1.4).**
   - Input: the manifest (`read_manifest`), with the dataset root taken from a config value
     (`data.root`), not from a hard-coded path. PNG (train) and JPEG (val/test) are both decoded.
-  - Filtering `Blurry` images is a config option (Q4).
+  - Filtering `Blurry` images is a config option (Q4). Samples whose crop would make HR an
+    upscale are dropped, per the `CLAUDE.md` §7 rule; this removes exactly one test image, which
+    has broken landmarks. The padding policy is open (Q5).
   - Train crops are warped on the fly from the 178×218 source, with jitter. Validation and test
     crops are deterministic and cached.
   - LR is a bicubic downscale with antialias; the exact function is fixed in
@@ -299,7 +337,7 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       `scripts/license_report.py`
 - [x] **PR 1.2** `feat(data):` `prepare_dataset.py`: files, manifest, official split, frozen test;
       `DATA.md`. Tests use a synthetic parquet fixture
-- [ ] **PR 1.3** `feat(align):` template, similarity transform, warp and inverse warp, jitter.
+- [x] **PR 1.3** `feat(align):` template, similarity transform, warp and inverse warp, jitter.
       Tests: warp and inverse-warp round trip on synthetic points
 - [ ] **PR 1.4** `feat(data):` dataset + degradation v0 (bicubic). Tests: determinism, shapes,
       value ranges
@@ -385,6 +423,7 @@ Ask the user before the PR that needs the answer. Q1 (manifest in git) was close
 | Q2 | Comparison grids with CelebA faces in the public `docs/RESULTS.md` | PR 1.7 | Write the grids to `outputs/` (gitignored); public docs show numbers, or images with a permissive license |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 | Q4 | Exclude CelebA images with `Blurry = 1` (train 8,362, val 940, test 1,010; about 5% of each split) from train and/or evaluation? | PR 1.4 | Exclude them from train by default (a blurry target teaches blur). Keep val and test complete, so the frozen test stays the official one, and also report metrics on the non-blurry subset |
+| Q5 | Crops that reach outside the image (2.4–2.8% per split, §6.3): how to fill and score them? | PR 1.4 | Train: reflect padding, as in FFHQ. Val/test: keep all crops, store the padded fraction with the cached crops, and also report metrics on the unpadded subset (same approach as Q4) |
 
 ### Risks
 

@@ -77,7 +77,8 @@ The official CelebA partition (D8):
 
 ## 4. Verified properties of the mirror
 
-Checked on 2026-11-23 and 2026-11-24 by reading the parquet files directly.
+Checked on 2026-11-23 and 2026-11-24 by reading the parquet files and the prepared manifest
+directly.
 
 ### 4.1 Schema and fields
 
@@ -139,6 +140,22 @@ contiguous file-number ranges to the splits, and the split sizes match it exactl
 inside a split follow the official file order still *needs verification*, for example against the
 official landmark file. This matters for joining external annotations keyed by file name (D10).
 Until then, the manifest traces every row by `source_file` and `source_row`.
+
+### 4.5 Landmark quality
+
+Measured over the prepared manifest on 2026-11-24. The fit residuals use the alignment from PR 1.3
+(`PROJECT.md` §6.3) and are given in pixels of a 128×128 crop.
+
+- **Interocular distance** (source px), the same in every split: median 39, p5 33, p95 43. The
+  minimum is 4–5 px (profile faces); the maximum is 66 in train and 52–53 in val/test.
+- **Fit to the template:** the mean landmark residual is 2.6 px in every split. Per image, the
+  largest residual has p95 9.5 px (train). More than 15 px: train 159, val 14, test 19 images; more
+  than 20 px: 1 train image. Checked visually on the largest test residuals: they are profile
+  faces, not annotation errors.
+- **Broken landmarks:** `img_align/test/001557.jpg` shows a normal-size frontal face, but all five
+  points are clustered between the eyes (eye distance 10 px). Checked visually. Its crop would be a
+  ×3.3 zoom into the eye region. It is the only image whose crop side is below 140 source px; the
+  "HR must not be an upscale" rule excludes it (`PROJECT.md` §9, PR 1.4).
 
 ## 5. Prepared dataset
 

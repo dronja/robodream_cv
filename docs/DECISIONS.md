@@ -97,3 +97,17 @@ Log of project decisions: date, decision, reason. Open questions are marked **OP
 ### Image files keep the mirror's encoding
 **Decision:** `scripts/prepare_dataset.py` writes the stored image bytes without re-encoding: train images as PNG, validation and test images as JPEG, as they are stored in the mirror.
 **Reason:** in the mirror, train images are PNG files of decoded JPEG pixels (`docs/DATA.md` §4.2), while validation and test images are the original JPEG files. Re-encoding the train images as JPEG would add a second lossy generation. The cost is disk space: the train image files take 8.63 GB, against about 1.1 GB at the mean size of the validation and test JPEG files.
+
+### Alignment template and conventions (PR 1.3)
+**Decision:**
+- The canonical 5-point template is the FFHQ alignment rule (reduced to 5 points), applied to the CelebA train-split mean landmarks and then averaged with its mirror image.
+- Per image, a least-squares similarity (Umeyama) over all 5 points maps the landmarks to the template.
+- Coordinates are pixel-centre coordinates; the template uses normalized crop coordinates.
+- Warp defaults: bicubic interpolation and reflect border; both are configurable.
+
+**Reason:**
+- Using the train split keeps the test split out of design decisions.
+- The mirror-averaged template makes horizontal flips commute with alignment, and it moves no point by more than 0.34 px at 128.
+- Umeyama on 5 points uses the nose and every mouth corner rather than only eye and mouth midpoints, and needs no special cases.
+- Normalized coordinates give the same face region at 32, 128 and 512 px.
+- Reflect padding follows FFHQ; the padding policy for training and evaluation is open (Q5).

@@ -1,15 +1,22 @@
 # Search space for tuning the realistic degradation against real LR faces (PR 2.6,
 # facehall.eval.match, scripts/match_degradations.py). Paths are relative to this file.
 # Every axis maps option names to overrides of the base config; {} keeps the base value.
-base: ../realistic.yaml
+base: ../realistic.yaml     # always scored, as "base"; a winner must beat it on every measure
 references:                 # scored as they are
-  - ../realistic.yaml
   - ../bicubic.yaml
   - ../levels/light.yaml
   - ../levels/medium.yaml
   - ../levels/heavy.yaml
+typical:                    # the "typical" view: WIDER faces without occlusion, typical pose
+  attr_occlusion: 0
+  attr_pose: 0
+centre: [0.1875, 0.28, 0.625]   # the "centre" view (x, y, side): eyebrows to chin, cheek to cheek
 axes:
-  blur:                     # first-stage blur sizes: upper ends scaled by 0.6, 1.0, 1.5
+  blur:                     # first-stage blur sizes: upper ends scaled by 0.3 ... 2.0
+    x0.3:
+      first.blur.sigma: [0.1, 0.3]
+      first.blur.motion_length: [0.5, 0.9]
+      first.blur.defocus_radius: [0.3, 0.45]
     x0.6:
       first.blur.sigma: [0.1, 0.6]
       first.blur.motion_length: [0.5, 1.8]
@@ -19,19 +26,20 @@ axes:
       first.blur.sigma: [0.1, 1.5]
       first.blur.motion_length: [0.5, 4.5]
       first.blur.defocus_radius: [0.3, 2.25]
+    x2.0:
+      first.blur.sigma: [0.1, 2.0]
+      first.blur.motion_length: [0.5, 6.0]
+      first.blur.defocus_radius: [0.3, 3.0]
   noise:                    # first-stage noise; Poisson peaks give the same sigma at mid-grey
-    s5:
-      first.noise.sigma: [1.0, 5.0]
-      first.noise.peak: [1300.0, 32500.0]
-    s10:
-      first.noise.sigma: [1.0, 10.0]
-      first.noise.peak: [325.0, 32500.0]
     s15:
       first.noise.sigma: [1.0, 15.0]
       first.noise.peak: [145.0, 32500.0]
     s25:
       first.noise.sigma: [1.0, 25.0]
       first.noise.peak: [52.0, 32500.0]
+    s35:
+      first.noise.sigma: [1.0, 35.0]
+      first.noise.peak: [26.5, 32500.0]
   jpeg:                     # lowest JPEG quality, both stages
     q30: {}
     q50:

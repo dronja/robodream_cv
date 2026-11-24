@@ -2,8 +2,8 @@
 
 Runs the search spec (``facehall.eval.match``) for the scale of a real-world protocol and
 writes ``results.json``, ``results.md`` and ``winner.yaml`` to
-``<out>/<spec>_x<scale>_<real split>/``. These are local outputs: the YAML is copied into
-``configs/degrade/`` by hand, with the evidence in its header.
+``<out>/<spec>_x<scale>_<real split>/``. These are local outputs: an accepted winner is copied
+into ``configs/degrade/`` by hand, with the evidence in its header.
 
     uv run python scripts/match_degradations.py --spec configs/degrade/search/realistic.yaml \\
         --real configs/eval/wider_real_x4.yaml
@@ -70,9 +70,10 @@ def main(argv: list[str] | None = None) -> int:
     (out / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     (out / "results.md").write_text(render(results))
     if results["winner"]:
+        verdict = "accepted" if results["accepted"] else "NOT accepted: the base stays"
         header = (
             f"Winner of {args.spec} for x{protocol.scale} against {args.real} "
-            f"({args.real_split}), git {results['git_commit']}: {results['winner']}"
+            f"({args.real_split}), git {results['git_commit']}: {results['winner']} ({verdict})"
         )
         (out / "winner.yaml").write_text(winner_yaml(results, header))
     print(out)

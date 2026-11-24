@@ -4,13 +4,25 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from facehall.config import load_config
 from facehall.data.config import BlurConfig, DataConfig, DegradeConfig, StageConfig
 from facehall.data.dataset import AlignedFaces
 from facehall.data.realworld import RealFaces
-from facehall.eval.match import expand, load_spec, references, render, run_search, winner_yaml
+from facehall.eval.match import (
+    GATE,
+    crop_box,
+    expand,
+    gate,
+    load_spec,
+    references,
+    render,
+    run_search,
+    typical_mask,
+    winner_yaml,
+)
 
 HR = 32
 ROWS = [("val", False, (i % 4 - 2, i % 3 - 1)) for i in range(12)] + [
@@ -31,6 +43,7 @@ first:
 
 def write_spec(root: Path, axes: str, extra: str = "") -> Path:
     (root / "base.yaml").write_text(BASE)
+    (root / "ref.yaml").write_text(BASE.replace("prob: 0.0\n    quality", "prob: 1.0\n    quality"))
     (root / "spec.yaml").write_text(f"base: base.yaml\n{extra}axes:\n{axes}")
     return root / "spec.yaml"
 
@@ -44,7 +57,7 @@ def test_expand_applies_overrides(tmp_path: Path) -> None:
         "    q50: {first.jpeg.prob: 1.0, first.jpeg.quality: [50, 95]}\n"
         "    keep: {}\n"
     )
-    spec = load_spec(write_spec(tmp_path, axes, "references: [base.yaml]\n"))
+    spec = load_spec(write_spec(tmp_path, axes, "references: [ref.yaml]\n"))
     candidates = expand(spec)
     assert [c.name for c in candidates] == [
         "blur=none,jpeg=q50",
@@ -56,7 +69,10 @@ def test_expand_applies_overrides(tmp_path: Path) -> None:
     assert candidates[0].config.first.blur.prob == 0.0
     assert candidates[3].overrides == {"first.blur.prob": 1.0}
     assert candidates[3].config.first.jpeg.prob == 0.0
-    assert [r.name for r in references(spec)] == ["base"]
+    refs = references(spec)
+    assert [r.name for r in refs] == ["base", "ref"]
+    assert refs[0].config.first.jpeg.prob == 0.0 and refs[1].config.first.jpeg.prob == 1.0
+    assert spec.typical == {} and spec.centre == (0.0, 0.0, 1.0)
 
 
 def test_invalid_specs(tmp_path: Path) -> None:
@@ -69,6 +85,21 @@ def test_invalid_specs(tmp_path: Path) -> None:
     (tmp_path / "empty_axis.yaml").write_text("base: base.yaml\naxes:\n  blur: {}\n")
     with pytest.raises(ValueError, match="must map option names"):
         load_spec(tmp_path / "empty_axis.yaml")
+    (tmp_path / "bad_centre.yaml").write_text("base: base.yaml\ncentre: [0.1, 0.2]\n")
+    with pytest.raises(ValueError, match="centre"):
+        load_spec(tmp_path / "bad_centre.yaml")
+
+
+def test_crop_box_and_gate() -> None:
+    assert crop_box(32, (0.1875, 0.28, 0.625)) == (slice(9, 29), slice(6, 26))
+    assert crop_box(16, (0.1875, 0.28, 0.625)) == (slice(4, 14), slice(3, 13))
+    assert crop_box(8, (0.0, 0.0, 1.0)) == (slice(0, 8), slice(0, 8))
+    with pytest.raises(ValueError, match="does not fit"):
+        crop_box(16, (0.5, 0.5, 0.6))
+    base = dict.fromkeys(GATE, 1.0)
+    assert all(gate(dict.fromkeys(GATE, 0.5), base).values())
+    checks = gate({**dict.fromkeys(GATE, 0.5), "fid_all": 1.0}, base)
+    assert [m for m, ok in checks.items() if not ok] == ["fid_all"]
 
 
 def test_search_prefers_the_matching_degradation(
@@ -90,12 +121,17 @@ def test_search_prefers_the_matching_degradation(
             "scale": 4,
             "split": "val",
             "pixels": (source[i]["lr"] * 255).round().byte().permute(1, 2, 0).numpy(),
+            "attr_occlusion": int(i % 4 == 0),
         }
         for i in range(len(source))
     ]
     real = RealFaces(make_realworld(tmp_path / "real", crops), "val", 4)
+    assert typical_mask(real, {"attr_occlusion": 0}).sum() == 9
+    with pytest.raises(ValueError, match="no column"):
+        typical_mask(real, {"attr_missing": 0})
     axes = "  blur:\n    none: {}\n    strong: {first.blur.prob: 1.0}\n"
-    spec = load_spec(write_spec(tmp_path, axes, "references: [base.yaml]\n"))
+    extra = "references: [ref.yaml]\ntypical: {attr_occlusion: 0}\ncentre: [0.25, 0.25, 0.5]\n"
+    spec = load_spec(write_spec(tmp_path, axes, extra))
 
     results = run_search(
         spec,
@@ -112,15 +148,41 @@ def test_search_prefers_the_matching_degradation(
     )
     assert results["winner"] == "blur=strong"
     rows = results["rows"]
-    assert [r["name"] for r in rows] == ["base", "blur=strong", "blur=none"]
-    assert rows[0]["reference"] and rows[1]["second"] is not None
-    assert results["synthetic"]["samples"] == 12 and results["real"]["samples"] == 12
-    assert "Winner: `blur=strong`" in render(results)
+    assert [r["name"] for r in rows] == ["base", "ref", "blur=strong", "blur=none"]
+    assert rows[0]["reference"] and rows[2]["second"] is not None and rows[3]["second"] is not None
+    assert set(rows[2]["second"]) == {*GATE, "score"} and "fid_all" not in rows[2]["first"]
+    assert results["synthetic"]["samples"] == 12 and results["real"]["typical_samples"] == 9
+    assert results["centre"] == {"box": [0.25, 0.25, 0.5], "rows": [2, 6], "columns": [2, 6]}
+    assert results["accepted"] is all(results["gate"].values())
+    text = render(results)
+    assert "Winner: `blur=strong`" in text and "## Round 2 (seed 1)" in text
 
     path = tmp_path / "winner.yaml"
     path.write_text(winner_yaml(results, "header line"))
     assert path.read_text().startswith("# header line\n")
     assert load_config(path, DegradeConfig).first.blur.prob == 1.0
+
+
+def test_search_rejects_duplicate_names(
+    tmp_path: Path, make_dataset: Callable[..., Path], make_realworld: Callable[..., Path]
+) -> None:
+    celeba = make_dataset(tmp_path / "celeba", ROWS)
+    pixels = np.zeros((8, 8, 3), dtype=np.uint8)
+    real = RealFaces(
+        make_realworld(tmp_path / "real", [{"scale": 4, "split": "val", "pixels": pixels}] * 3),
+        "val",
+        4,
+    )
+    spec = load_spec(write_spec(tmp_path, "  a:\n    x: {}\n", "references: [base.yaml]\n"))
+    with pytest.raises(ValueError, match="not unique"):
+        run_search(
+            spec,
+            real,
+            DataConfig(root=str(celeba), hr_size=HR),
+            data_split="val",
+            extractor=lambda images: images.float().mean(dim=(2, 3)),
+            workers=0,
+        )
 
 
 def test_script_parses(load_script: Callable[[str], Any]) -> None:

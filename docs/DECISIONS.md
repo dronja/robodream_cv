@@ -293,3 +293,19 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
   - A digest turns such a change into an error instead of silently incomparable numbers.
   - A digest is cheap: about 4 s per protocol, and it is computed during evaluation anyway.
 - **Bicubic protocols frozen too:** the PR 2.1 pipeline left `kind: bicubic` unchanged, so re-evaluating the Phase 1 models from this commit must reproduce the Phase 1 numbers exactly. It did: the tables were identical on 2026-11-24.
+
+### Realistic training, synthetic comparison (PR 2.4)
+**Decision:**
+- **What was trained:** FNet ×4 and ×8 were re-trained on `configs/degrade/realistic.yaml` with the unchanged Phase 1 recipe, so clean and realistic training differ in one setting only. CNet was not re-trained.
+- **Order:** PR 2.4 came before PR 2.3, at the user's choice on 2026-11-24, and covers only the synthetic levels. The real-world comparison and the tuning of the realistic ranges follow PR 2.3.
+- **No quality gate yet:** none is set for this step. Its numbers are a reference for Phase 2 and Phase 3.
+
+**Reason:**
+- **One variable:** keeping the recipe isolates the effect of the degradations.
+- **FNet only:** FNet was the best Phase 1 baseline. CNet takes about 4× longer to train.
+- **Waiting for real photos:** the synthetic levels come from our own degradation model, so tuning the ranges on them would be circular. Real low-quality photos are needed for that.
+- **Results** (`docs/PROJECT.md` §9):
+  - realistic training improves PSNR and LPIPS on degraded inputs;
+  - it barely changes ID similarity, which at ×4 stays below plain bicubic upsampling;
+  - it loses a lot on clean inputs.
+  - The next steps are therefore range tuning (after PR 2.3) and identity-aware losses (Phase 3).

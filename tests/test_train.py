@@ -206,12 +206,17 @@ def test_config_round_trip(root: Path, tmp_path: Path) -> None:
     assert experiment_from_dict(json.loads(json.dumps(experiment_to_dict(config)))) == config
 
 
-@pytest.mark.parametrize("name", ["fnet_x4", "fnet_x8", "cnet_x4", "cnet_x8"])
+@pytest.mark.parametrize(
+    "name",
+    ["fnet_x4", "fnet_x8", "cnet_x4", "cnet_x8", "fnet_x4_realistic", "fnet_x8_realistic"],
+)
 def test_repository_train_configs(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FACEHALL_DATA", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
-    model, scale = name.split("_x")
+    model, rest = name.split("_x")
+    scale = rest.removesuffix("_realistic")
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
+    assert config.degrade.kind == ("pipeline" if name.endswith("_realistic") else "bicubic")
     assert config.data.root == "/mnt/storage/AI/Face/celeba" and config.data.hr_size == 128
     assert config.train.batch_size == 16 and config.train.loss == "mse"
     assert config.train.optimizer.lr == 1e-3 and config.train.optimizer.eps == 1e-7

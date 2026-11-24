@@ -1,0 +1,24 @@
+# Real-world protocol (D20): faces from WIDER FACE whose native size matches the x8 input
+# (16 px), no HR reference (docs/DATA.md §7). Scored with FID and KID against real HR faces
+# (the CelebA validation crops) and with LR-PSNR-Y (facehall.eval.noref, PR 2.5).
+kind: realworld
+include:
+  reference: ../data/celeba_128.yaml
+name: wider_real_x8
+level: real
+scale: 8
+split: test
+root: ${oc.env:FACEHALL_DATA,/mnt/storage/AI/Face}/wider_face/realworld
+hr_size: 128
+seed: 0
+reference_split: val
+metrics:
+  # torch-fidelity InceptionV3 weights: scripts/download_weights.py inception (Q6)
+  inception: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/inception/weights-inception-2015-12-05-6726825d.pth
+  kid_subsets: 100
+  kid_subset_size: 1000
+  kid_min_faces: 200
+grid_samples: 16   # written to outputs/ only: faces of real people under CC BY-NC-ND (D20)
+# Frozen inputs (scripts/protocol_digest.py, 2026-11-24): the sha256 of every LR crop.
+inputs_sha256:
+  test: f052f971736b460a5a4269e425df3ce30c04989e57fad3fcb4a9f9ba9630862a

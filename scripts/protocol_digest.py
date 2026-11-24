@@ -1,6 +1,7 @@
 """Print the inputs digest of evaluation protocols (no model needed).
 
-The digest is the sha256 of every LR and HR crop of the split (``facehall.eval.runner``). Put it
+The digest is the sha256 of every LR and HR crop of the split (``facehall.eval.runner``), or of
+every LR crop for a real-world protocol (``facehall.eval.realworld``). Put it
 under ``inputs_sha256`` in the protocol config to freeze the inputs: later evaluations then fail
 if the inputs change, e.g. after a library update.
 
@@ -12,7 +13,9 @@ import sys
 from pathlib import Path
 
 from facehall.config import load_config
+from facehall.eval.cli import protocol_kind
 from facehall.eval.config import EvalConfig
+from facehall.eval.realworld import KIND, RealWorldConfig, realworld_digest
 from facehall.eval.runner import input_digest
 
 
@@ -28,8 +31,13 @@ def main(argv: list[str] | None = None) -> int:
     changed = 0
     for path in args.configs:
         overrides = [f"split={args.split}"] if args.split else []
-        config = load_config(path, EvalConfig, overrides)
-        digest = input_digest(config)
+        config: EvalConfig | RealWorldConfig
+        if protocol_kind(path) == KIND:
+            config = load_config(path, RealWorldConfig, overrides)
+            digest = realworld_digest(config)
+        else:
+            config = load_config(path, EvalConfig, overrides)
+            digest = input_digest(config)
         frozen = config.inputs_sha256.get(config.split)
         status = "new" if not frozen else "matches" if frozen == digest else "CHANGED"
         print(f"{path}\t{config.name}\t{config.split}\t{digest}\t{status}")

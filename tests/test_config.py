@@ -8,7 +8,9 @@ from omegaconf.errors import ConfigKeyError, MissingMandatoryValue, ValidationEr
 from facehall.config import load_config
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
 from facehall.data.degrade import build_degradation
+from facehall.eval.cli import protocol_kind
 from facehall.eval.config import EvalConfig, validate_eval
+from facehall.eval.realworld import KIND, RealWorldConfig, validate_realworld
 from facehall.train import ExperimentConfig
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -97,8 +99,16 @@ def test_test_levels_are_graded() -> None:
 
 def test_repository_eval_protocols_load() -> None:
     names = sorted(p.name for p in (CONFIGS / "eval").glob("*.yaml"))
-    assert len(names) == 8
+    assert len(names) == 10
     for path in sorted((CONFIGS / "eval").glob("*.yaml")):
+        if protocol_kind(path) == KIND:
+            real = load_config(path, RealWorldConfig)
+            validate_realworld(real)
+            assert real.name == f"wider_real_x{real.scale}" and real.split == "test"
+            assert real.root.endswith("wider_face/realworld") and real.reference_split == "val"
+            assert real.metrics.inception.endswith("weights-inception-2015-12-05-6726825d.pth")
+            assert real.inputs_sha256.get("test"), f"{path.name}: inputs are not frozen"
+            continue
         config = load_config(path, EvalConfig)
         validate_eval(config)
         assert config.split == "test" and config.name.endswith(f"_x{config.scale}")

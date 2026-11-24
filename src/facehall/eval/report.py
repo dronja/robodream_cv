@@ -7,6 +7,9 @@ written outside the repository (``outputs/``, D19).
 When a scale has several protocols (degradation levels), a summary table per scale comes first:
 one row per model, one column per level. Within a protocol, every model must have been scored on
 the same inputs (``inputs_sha256``), or the report fails.
+
+Real-world protocols (``kind: realworld``, no HR reference) get their own tables: FID, KID and
+LR-PSNR-Y per model, then KID and LR-PSNR-Y per subset of the WIDER FACE attributes.
 """
 
 import json
@@ -23,6 +26,17 @@ COLUMNS = (  # metric key, header, format, higher is better
     ("identity", "ID sim ↑", "{:.4f}", True),
 )
 LEVELS = ("bicubic", "light", "medium", "heavy")  # column order; other levels follow by name
+REALWORLD = "realworld"
+REALWORLD_SUBSETS = {
+    "all": "all",
+    "clear": "blur 0 (clear)",
+    "normal_blur": "blur 1 (normal)",
+    "heavy_blur": "blur 2 (heavy)",
+    "unoccluded": "no occlusion",
+    "occluded": "partial or heavy occlusion",
+    "atypical_pose": "atypical pose",
+    "unpadded": "no padding",
+}
 SUBSET_TITLES = {
     "all": "all",
     "non_blurry": "`Blurry` = 0 (D15)",
@@ -60,9 +74,13 @@ def render(summaries: list[dict[str, Any]], *, split: str = "test") -> str:
         "These numbers describe how close a reconstruction is to the reference photo. A high",
         "ID similarity does not make the output a record of the real face (`CLAUDE.md` §11).",
     ]
-    chosen = [s for s in summaries if s["split"] == split and not s["model"].get("smoke")]
+    selected = [s for s in summaries if s["split"] == split and not s["model"].get("smoke")]
+    chosen = [s for s in selected if s.get("kind") != REALWORLD]
+    real = [s for s in selected if s.get("kind") == REALWORLD]
     for scale in sorted({s["scale"] for s in chosen}):
         lines += level_summary([s for s in chosen if s["scale"] == scale], scale)
+    for protocol in sorted({s["protocol"] for s in real}, key=lambda p: protocol_key(real, p)):
+        lines += realworld_section([s for s in real if s["protocol"] == protocol], split)
     for protocol in sorted({s["protocol"] for s in chosen}, key=lambda p: protocol_key(chosen, p)):
         rows = sorted((s for s in chosen if s["protocol"] == protocol), key=model_key)
         first = rows[0]
@@ -101,6 +119,65 @@ def render(summaries: list[dict[str, Any]], *, split: str = "test") -> str:
             cells = [compact(s["subsets"][subset]) for s in rows]
             lines.append(f"| {title} | {stats['count']:,} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
+
+
+def realworld_section(rows: list[dict[str, Any]], split: str) -> list[str]:
+    """FID, KID and LR-PSNR-Y per model, then KID and LR-PSNR-Y per subset."""
+    rows = sorted(rows, key=model_key)
+    first = rows[0]
+    count = first["subsets"]["all"]["count"]
+    reference = first.get("reference") or {}
+    lines = [
+        "",
+        f"## {first['protocol']} — real-world faces, no reference ({split}, {count:,} faces, "
+        f"×{first['scale']})",
+        "",
+        f"Inputs: sha256 `{inputs_digest(rows)}`. FID and KID compare the outputs with "
+        f"{reference.get('samples', 0):,} real HR faces (CelebA `{reference.get('split', '?')}` "
+        "crops); lower is closer. They measure how real the outputs look as a set, not whether "
+        "they show the right person. LR-PSNR-Y compares the downscaled output with the input; "
+        "plain upsampling scores high on it.",
+        "",
+        "| Model | Parameters | Checkpoint | FID ↓ | KID ×10³ ↓ | LR-PSNR-Y (dB) ↑ |",
+        "|---|---:|---|---:|---:|---:|",
+    ]
+    for summary in rows:
+        model = summary["model"]
+        checkpoint = (
+            f"`{summary['label']}` (epoch {model['epoch']})" if model.get("checkpoint") else "—"
+        )
+        stats = summary["subsets"]["all"]
+        fid = f"{stats['fid']:.2f}" if stats.get("fid") is not None else "—"
+        lines.append(
+            f"| {model['name']} | {model['parameters']:,} | {checkpoint} | {fid} | "
+            f"{kid_cell(stats)} | {cell(stats, 'lr_psnr_y', '{:.2f}')} |"
+        )
+    lines += [
+        "",
+        "Subsets (KID ×10³ / LR-PSNR-Y; KID only for subsets of enough faces):",
+        "",
+        "| Subset | Faces | " + " | ".join(s["model"]["name"] for s in rows) + " |",
+        "|---|---:|" + "---|" * len(rows),
+    ]
+    for subset, title in REALWORLD_SUBSETS.items():
+        stats = first["subsets"].get(subset)
+        if stats is None:
+            continue
+        cells = [
+            kid_cell(s["subsets"][subset])
+            + " / "
+            + cell(s["subsets"][subset], "lr_psnr_y", "{:.2f}")
+            for s in rows
+        ]
+        lines.append(f"| {title} | {stats['count']:,} | " + " | ".join(cells) + " |")
+    return lines
+
+
+def kid_cell(stats: dict[str, Any]) -> str:
+    value = stats.get("kid")
+    if not value:
+        return "—"
+    return f"{value['mean'] * 1e3:.2f} ± {value['std'] * 1e3:.2f}"
 
 
 def level(summary: dict[str, Any]) -> str:
@@ -167,7 +244,7 @@ def compact(stats: dict[str, Any]) -> str:
 
 
 def comparison_grid(summaries: list[dict[str, Any]], protocol: str, split: str) -> Image.Image:
-    """Rows: grid samples. Columns: LR (nearest upscale), each model's SR, HR."""
+    """Rows: grid samples. Columns: LR (nearest upscale), each model's SR, HR (if there is one)."""
     rows = sorted(
         (
             s
@@ -177,9 +254,14 @@ def comparison_grid(summaries: list[dict[str, Any]], protocol: str, split: str) 
         key=model_key,
     )
     reference = Path(rows[0]["_dir"]).parent / "reference"
-    names = sorted(p.name for p in (reference / "hr").glob("*.png"))
-    columns = [reference / "lr"] + [Path(s["_dir"]) / "samples" for s in rows] + [reference / "hr"]
-    size = Image.open(reference / "hr" / names[0]).size[0]
+    names = sorted(p.name for p in (reference / "lr").glob("*.png"))
+    samples = [Path(s["_dir"]) / "samples" for s in rows]
+    columns = [
+        reference / "lr",
+        *samples,
+        *([reference / "hr"] if (reference / "hr").is_dir() else []),
+    ]
+    size = Image.open(samples[0] / names[0]).size[0]
     grid = Image.new("RGB", (size * len(columns), size * len(names)), "white")
     for r, name in enumerate(names):
         for c, folder in enumerate(columns):

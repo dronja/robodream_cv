@@ -22,7 +22,8 @@ import torch
 
 from facehall.align import CELEBA_TEMPLATE
 from facehall.cli import main
-from facehall.data.config import DataConfig
+from facehall.data.config import DataConfig, DegradeConfig, NoiseConfig, StageConfig
+from facehall.data.dataset import AlignedFaces
 from facehall.eval.cli import load_model
 from facehall.eval.config import EvalConfig, MetricsConfig, validate_eval
 from facehall.eval.metrics import (
@@ -35,7 +36,7 @@ from facehall.eval.metrics import (
     ssim_y,
 )
 from facehall.eval.report import collect, comparison_grid, render
-from facehall.eval.runner import Metric, evaluate_model
+from facehall.eval.runner import Metric, evaluate_model, identity_fingerprint
 from facehall.models import ModelConfig, build_model
 from facehall.train import ExperimentConfig, SmokeConfig, TrainConfig, train
 from facehall.weights import Asset, download
@@ -178,6 +179,24 @@ def test_identity_reference_cache(root: Path, tmp_path: Path) -> None:
     changed = replace(config, data=replace(config.data, interpolation="bilinear"))
     _, embedded_changed = run(changed, "c")
     assert embedded_changed == 2 * TEST_SAMPLES  # other HR crops: the cache is not used
+
+
+def test_hr_fingerprint_follows_degradations_that_change_the_target(
+    root: Path, tmp_path: Path
+) -> None:
+    base = protocol(root, tmp_path)
+
+    def fingerprint(degrade: DegradeConfig) -> str:
+        config = replace(base, degrade=degrade)
+        dataset = AlignedFaces(
+            config.data, config.degrade, config.split, config.scale, augment=False
+        )
+        return identity_fingerprint(dataset, config)
+
+    bicubic = fingerprint(DegradeConfig())
+    noise = StageConfig(noise=NoiseConfig(prob=1.0, gaussian=1.0, sigma=[5.0, 5.0]))
+    assert fingerprint(DegradeConfig(kind="pipeline", first=noise)) == bicubic
+    assert fingerprint(DegradeConfig(kind="pipeline", grayscale=0.5)) != bicubic
 
 
 def test_checkpoint_model_report_and_grid(root: Path, tmp_path: Path) -> None:

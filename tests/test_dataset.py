@@ -1,5 +1,6 @@
 """Tests for facehall.data.dataset on a tiny synthetic prepared dataset."""
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -82,7 +83,7 @@ def test_eval_sample_matches_the_reference_pipeline(data: DataConfig, root: Path
     expected = warp(source, alignment_matrix(landmarks, CELEBA_TEMPLATE, 128), 128)
     hr = torch.from_numpy(expected.copy()).permute(2, 0, 1).float() / 255
     torch.testing.assert_close(sample["hr"], hr)
-    torch.testing.assert_close(sample["lr"], Bicubic()(hr, 4, np.random.default_rng()))
+    torch.testing.assert_close(sample["lr"], Bicubic()(hr, 4, np.random.default_rng()).lr)
 
 
 def test_eval_samples_are_fixed(data: DataConfig) -> None:
@@ -127,6 +128,22 @@ def test_dataloader_batches(data: DataConfig) -> None:
     assert batch["hr"].shape == (3, 3, 128, 128)
     assert batch["lr"].shape == (3, 3, 16, 16)
     assert batch["index"].tolist() == [0, 1, 2]
+    assert [json.loads(params) for params in batch["degradation"]] == [{}, {}, {}]
+
+
+def test_pipeline_degradation_in_samples(data: DataConfig) -> None:
+    degrade = DegradeConfig(kind="pipeline", grayscale=1.0)
+    dataset = AlignedFaces(data, degrade, "val", 4)
+    sample = dataset[0]
+    params = json.loads(sample["degradation"])
+    assert params["gray"] is True and len(params["stages"]) == 1
+    for image in (sample["hr"], sample["lr"]):
+        torch.testing.assert_close(image[0], image[1], rtol=0, atol=0)
+    colour = AlignedFaces(data, DegradeConfig(), "val", 4)[0]["hr"]
+    assert not torch.equal(colour[0], colour[1])
+    batch = next(iter(DataLoader(dataset, batch_size=2)))
+    assert len(batch["degradation"]) == 2
+    assert dataset.describe()["degradation"]["kind"] == "pipeline"  # type: ignore[index]
 
 
 def test_invalid_settings_are_rejected(data: DataConfig) -> None:

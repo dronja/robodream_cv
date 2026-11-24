@@ -184,7 +184,11 @@ def evaluate_model(
 
 
 def identity_fingerprint(dataset: AlignedFaces, config: EvalConfig) -> str:
-    """sha256 of everything the HR embeddings depend on; the scale and degradation do not."""
+    """sha256 of everything the HR embeddings depend on.
+
+    The scale and the degradation do not change the HR target, except a degradation with
+    grayscale (``changes_target``); only then is the degradation part of the key.
+    """
     described = dataset.describe()
     key = {
         "version": 1,
@@ -197,6 +201,9 @@ def identity_fingerprint(dataset: AlignedFaces, config: EvalConfig) -> str:
             file_sha256(Path(config.metrics.identity)) if config.metrics.identity else "injected"
         ),
     }
+    degradation = described["degradation"]
+    if isinstance(degradation, dict) and degradation.get("changes_target"):
+        key["degradation"] = degradation
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
 

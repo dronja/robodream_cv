@@ -13,7 +13,6 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import torch
@@ -22,9 +21,7 @@ from PIL import Image
 
 from facehall.cli import main
 from facehall.data.config import DataConfig
-from facehall.data.manifest import UNKNOWN_IDENTITY, write_manifest
 from facehall.data.realworld import RealFaces
-from facehall.data.wider import LICENSE, SOURCE, manifest_schema
 from facehall.eval.noref import (
     downscale,
     fid,
@@ -54,68 +51,28 @@ FACES = (
 CELEBA_ROWS = [("val", False, (i, -i)) for i in range(4)] + [("test", False, (0, 0))]
 
 
-class ImageStats:
-    """A stand-in for InceptionV3: per-channel means and standard deviations, 2x2 block means."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def __call__(self, images: torch.Tensor) -> torch.Tensor:
-        assert images.dtype == torch.uint8
-        self.calls += 1
-        x = images.float() / 255.0
-        blocks = F.adaptive_avg_pool2d(x, 2).flatten(1)
-        return torch.cat([x.mean(dim=(2, 3)), x.std(dim=(2, 3)), blocks], dim=1)
-
-
-def write_realworld(root: Path) -> Path:
-    """PNG crops and a manifest in the layout of ``scripts/prepare_wider.py``."""
+@pytest.fixture(scope="module")
+def real_root(
+    tmp_path_factory: pytest.TempPathFactory, make_realworld: Callable[..., Path]
+) -> Path:
     rng = np.random.default_rng(0)
-    rows = []
-    counters: dict[tuple[int, str], int] = {}
+    crops = []
     for i, (scale, split, blur, occlusion) in enumerate(FACES):
         size = HR // scale
-        index = counters.get((scale, split), 0)
-        counters[(scale, split)] = index + 1
-        path = f"x{scale}/{split}/{index:06d}.png"
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
         base = rng.integers(40, 216, size=(1, 1, 3))
         pixels = np.clip(base + rng.integers(-30, 30, size=(size, size, 3)), 0, 255)
-        Image.fromarray(pixels.astype(np.uint8)).save(root / path)
-        rows.append(
+        crops.append(
             {
-                "path": path,
-                "sha256": f"{i:064x}",
-                "split": split,
-                "identity_id": UNKNOWN_IDENTITY,
-                "width": size,
-                "height": size,
-                "source": SOURCE,
-                "license": LICENSE,
                 "scale": scale,
-                "source_image": f"0--Event/{i // 2}.jpg",
-                "event": "0--Event",
-                "face_index": i % 2,
-                "bbox": [0, 0, size, size],
-                "landmarks": [0.0] * 10,
-                "align_scale": 1.0,
-                "align_angle": 0.0,
-                "align_residual": 0.01,
-                "padded": 0.1 if i == 0 else 0.0,
+                "split": split,
+                "pixels": pixels.astype(np.uint8),
                 "attr_blur": blur,
-                "attr_expression": 0,
-                "attr_illumination": 0,
                 "attr_occlusion": occlusion,
                 "attr_pose": int(i == 1),
+                "padded": 0.1 if i == 0 else 0.0,
             }
         )
-    write_manifest(pa.Table.from_pylist(rows, schema=manifest_schema()), root)
-    return root
-
-
-@pytest.fixture(scope="module")
-def real_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return write_realworld(tmp_path_factory.mktemp("real"))
+    return make_realworld(tmp_path_factory.mktemp("real"), crops)
 
 
 @pytest.fixture(scope="module")
@@ -205,9 +162,11 @@ def test_real_faces(real_root: Path) -> None:
         RealFaces(real_root, "val", 8)
 
 
-def test_protocol_run(real_root: Path, celeba_root: Path, tmp_path: Path) -> None:
+def test_protocol_run(
+    real_root: Path, celeba_root: Path, tmp_path: Path, image_stats: Callable[[], Any]
+) -> None:
     config = protocol(real_root, celeba_root, tmp_path)
-    extractor = ImageStats()
+    extractor = image_stats()
     out = evaluate_realworld(
         bicubic(4), config, "bicubic", {"name": "bicubic", "parameters": 0}, extractor=extractor
     )

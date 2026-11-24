@@ -5,14 +5,18 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
 import pytest
+import torch
+import torch.nn.functional as F
 from PIL import Image
 
 from facehall.align.template import CELEBA_TRAIN_MEAN_LANDMARKS
-from facehall.data.manifest import REQUIRED_FIELDS, write_manifest
+from facehall.data.manifest import REQUIRED_FIELDS, UNKNOWN_IDENTITY, write_manifest
+from facehall.data.wider import LICENSE, SOURCE, manifest_schema
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
@@ -96,3 +100,75 @@ def write_synthetic_dataset(root: Path, rows: Sequence[Row]) -> Path:
 def make_dataset() -> Callable[[Path, Sequence[Row]], Path]:
     """``make_dataset(root, rows)`` writes a synthetic prepared dataset to ``root``."""
     return write_synthetic_dataset
+
+
+class ImageStats:
+    """A stand-in for InceptionV3: per-channel means and standard deviations, 2x2 block means."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, images: torch.Tensor) -> torch.Tensor:
+        assert images.dtype == torch.uint8
+        self.calls += 1
+        x = images.float() / 255.0
+        blocks = F.adaptive_avg_pool2d(x, 2).flatten(1)
+        return torch.cat([x.mean(dim=(2, 3)), x.std(dim=(2, 3)), blocks], dim=1)
+
+
+@pytest.fixture
+def image_stats() -> Callable[[], Any]:
+    """``image_stats()`` returns a new ``ImageStats`` feature extractor."""
+    return ImageStats
+
+
+def write_real_crops(root: Path, crops: Sequence[dict[str, Any]]) -> Path:
+    """A prepared real-world set (``scripts/prepare_wider.py`` layout) from LR crops.
+
+    Every crop has ``scale``, ``split`` and ``pixels`` (h, w, 3 uint8); ``attr_*`` and
+    ``padded`` default to 0.
+    """
+    rows = []
+    counters: dict[tuple[int, str], int] = {}
+    for i, crop in enumerate(crops):
+        scale, split, pixels = crop["scale"], crop["split"], crop["pixels"]
+        index = counters.get((scale, split), 0)
+        counters[(scale, split)] = index + 1
+        path = f"x{scale}/{split}/{index:06d}.png"
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(pixels).save(root / path)
+        size = pixels.shape[0]
+        rows.append(
+            {
+                "path": path,
+                "sha256": f"{i:064x}",
+                "split": split,
+                "identity_id": UNKNOWN_IDENTITY,
+                "width": size,
+                "height": size,
+                "source": SOURCE,
+                "license": LICENSE,
+                "scale": scale,
+                "source_image": f"0--Event/{i // 2}.jpg",
+                "event": "0--Event",
+                "face_index": i % 2,
+                "bbox": [0, 0, size, size],
+                "landmarks": [0.0] * 10,
+                "align_scale": 1.0,
+                "align_angle": 0.0,
+                "align_residual": 0.01,
+                "padded": crop.get("padded", 0.0),
+                **{
+                    f"attr_{name}": crop.get(f"attr_{name}", 0)
+                    for name in ("blur", "expression", "illumination", "occlusion", "pose")
+                },
+            }
+        )
+    write_manifest(pa.Table.from_pylist(rows, schema=manifest_schema()), root)
+    return root
+
+
+@pytest.fixture(scope="session")
+def make_realworld() -> Callable[[Path, Sequence[dict[str, Any]]], Path]:
+    """``make_realworld(root, crops)`` writes a prepared real-world set to ``root``."""
+    return write_real_crops

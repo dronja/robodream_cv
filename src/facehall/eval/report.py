@@ -3,6 +3,10 @@
 Input: every ``<eval root>/<protocol>/<split>/<label>/metrics.json`` written by ``facehall
 eval``. The tables hold only numbers from these files. The grids show CelebA faces, so they are
 written outside the repository (``outputs/``, D19).
+
+When a scale has several protocols (degradation levels), a summary table per scale comes first:
+one row per model, one column per level. Within a protocol, every model must have been scored on
+the same inputs (``inputs_sha256``), or the report fails.
 """
 
 import json
@@ -18,6 +22,7 @@ COLUMNS = (  # metric key, header, format, higher is better
     ("lpips", "LPIPS ↓", "{:.4f}", False),
     ("identity", "ID sim ↑", "{:.4f}", True),
 )
+LEVELS = ("bicubic", "light", "medium", "heavy")  # column order; other levels follow by name
 SUBSET_TITLES = {
     "all": "all",
     "non_blurry": "`Blurry` = 0 (D15)",
@@ -56,16 +61,17 @@ def render(summaries: list[dict[str, Any]], *, split: str = "test") -> str:
         "ID similarity does not make the output a record of the real face (`CLAUDE.md` §11).",
     ]
     chosen = [s for s in summaries if s["split"] == split and not s["model"].get("smoke")]
-    for protocol in sorted({s["protocol"] for s in chosen}):
-        rows = sorted(
-            (s for s in chosen if s["protocol"] == protocol),
-            key=lambda s: (s["model"]["parameters"] > 0, s["model"]["name"], s["label"]),
-        )
+    for scale in sorted({s["scale"] for s in chosen}):
+        lines += level_summary([s for s in chosen if s["scale"] == scale], scale)
+    for protocol in sorted({s["protocol"] for s in chosen}, key=lambda p: protocol_key(chosen, p)):
+        rows = sorted((s for s in chosen if s["protocol"] == protocol), key=model_key)
         first = rows[0]
         count = first["subsets"]["all"]["count"]
         lines += [
             "",
             f"## {protocol} — {split} ({count:,} images, ×{first['scale']})",
+            "",
+            f"Level: {level(first)}. Inputs: sha256 `{inputs_digest(rows)}`.",
             "",
             "| Model | Parameters | Checkpoint | " + " | ".join(c[1] for c in COLUMNS) + " |",
             "|---|---:|---|" + "---:|" * len(COLUMNS),
@@ -97,6 +103,59 @@ def render(summaries: list[dict[str, Any]], *, split: str = "test") -> str:
     return "\n".join(lines) + "\n"
 
 
+def level(summary: dict[str, Any]) -> str:
+    return str(summary.get("level") or summary["protocol"])
+
+
+def level_rank(name: str) -> tuple[int, str]:
+    return (LEVELS.index(name), "") if name in LEVELS else (len(LEVELS), name)
+
+
+def protocol_key(summaries: list[dict[str, Any]], protocol: str) -> tuple[int, int, str]:
+    first = next(s for s in summaries if s["protocol"] == protocol)
+    rank, name = level_rank(level(first))
+    return first["scale"], rank, name + protocol
+
+
+def model_key(summary: dict[str, Any]) -> tuple[bool, str, str]:
+    return summary["model"]["parameters"] > 0, summary["model"]["name"], summary["label"]
+
+
+def inputs_digest(rows: list[dict[str, Any]]) -> str:
+    """The shared inputs digest of one protocol's results; "unknown" for older results."""
+    digests = {str(s["inputs_sha256"]) for s in rows if s.get("inputs_sha256")}
+    if len(digests) > 1:
+        labels = ", ".join(f"{s['label']}: {s.get('inputs_sha256')}" for s in rows)
+        raise ValueError(
+            f"protocol {rows[0]['protocol']}: models were scored on different inputs ({labels}); "
+            "re-evaluate them on the frozen inputs"
+        )
+    return digests.pop() if digests else "unknown"
+
+
+def level_summary(summaries: list[dict[str, Any]], scale: int) -> list[str]:
+    """One row per model, one column per degradation level (PSNR-Y / LPIPS / ID sim)."""
+    levels = sorted({level(s) for s in summaries}, key=level_rank)
+    if len(levels) < 2:
+        return []
+    by_label: dict[str, dict[str, dict[str, Any]]] = {}
+    for summary in sorted(summaries, key=model_key):
+        by_label.setdefault(summary["label"], {})[level(summary)] = summary
+    lines = [
+        "",
+        f"## Summary by degradation level — ×{scale}",
+        "",
+        "PSNR-Y / LPIPS / ID sim on all images of each protocol.",
+        "",
+        "| Model | " + " | ".join(levels) + " |",
+        "|---|" + "---|" * len(levels),
+    ]
+    for label, row in by_label.items():
+        cells = [compact(row[name]["subsets"]["all"]) if name in row else "—" for name in levels]
+        lines.append(f"| `{label}` | " + " | ".join(cells) + " |")
+    return lines
+
+
 def cell(stats: dict[str, Any], key: str, fmt: str) -> str:
     value = stats.get(key)
     return fmt.format(value["mean"]) if value else "—"
@@ -115,7 +174,7 @@ def comparison_grid(summaries: list[dict[str, Any]], protocol: str, split: str) 
             for s in summaries
             if s["protocol"] == protocol and s["split"] == split and not s["model"].get("smoke")
         ),
-        key=lambda s: (s["model"]["parameters"] > 0, s["model"]["name"], s["label"]),
+        key=model_key,
     )
     reference = Path(rows[0]["_dir"]).parent / "reference"
     names = sorted(p.name for p in (reference / "hr").glob("*.png"))

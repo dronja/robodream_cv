@@ -4,6 +4,7 @@ include:
   data: ../data/celeba_128.yaml
   degrade: ../degrade/bicubic.yaml
 name: celeba128_bicubic_x8
+level: bicubic
 scale: 8
 split: test
 seed: 0
@@ -12,4 +13,8 @@ metrics:
   # InsightFace buffalo_l recognition model (D18): scripts/download_weights.py buffalo_l
   identity: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/buffalo_l/w600k_r50.onnx
 subgroups: [attr_male, attr_young]
+# Frozen inputs (scripts/protocol_digest.py, 2026-11-24, with the locked uv.lock). Evaluation
+# fails if the LR/HR crops change; see DECISIONS.md, "Synthetic test levels".
+inputs_sha256:
+  test: c36aad932de0604270552f9f0ea247da3f1ea9c6bd1bf493362dd6a2b664359d
 grid_samples: 8   # written to outputs/ only: CelebA faces are not published (D19)

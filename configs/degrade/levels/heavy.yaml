@@ -1,0 +1,59 @@
+# Test degradation level "heavy" (PR 2.2): every sample is blurred, resized, noised and
+# JPEG-compressed, with ranges that do not overlap the other levels and are no stronger than the
+# training mix (configs/degrade/realistic.yaml). Blur sizes in LR px, noise sigma in 8-bit levels; the
+# Poisson peak gives the same noise at mid-grey as the Gaussian range (255 * sqrt(0.5 / peak)).
+# DECISIONS.md, 2026-11-24, "Synthetic test levels".
+kind: pipeline
+quantize: true
+first:
+  blur:
+    prob: 1.0
+    gaussian: 0.45
+    anisotropic: 0.35
+    motion: 0.1
+    defocus: 0.1
+    sigma: [0.7, 1.0]
+    motion_length: [2.0, 3.0]
+    defocus_radius: [1.0, 1.5]
+  resize:                   # the training mix (configs/degrade/realistic.yaml)
+    bicubic: 0.4
+    bilinear: 0.3
+    area: 0.2
+    nearest: 0.1
+    antialias: 0.7
+  noise:
+    prob: 1.0
+    gaussian: 0.6
+    poisson: 0.4
+    sigma: [7.0, 15.0]
+    peak: [150.0, 650.0]
+    gray: 0.4
+  jpeg:
+    prob: 1.0
+    quality: [30, 50]
+second:                     # always: the image was resized and compressed again
+  prob: 1.0
+  size: [1.0, 2.0]
+  stage:
+    blur:
+      prob: 0.5
+      gaussian: 0.6
+      anisotropic: 0.4
+      sigma: [0.1, 0.6]
+    resize:
+      bicubic: 0.4
+      bilinear: 0.3
+      area: 0.2
+      nearest: 0.1
+      antialias: 0.7
+    noise:
+      prob: 0.5
+      gaussian: 0.6
+      poisson: 0.4
+      sigma: [1.0, 5.0]
+      peak: [1300.0, 32500.0]
+      gray: 0.4
+    jpeg:
+      prob: 1.0
+      quality: [30, 50]
+grayscale: 0.0

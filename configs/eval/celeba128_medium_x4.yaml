@@ -1,0 +1,21 @@
+# Phase 2 synthetic test protocol: the frozen CelebA aligned test split, 128 px HR, x4
+# (32 -> 128 px), degradation level "medium" (configs/degrade/levels/medium.yaml). The inputs are
+# frozen by their digest (scripts/protocol_digest.py).
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/levels/medium.yaml
+name: celeba128_medium_x4
+level: medium
+scale: 4
+split: test
+seed: 0
+metrics:
+  lpips: alex
+  # InsightFace buffalo_l recognition model (D18): scripts/download_weights.py buffalo_l
+  identity: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/buffalo_l/w600k_r50.onnx
+subgroups: [attr_male, attr_young]
+# Frozen inputs (scripts/protocol_digest.py, 2026-11-24, with the locked uv.lock). Evaluation
+# fails if the LR/HR crops change; see DECISIONS.md, "Synthetic test levels".
+inputs_sha256:
+  test: 2d92aedd26e8a7b6b91f5604a81f3ecba2a3c60ad75a1a76257e68ee9d938572
+grid_samples: 8   # written to outputs/ only: CelebA faces are not published (D19)

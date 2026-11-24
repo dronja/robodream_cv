@@ -19,7 +19,7 @@
 6. [Data](#6-data)
 7. [Decisions — quick reference](#7-decisions--quick-reference)
 8. [Licenses — status](#8-licenses--status)
-9. [Phase 1 technical design](#9-phase-1-technical-design)
+9. [Technical design](#9-technical-design)
 10. [Roadmap and progress](#10-roadmap-and-progress)
 11. [Open questions, risks, tech debt](#11-open-questions-risks-tech-debt)
 12. [Commands](#12-commands)
@@ -44,17 +44,18 @@ As of 2026-11-24:
 
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
-- **Phase 1: done, once PR 1.7 is merged.**
-  - Merged on 2026-11-24: PR 1.1 (ML dependencies, PR #4, `8a0ccce`), PR 1.2 (dataset
-    preparation, PR #5, `6cf65af`), PR 1.3 (alignment, PR #6, `0a9fc82`), PR 1.4 (dataset +
-    degradation v0, PR #7, `2ece720`), PR 1.5 (models, PR #8, `d2a6d1b`) and PR 1.6 (trainer,
-    PR #9, `9dcc51e`). The prepared CelebA dataset is at `/mnt/storage/AI/Face/celeba` (§6.2).
-  - Full training runs of FNet and CNet × (×4, ×8) finished on 2026-11-24 (§9).
-  - In review: PR 1.7 (evaluation and `docs/RESULTS.md`; branch `feat/eval`).
+- **Phase 1 (package and reproducible baseline): done** on 2026-11-24.
+  - Merged: PR 1.1 (ML dependencies, PR #4, `8a0ccce`), PR 1.2 (dataset preparation, PR #5,
+    `6cf65af`), PR 1.3 (alignment, PR #6, `0a9fc82`), PR 1.4 (dataset + degradation v0, PR #7,
+    `2ece720`), PR 1.5 (models, PR #8, `d2a6d1b`), PR 1.6 (trainer, PR #9, `9dcc51e`) and PR 1.7
+    (evaluation and results, PR #10, `d206d6f`).
+  - The prepared CelebA dataset is at `/mnt/storage/AI/Face/celeba` (§6.2).
   - Baseline results: [`RESULTS.md`](RESULTS.md). FNet is the best of the three baselines on
     every metric at both scales.
-  - Next: Phase 2 (realistic degradations). It needs a decision on the real-world test set
-    source, and the quality-gate thresholds for Phase 3 are still to be set (`CLAUDE.md` §10).
+- **Phase 2 (realistic degradations): in progress.**
+  - In review: PR 2.1 (degradation pipeline; branch `feat/degrade`).
+  - Open: the source of the real-world test set (needed by PR 2.3). The quality-gate thresholds
+    for Phase 3 are still to be set (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -67,7 +68,7 @@ robodream_cv/
 ├── README.md                  # public description (English)
 ├── LICENSE
 ├── pyproject.toml, uv.lock    # uv project, hatchling build; ruff, mypy, pytest config
-├── configs/                   # data/celeba_128.yaml, degrade/bicubic.yaml,
+├── configs/                   # data/celeba_128.yaml, degrade/{bicubic,realistic}.yaml,
 │                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
 │                              # eval/celeba128_x{4,8}.yaml
 ├── .python-version            # 3.12
@@ -76,7 +77,7 @@ robodream_cv/
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train, eval)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
-│   │                          # dataset.py (AlignedFaces)
+│   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py
 │   ├── config.py              # load_config: dataclass schema + YAML (include, overrides)
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py
@@ -85,11 +86,12 @@ robodream_cv/
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # license_report.py (license table from package metadata),
-│                              # download_weights.py, make_results.py, reproduce_phase1.sh
+│                              # download_weights.py, make_results.py, reproduce_phase1.sh,
+│                              # preview_degradations.py
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
-│                              # alignment (similarity, template, warp), config, degrade,
+│                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
@@ -289,9 +291,11 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Local use only, nothing is distributed (D13). Review the redistribution terms if that changes |
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
 
-## 9. Phase 1 technical design
+## 9. Technical design
 
-The agreed approach. Details are fixed in the corresponding PRs.
+The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, then Phase 2.
+
+### Phase 1
 
 - **General.** PyTorch 2.x, YAML configs with OmegaConf, no magic constants in the code. Every run
   stores its config, git hash, seed and library versions in its own run directory (D17).
@@ -472,6 +476,43 @@ The agreed approach. Details are fixed in the corresponding PRs.
 - **Reproduction.** `scripts/reproduce_phase1.sh` runs prepare → train (FNet, CNet × ×4, ×8) →
   eval → `RESULTS.md`.
 
+### Phase 2
+
+- **Degradation pipeline (PR 2.1, in review).** `kind: pipeline` in `DegradeConfig`
+  (`facehall.data.degrade.Pipeline`); details and reasons in `DECISIONS.md` (2026-11-24,
+  "Degradation pipeline"). The training mix is `configs/degrade/realistic.yaml`.
+  - **Per sample:**
+    1. grayscale (probability 0.02 in `realistic`), which turns the HR target grey too;
+    2. stage `first`: blur → resize → noise → JPEG;
+    3. optional stage `second` (Real-ESRGAN-style second order): the first stage then ends at
+       0.75–2× the LR size, and the second one resizes to the LR size;
+    4. optional colour shift of the LR only (off in `realistic`);
+    5. clamp and round to 8-bit levels.
+  - **Operations:**
+    - blur: isotropic and anisotropic Gaussian, motion, defocus (`facehall.data.kernels`);
+    - resize: bicubic, bilinear, area, nearest, with antialias drawn for bicubic and bilinear;
+    - noise: Gaussian, Poisson, colour or grey;
+    - JPEG: OpenCV, single-channel for grey images.
+  - **Units:** blur sizes are in LR pixels and are scaled to each stage's working resolution, so
+    one config gives the same blur in the LR image at ×4 and ×8. Noise is in 8-bit levels.
+  - **Interface:** a degradation returns `Degraded(lr, hr, params)`. Each sample carries the
+    drawn parameters as a JSON string (`degradation`), for storing with val/test results in
+    PR 2.2.
+  - `kind: bicubic` (v0) is unchanged. The pipeline with default settings reproduces it exactly
+    (tested).
+  - **HR embedding cache:** the fingerprint includes the degradation only when it can change the
+    HR target (grayscale), so the Phase 1 caches stay valid.
+  - **Not implemented:** H.264/H.265 (optional in `CLAUDE.md` §7) and Real-ESRGAN's sinc filter.
+  - **Measured on 2026-11-24** (CelebA train, 8 DataLoader workers):
+    - one `realistic` degradation call takes about 0.6 ms;
+    - loading runs at about 5,000 samples/s with `realistic`, against 7,300–7,500 with bicubic;
+      both are above the ~3,700 img/s of training;
+    - smoke runs of FNet ×4 and ×8 with `realistic` pass.
+  - **Preview:** `scripts/preview_degradations.py` writes a grid of HR crops and LR variants and
+    the drawn parameters to `outputs/degrade/` (local, D19). In the first look, `realistic` leans
+    towards heavy blur, so the first-stage maximum sigma was lowered from 1.2 to 1.0 LR px. The
+    ranges are initial values, to be tuned against the real-world test set.
+
 ## 10. Roadmap and progress
 
 Each step is compared with the previous best on the same frozen test set. A smoke run (a few
@@ -517,14 +558,18 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Phase 2 — realistic degradations
 
-- [ ] Degradation pipeline from config: blur (isotropic and anisotropic Gaussian, motion,
-      defocus), random interpolation with and without antialias, noise (Gaussian, Poisson, colour
-      and grey), JPEG; optionally H.264/H.265, second-order degradation (Real-ESRGAN style),
-      grayscale, colour shift
-- [ ] Frozen synthetic test with 3 levels (light, medium, heavy) and stored parameters
-- [ ] Real-world test set; the source is chosen with the user
-- [ ] No-reference metrics (NIQE, FID); library licenses verified
-- [ ] Re-train the baseline; compare clean vs realistic training on the real-world set
+- [x] **PR 2.1** `feat(data):` degradation pipeline from config: blur (isotropic and
+      anisotropic Gaussian, motion, defocus), random interpolation with and without antialias,
+      noise (Gaussian, Poisson, colour and grey), JPEG, second-order degradation (Real-ESRGAN
+      style), grayscale, colour shift; `configs/degrade/realistic.yaml`; preview script. Tests:
+      kernels, noise levels, determinism, units, equality with v0
+- [ ] *(optional)* H.264/H.265 compression
+- [ ] **PR 2.2** `feat(eval):` frozen synthetic test with 3 levels (light, medium, heavy); the
+      drawn parameters stored per image
+- [ ] **PR 2.3** Real-world test set (the source is chosen with the user) and no-reference
+      metrics (NIQE, FID); library licenses verified
+- [ ] **PR 2.4** Re-train the baseline with realistic degradations (confirm first); compare
+      clean vs realistic training on the synthetic levels and the real-world set
 
 **Done when** the effect of the degradations on real photos is measured and documented.
 
@@ -600,6 +645,10 @@ with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16.
   multi-threaded process may deadlock (seen in the tests). The one deadlock found so far is the
   OpenCV one (§9), and the trainer avoids it. Python 3.14 changes the default to `forkserver`;
   revisit this when moving to it.
+- The realistic degradation ranges (§9, Phase 2) are initial values chosen from the literature
+  and a visual check. If they do not match real low-quality faces, a model trained on them may
+  over-smooth light inputs or under-restore heavy ones. They are tuned in PR 2.4 against the
+  real-world test set.
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -636,6 +685,8 @@ uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/
 bash scripts/reproduce_phase1.sh               # Phase 1 end to end (full training: confirm first)
+uv run python scripts/preview_degradations.py --degrade configs/degrade/realistic.yaml --scale 4
+                                               # grid + parameters in outputs/degrade/ (local)
 ```
 
 Planned (target interface):

@@ -5,6 +5,7 @@ landmarks) is optionally perturbed by jitter and a horizontal flip, the image is
 the HR crop, and the degradation produces the LR input.
 """
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -43,8 +44,10 @@ class AlignedFaces(Dataset[Sample]):
     """HR/LR pairs for one split of a prepared dataset.
 
     A sample is a dict:
-    - ``hr``: (3, S, S) float32 in [0, 1], S = ``data.hr_size``;
+    - ``hr``: (3, S, S) float32 in [0, 1], S = ``data.hr_size``; the training target, turned
+      grey when the degradation draws grayscale;
     - ``lr``: (3, S / scale, S / scale) float32 in [0, 1];
+    - ``degradation``: the drawn degradation parameters as a JSON string (``Degraded.params``);
     - ``index``: position in this dataset (``path(index)`` gives the image file);
     - ``padded``: fraction of HR pixels that lie outside the source image (D16);
     - ``blurry``: the CelebA ``Blurry`` attribute (D15).
@@ -136,9 +139,11 @@ class AlignedFaces(Dataset[Sample]):
         height, width = image.shape[:2]
         padded = 1.0 - float(valid_mask(matrix, (width, height), size).mean())
         hr_tensor = torch.from_numpy(np.ascontiguousarray(hr)).permute(2, 0, 1).float() / 255.0
+        degraded = self._degradation(hr_tensor, self.scale, rng)
         return {
-            "hr": hr_tensor,
-            "lr": self._degradation(hr_tensor, self.scale, rng),
+            "hr": degraded.hr,
+            "lr": degraded.lr,
+            "degradation": json.dumps(degraded.params, sort_keys=True),
             "index": index,
             "padded": padded,
             "blurry": bool(self._blurry[index]),

@@ -37,6 +37,29 @@ def umeyama(src: npt.ArrayLike, dst: npt.ArrayLike) -> Matrix:
     return np.hstack([scale * rotation, translation[:, None]])
 
 
+def umeyama_batch(src: npt.ArrayLike, dst: npt.ArrayLike) -> npt.NDArray[np.float64]:
+    """``umeyama`` for many point sets at once: (B, N, 2) to (N, 2) or (B, N, 2) -> (B, 2, 3).
+
+    In 2-D the least-squares proper similarity is the complex least-squares fit
+    ``z -> k * z + t``, which this computes in closed form.
+    """
+    a = np.asarray(src, dtype=np.float64)
+    b = np.broadcast_to(np.asarray(dst, dtype=np.float64), a.shape)
+    if a.ndim != 3 or a.shape[2] != 2 or a.shape[1] < 2:
+        raise ValueError(f"expected (B, N, 2) source points with N >= 2, got {a.shape}")
+    za = a[..., 0] + 1j * a[..., 1]
+    zb = b[..., 0] + 1j * b[..., 1]
+    mean_a, mean_b = za.mean(axis=1), zb.mean(axis=1)
+    da, db = za - mean_a[:, None], zb - mean_b[:, None]
+    var = (np.abs(da) ** 2).sum(axis=1)
+    if (var < _EPS).any():
+        raise ValueError("source points are degenerate (all equal)")
+    k = (np.conj(da) * db).sum(axis=1) / var
+    t = mean_b - k * mean_a
+    rows = [[k.real, -k.imag, t.real], [k.imag, k.real, t.imag]]
+    return np.stack([np.stack(row, axis=-1) for row in rows], axis=1)
+
+
 def transform_points(matrix: Matrix, points: npt.ArrayLike) -> Points:
     """Apply ``matrix`` to an (N, 2) array of points."""
     p = np.asarray(points, dtype=np.float64)

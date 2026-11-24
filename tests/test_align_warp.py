@@ -4,9 +4,26 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from facehall.align.similarity import angle_of, invert, scale_of, transform_points
+from facehall.align.similarity import (
+    angle_of,
+    compose,
+    invert,
+    scale_of,
+    transform_points,
+    translation,
+    umeyama,
+)
 from facehall.align.template import CELEBA_TEMPLATE
-from facehall.align.warp import Image, Jitter, alignment_matrix, unwarp, valid_mask, warp
+from facehall.align.warp import (
+    Image,
+    Jitter,
+    alignment_matrices,
+    alignment_matrix,
+    hflip_matrix,
+    unwarp,
+    valid_mask,
+    warp,
+)
 
 SOURCE_SIZE = (178, 218)  # (width, height), as CelebA aligned
 LANDMARKS = np.array([[69.0, 111.0], [107.0, 112.0], [88.0, 135.0], [71.0, 152.0], [105.0, 153.0]])
@@ -154,3 +171,22 @@ def test_jitter_stays_within_limits() -> None:
 def test_negative_jitter_is_rejected() -> None:
     with pytest.raises(ValueError, match="non-negative"):
         Jitter(rotation=-1.0)
+
+
+def test_alignment_matrices_match_single_fits() -> None:
+    rng = np.random.default_rng(3)
+    batch = LANDMARKS + rng.normal(0.0, 3.0, (8, 5, 2))
+    matrices = alignment_matrices(batch, CELEBA_TEMPLATE, 128)
+    for landmarks, matrix in zip(batch, matrices, strict=True):
+        expected = compose(
+            translation(-0.5, -0.5),
+            compose(umeyama(landmarks + 0.5, CELEBA_TEMPLATE * 128), translation(0.5, 0.5)),
+        )
+        np.testing.assert_allclose(matrix, expected, atol=1e-9)
+
+
+def test_hflip_matrix_mirrors_crop_coordinates() -> None:
+    points = np.array([[0.0, 3.0], [127.0, 5.0], [63.5, 0.0]])
+    np.testing.assert_allclose(
+        transform_points(hflip_matrix(128), points), [[127.0, 3.0], [0.0, 5.0], [63.5, 0.0]]
+    )

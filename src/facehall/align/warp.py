@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from facehall.align.similarity import Matrix, compose, translation, umeyama
+from facehall.align.similarity import Matrix, umeyama_batch
 
 INTERPOLATIONS = {
     "nearest": cv2.INTER_NEAREST,
@@ -37,11 +37,28 @@ def alignment_matrix(landmarks: npt.ArrayLike, template: npt.ArrayLike, size: in
     Fitted by least squares so that ``landmarks`` (pixel-centre coordinates in the source) land
     as close as possible to the normalized ``template`` points.
     """
+    batch = np.asarray(landmarks, dtype=np.float64)[None]
+    matrix: Matrix = alignment_matrices(batch, template, size)[0]
+    return matrix
+
+
+def alignment_matrices(
+    landmarks: npt.ArrayLike, template: npt.ArrayLike, size: int
+) -> npt.NDArray[np.float64]:
+    """``alignment_matrix`` for a (B, N, 2) batch of landmark sets; returns (B, 2, 3)."""
     if size <= 0:
         raise ValueError(f"crop size must be positive, got {size}")
-    # Fit in continuous coordinates (pixel centre at +0.5), then convert back.
-    fitted = umeyama(np.asarray(landmarks, dtype=np.float64) + 0.5, np.asarray(template) * size)
-    return compose(translation(-0.5, -0.5), compose(fitted, translation(0.5, 0.5)))
+    # Fit in continuous coordinates (pixel centre at +0.5), then convert back:
+    # out = A (p + 0.5) + t - 0.5.
+    points = np.asarray(landmarks, dtype=np.float64)
+    fitted = umeyama_batch(points + 0.5, np.asarray(template, dtype=np.float64) * size)
+    fitted[:, :, 2] += fitted[:, :, :2].sum(axis=2) * 0.5 - 0.5
+    return fitted
+
+
+def hflip_matrix(size: int) -> Matrix:
+    """Horizontal flip of a ``size`` x ``size`` crop, in crop pixel-centre coordinates."""
+    return np.array([[-1.0, 0.0, size - 1.0], [0.0, 1.0, 0.0]])
 
 
 @dataclass(frozen=True)

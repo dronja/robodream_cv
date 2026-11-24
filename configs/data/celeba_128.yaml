@@ -1,0 +1,13 @@
+# CelebA aligned, prepared by scripts/prepare_dataset.py (docs/DATA.md), 128x128 HR crops.
+# Set FACEHALL_DATA to use another data root (default: the dev machine).
+root: ${oc.env:FACEHALL_DATA,/mnt/storage/AI/Face}/celeba
+hr_size: 128
+template: celeba            # facehall.align.CELEBA_TEMPLATE (docs/PROJECT.md §6.3)
+interpolation: bicubic      # source -> HR crop warp
+border: reflect             # padding for crops that reach outside the image (D16)
+exclude_blurry: [train]     # Blurry = 1 images are dropped from train only (D15)
+hflip: 0.5                  # train only; the template is left-right symmetric
+jitter:                     # train only; initial values, to be tuned
+  shift: 0.03               # up to 3% of the crop side per axis (about 1 LR px at x4)
+  rotation: 5.0             # degrees
+  scale: 0.05               # factor in [1/1.05, 1.05]

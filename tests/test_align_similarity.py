@@ -12,6 +12,7 @@ from facehall.align.similarity import (
     transform_points,
     translation,
     umeyama,
+    umeyama_batch,
 )
 
 
@@ -85,3 +86,15 @@ def test_invert_and_compose() -> None:
     np.testing.assert_allclose(
         transform_points(compose(shift, m), POINTS), transform_points(m, POINTS) + [1.0, 2.0]
     )
+
+
+def test_umeyama_batch_matches_umeyama() -> None:
+    rng = np.random.default_rng(1)
+    src = rng.normal(0.0, 30.0, (20, 5, 2))
+    dst = rng.normal(0.0, 30.0, (5, 2))
+    batch = umeyama_batch(src, dst)
+    assert batch.shape == (20, 2, 3)
+    for i in range(20):
+        np.testing.assert_allclose(batch[i], umeyama(src[i], dst), atol=1e-9)
+    with pytest.raises(ValueError, match="degenerate"):
+        umeyama_batch(np.ones((2, 5, 2)), dst)

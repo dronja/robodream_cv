@@ -1,0 +1,22 @@
+# FNet with the legacy training recipe (legacy/FH.ipynb; docs/PROJECT.md §9) on the Phase 1
+# protocol: x8, 16 -> 128 px, CelebA aligned, bicubic degradation v0.
+# Fits 8 GB VRAM at this batch size (D6). Recipe changes: DECISIONS.md, "Trainer (PR 1.6)".
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/bicubic.yaml
+  model: ../model/fnet.yaml
+name: fnet_x8
+scale: 8
+seed: 0
+train:
+  epochs: 10
+  early_stopping: 3   # Keras EarlyStopping(monitor="val_loss", patience=3)
+  batch_size: 16
+  loss: mse
+  optimizer:          # Keras Adam defaults
+    name: adam
+    lr: 1.0e-3
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-7
+  precision: bf16

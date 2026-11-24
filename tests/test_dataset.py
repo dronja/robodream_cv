@@ -1,10 +1,10 @@
 """Tests for facehall.data.dataset on a tiny synthetic prepared dataset."""
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-import pyarrow as pa
 import pytest
 import torch
 from PIL import Image
@@ -15,10 +15,8 @@ from facehall.align.template import CELEBA_TRAIN_MEAN_LANDMARKS
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
 from facehall.data.dataset import AlignedFaces
 from facehall.data.degrade import Bicubic
-from facehall.data.manifest import REQUIRED_FIELDS, write_manifest
 
-BROKEN = [84, 105, 94, 104, 91, 109, 88, 116, 95, 114]  # all points between the eyes
-# split, blurry, landmark offset (or None for BROKEN)
+# split, blurry, landmark offset (None: broken landmarks), see conftest.write_synthetic_dataset
 ROWS = [
     ("train", False, (0, 0)),
     ("train", True, (1, -1)),
@@ -35,51 +33,12 @@ ROWS = [
 ]
 
 
-def image(seed: int) -> Image.Image:
-    y, x = np.mgrid[0:218, 0:178]
-    channels = [np.sin(x / (5.0 + seed) + y / 11.0), np.cos(y / 7.0 - seed), np.sin((x - y) / 13.0)]
-    pixels = (127.5 + 120 * np.stack(channels, axis=-1)).astype(np.uint8)
-    return Image.fromarray(pixels)
-
-
 @pytest.fixture(scope="module")
-def root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    root = tmp_path_factory.mktemp("dataset")
-    columns: dict[str, list[object]] = {f.name: [] for f in REQUIRED_FIELDS}
-    columns["landmarks"], columns["attr_blurry"] = [], []
-    for i, (split, blurry, offset) in enumerate(ROWS):
-        suffix = ".png" if split == "train" else ".jpg"
-        path = f"img_align/{split}/{i:06d}{suffix}"
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        image(i).save(root / path)
-        if offset is None:
-            landmarks = BROKEN
-        else:
-            points = np.round(CELEBA_TRAIN_MEAN_LANDMARKS + offset).astype(int)
-            landmarks = points.reshape(-1).tolist()
-        values = {
-            "path": path,
-            "sha256": f"{i:064x}",
-            "split": split,
-            "identity_id": i,
-            "width": 178,
-            "height": 218,
-            "source": "synthetic",
-            "license": "test",
-            "landmarks": landmarks,
-            "attr_blurry": blurry,
-        }
-        for name, value in values.items():
-            columns[name].append(value)
-    schema = pa.schema(
-        [
-            *REQUIRED_FIELDS,
-            pa.field("landmarks", pa.list_(pa.int32(), 10)),
-            pa.field("attr_blurry", pa.bool_()),
-        ]
-    )
-    write_manifest(pa.Table.from_pydict(columns, schema=schema), root)
-    return root
+def root(
+    tmp_path_factory: pytest.TempPathFactory,
+    make_dataset: Callable[..., Path],
+) -> Path:
+    return make_dataset(tmp_path_factory.mktemp("dataset"), ROWS)
 
 
 @pytest.fixture

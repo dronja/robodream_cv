@@ -5,7 +5,6 @@ landmarks) is optionally perturbed by jitter and a horizontal flip, the image is
 the HR crop, and the degradation produces the LR input.
 """
 
-from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -28,6 +27,7 @@ from facehall.align import (
     warp,
 )
 from facehall.align.similarity import Points
+from facehall.config import require_choice
 from facehall.data.config import DataConfig, DegradeConfig
 from facehall.data.degrade import build_degradation
 from facehall.data.manifest import SPLITS, read_manifest
@@ -160,11 +160,6 @@ def _check_settings(data: DataConfig, split: str, scale: int) -> None:
     unknown = set(data.exclude_blurry) - set(SPLITS)
     if unknown:
         raise ValueError(f"exclude_blurry has unknown splits: {sorted(unknown)}")
-    _require(data.template, TEMPLATES, "template")
-    _require(data.interpolation, INTERPOLATIONS, "interpolation")
-    _require(data.border, BORDERS, "border")
-
-
-def _require(value: str, options: Iterable[str], kind: str) -> None:
-    if value not in options:
-        raise ValueError(f"unknown {kind} {value!r}; expected one of {sorted(options)}")
+    require_choice(data.template, TEMPLATES, "template")
+    require_choice(data.interpolation, INTERPOLATIONS, "interpolation")
+    require_choice(data.border, BORDERS, "border")

@@ -1,0 +1,23 @@
+# FNet with the legacy training recipe (as configs/train/fnet_x4.yaml) on realistic degradations
+# (configs/degrade/realistic.yaml): x4, 32 -> 128 px, CelebA aligned. Only the degradation differs
+# from fnet_x4, so the two runs compare clean and realistic training (PR 2.4).
+# Fits 8 GB VRAM at this batch size (D6). Recipe changes: DECISIONS.md, "Trainer (PR 1.6)".
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic.yaml
+  model: ../model/fnet.yaml
+name: fnet_x4_realistic
+scale: 4
+seed: 0
+train:
+  epochs: 10
+  early_stopping: 3   # Keras EarlyStopping(monitor="val_loss", patience=3)
+  batch_size: 16
+  loss: mse
+  optimizer:          # Keras Adam defaults
+    name: adam
+    lr: 1.0e-3
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-7
+  precision: bf16

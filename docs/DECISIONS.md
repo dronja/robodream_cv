@@ -269,3 +269,27 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
   - In a visual check on 8 val crops, an upper σ of 1.2 LR px made most samples very blurry, so it was lowered to 1.0.
   - They are tuned in PR 2.4 against the real-world test set, so they are a default, not a finding.
 - **Parameters per sample:** so validation and test results can be broken down by degradation (PR 2.2).
+
+### Synthetic test levels and frozen inputs (PR 2.2)
+**Decision:**
+- **Levels:** the synthetic test has three degradation levels, light, medium and heavy (`configs/degrade/levels/`).
+  - Every sample gets blur, a resize, noise and JPEG.
+  - The ranges grow from level to level without overlapping, and stay no stronger than the training mix `realistic`.
+  - Heavy adds a second resize and compression stage.
+  - The resize mix is the training mix in every level, and there is no grayscale.
+  - The ranges are in `docs/PROJECT.md` §9.
+- **Protocols:** each level is its own protocol per scale (`celeba128_<level>_x{4,8}`) on the frozen test split with seed 0. The two Phase 1 bicubic protocols get `level: bicubic`.
+- **Frozen inputs:**
+  - every protocol lists the sha256 of all its LR and HR crops (`inputs_sha256`);
+  - an evaluation whose inputs differ fails;
+  - refreezing is a deliberate change that requires re-evaluating every model.
+- **Per image:** the drawn degradation parameters are stored with the results.
+
+**Reason:**
+- **All four degradations at every level:** the levels then measure severity, not which degradations happen to be present. The per-image parameters still allow a breakdown by a single factor.
+- **Within the training mix:** the levels test the training distribution from its mild end to its upper end. Robustness to unseen degradations is the job of the real-world test set (PR 2.3).
+- **Frozen inputs:**
+  - The protocol config and seed define the inputs only together with the library versions. JPEG encoding (OpenCV/libjpeg), resampling (torch) and random streams (numpy) may change between versions.
+  - A digest turns such a change into an error instead of silently incomparable numbers.
+  - A digest is cheap: about 4 s per protocol, and it is computed during evaluation anyway.
+- **Bicubic protocols frozen too:** the PR 2.1 pipeline left `kind: bicubic` unchanged, so re-evaluating the Phase 1 models from this commit must reproduce the Phase 1 numbers exactly. It did: the tables were identical on 2026-11-24.

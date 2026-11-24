@@ -53,7 +53,8 @@ As of 2026-11-24:
   - Baseline results: [`RESULTS.md`](RESULTS.md). FNet is the best of the three baselines on
     every metric at both scales.
 - **Phase 2 (realistic degradations): in progress.**
-  - In review: PR 2.1 (degradation pipeline; branch `feat/degrade`).
+  - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`).
+  - In review: PR 2.2 (frozen synthetic test levels; branch `feat/eval-levels`).
   - Open: the source of the real-world test set (needed by PR 2.3). The quality-gate thresholds
     for Phase 3 are still to be set (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
@@ -69,8 +70,9 @@ robodream_cv/
 ├── LICENSE
 ├── pyproject.toml, uv.lock    # uv project, hatchling build; ruff, mypy, pytest config
 ├── configs/                   # data/celeba_128.yaml, degrade/{bicubic,realistic}.yaml,
+│                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
-│                              # eval/celeba128_x{4,8}.yaml
+│                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
@@ -87,7 +89,7 @@ robodream_cv/
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # license_report.py (license table from package metadata),
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
-│                              # preview_degradations.py
+│                              # preview_degradations.py, protocol_digest.py
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
@@ -451,7 +453,8 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     similarity. SR is rounded to 8 bit first.
   - **ID similarity:** InsightFace `buffalo_l` `w600k_r50.onnx` (D18) on CPU through ONNX
     Runtime. Crops go to the ArcFace template with one fixed similarity, so no detector is
-    involved. HR embeddings are cached per protocol and split (`reference/identity_hr.npz`).
+    involved. HR embeddings are cached once per fingerprint, so protocols with the same HR
+    crops share them (`outputs/eval/_cache/`, PR 2.2; per protocol before).
     Sanity check on 60 val identities: same-identity pairs 0.565 mean cosine, different
     identities 0.015 (max 0.143).
   - **Subsets:** all, `Blurry` = 0 (D15), no padding (D16), `Male` = 1 / 0, `Young` = 1 / 0.
@@ -478,7 +481,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
 
 ### Phase 2
 
-- **Degradation pipeline (PR 2.1, in review).** `kind: pipeline` in `DegradeConfig`
+- **Degradation pipeline (PR 2.1, done).** `kind: pipeline` in `DegradeConfig`
   (`facehall.data.degrade.Pipeline`); details and reasons in `DECISIONS.md` (2026-11-24,
   "Degradation pipeline"). The training mix is `configs/degrade/realistic.yaml`.
   - **Per sample:**
@@ -496,8 +499,8 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Units:** blur sizes are in LR pixels and are scaled to each stage's working resolution, so
     one config gives the same blur in the LR image at ×4 and ×8. Noise is in 8-bit levels.
   - **Interface:** a degradation returns `Degraded(lr, hr, params)`. Each sample carries the
-    drawn parameters as a JSON string (`degradation`), for storing with val/test results in
-    PR 2.2.
+    drawn parameters as a JSON string (`degradation`); evaluation stores them per image
+    (PR 2.2).
   - `kind: bicubic` (v0) is unchanged. The pipeline with default settings reproduces it exactly
     (tested).
   - **HR embedding cache:** the fingerprint includes the degradation only when it can change the
@@ -512,6 +515,53 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     the drawn parameters to `outputs/degrade/` (local, D19). In the first look, `realistic` leans
     towards heavy blur, so the first-stage maximum sigma was lowered from 1.2 to 1.0 LR px. The
     ranges are initial values, to be tuned against the real-world test set.
+- **Synthetic test levels (PR 2.2, in review).** Details and reasons in `DECISIONS.md`
+  (2026-11-24, "Synthetic test levels").
+  - **Levels:** `configs/degrade/levels/{light,medium,heavy}.yaml`. Every sample is blurred,
+    resized, noised and JPEG-compressed:
+
+    | Level | Blur σ (LR px) | Motion / defocus (LR px) | Noise σ (levels) | JPEG quality | Second stage |
+    |---|---|---|---|---|---|
+    | light | 0.1–0.4 | 0.5–1.0 / 0.3–0.6 | 1–3 | 75–95 | no |
+    | medium | 0.4–0.7 | 1.0–2.0 / 0.6–1.0 | 3–7 | 50–75 | no |
+    | heavy | 0.7–1.0 | 2.0–3.0 / 1.0–1.5 | 7–15 | 30–50 | always |
+
+    - Ranges do not overlap between levels and are no stronger than the training mix
+      (`realistic`), which is tested.
+    - Poisson noise uses the peak that gives the same noise at mid-grey as the Gaussian range.
+    - The resize mix is the training mix.
+    - No grayscale.
+  - **Protocols:** `configs/eval/celeba128_{light,medium,heavy}_x{4,8}.yaml`, plus the two
+    bicubic protocols from Phase 1 (`level: bicubic`). All on the frozen test split, seed 0.
+  - **Frozen inputs:**
+    - every evaluation records the sha256 of all LR and HR crops (`inputs_sha256` in
+      `metrics.json`); the digest does not depend on the batch size or the workers;
+    - all eight protocols list their digest, so an evaluation whose inputs differ fails instead
+      of producing numbers that cannot be compared (for example after an OpenCV or numpy
+      update);
+    - `scripts/protocol_digest.py` prints and checks the digests. Computing all eight takes about
+      30 s.
+  - **Per image:** `per_image.parquet` stores the drawn degradation parameters (`degradation`,
+    JSON), so results can be broken down by blur, noise or JPEG without re-running.
+  - **Report:** `RESULTS.md` starts with a summary per scale (model × level). It fails if the
+    models of one protocol were scored on different inputs.
+  - **Evaluation of the Phase 1 models,** 2026-11-24:
+    - bicubic, FNet and CNet on all eight protocols, from commit `8f0c0af` in a separate
+      worktree; 24 runs in 71 min;
+    - the HR embeddings were computed once and shared by all protocols;
+    - every input digest matched its frozen value;
+    - the bicubic-protocol tables are identical to the Phase 1 ones, so the Phase 1 results
+      reproduce from this commit.
+    - Tables: [`RESULTS.md`](RESULTS.md). Observations:
+      - The models trained on clean bicubic inputs (Phase 1) generalise poorly:
+        - **ID similarity:** on every level, at both scales, both models score lower than plain
+          bicubic upsampling (×4 light: FNet 0.449, CNet 0.442, bicubic 0.547);
+        - **LPIPS:** lower (better) than bicubic;
+        - **PSNR-Y:** within ±0.5 dB of bicubic from medium on.
+      - In the local ×4 light grid, the models sharpen noise and JPEG blocks into false texture
+        (skin and wrinkle-like patterns). This was seen on 8 samples and not measured. It
+        explains how perceptual sharpness can rise while identity falls.
+      - Re-training on realistic degradations (PR 2.4) is measured against these numbers.
 
 ## 10. Roadmap and progress
 
@@ -564,8 +614,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       style), grayscale, colour shift; `configs/degrade/realistic.yaml`; preview script. Tests:
       kernels, noise levels, determinism, units, equality with v0
 - [ ] *(optional)* H.264/H.265 compression
-- [ ] **PR 2.2** `feat(eval):` frozen synthetic test with 3 levels (light, medium, heavy); the
-      drawn parameters stored per image
+- [x] **PR 2.2** `feat(eval):` frozen synthetic test with 3 levels (light, medium, heavy); the
+      drawn parameters stored per image; input digests; Phase 1 models evaluated on every level
 - [ ] **PR 2.3** Real-world test set (the source is chosen with the user) and no-reference
       metrics (NIQE, FID); library licenses verified
 - [ ] **PR 2.4** Re-train the baseline with realistic degradations (confirm first); compare
@@ -687,6 +737,8 @@ uv run python scripts/make_results.py          # docs/RESULTS.md + local grids i
 bash scripts/reproduce_phase1.sh               # Phase 1 end to end (full training: confirm first)
 uv run python scripts/preview_degradations.py --degrade configs/degrade/realistic.yaml --scale 4
                                                # grid + parameters in outputs/degrade/ (local)
+uv run facehall eval --config configs/eval/celeba128_heavy_x8.yaml --model bicubic   # a level
+uv run python scripts/protocol_digest.py configs/eval/*.yaml   # check the frozen inputs
 ```
 
 Planned (target interface):

@@ -451,3 +451,21 @@ Run on 2026-11-24 from commit `a9bff19`, about 25 min per scale. The full tables
   - A model trained on it is evaluated outside its training range on those levels.
   - The levels stay frozen, so that results remain comparable.
   - Of the levels, medium is closest to real ×4 faces and light to real ×8 faces (table above).
+
+### FNet ×8 on the tuned mix (PR 2.7)
+**Decision:**
+- **What was trained:** FNet ×8 was re-trained on `configs/degrade/realistic_x8.yaml` (PR 2.6)
+  with the PR 2.4 recipe (`configs/train/fnet_x8_tuned.yaml`). Only the degradation differs from
+  `fnet_x8_realistic`.
+- **×4 not re-trained:** its mix did not change in PR 2.6.
+- **Both ×8 models stay as references.** Which ×8 mix Phase 3 trains on is open (Q7 in
+  `docs/PROJECT.md` §11).
+
+**Reason:**
+- **One variable:** as in PR 2.4, the comparison isolates the effect of the degradation ranges.
+- **Cost:** the run took 7.5 min, under the 30 min that needs a separate confirmation. The user
+  asked to continue with this step on 2026-11-25.
+- **Results** (`docs/PROJECT.md` §9): a trade-off, not a gain everywhere.
+  - The tuned mix raises ID similarity on clean, light and medium inputs.
+  - It loses LPIPS on medium and heavy inputs. Those levels lie outside its smaller blur range.
+  - On real photos, FID and KID are about equal.

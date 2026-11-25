@@ -1,7 +1,7 @@
 # facehall — project overview
 
 > **Single source of truth** for facts, current state, environment, data and the work plan.
-> Last updated: **2026-11-24**.
+> Last updated: **2026-11-25**.
 >
 > - Rules of work and product requirements: [`CLAUDE.md`](../CLAUDE.md) (it imports this file).
 > - Decisions with dates and reasons: [`DECISIONS.md`](DECISIONS.md).
@@ -40,7 +40,7 @@
 
 ## 2. Status snapshot
 
-As of 2026-11-24:
+As of 2026-11-25:
 
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
@@ -52,7 +52,8 @@ As of 2026-11-24:
   - The prepared CelebA dataset is at `/mnt/storage/AI/Face/celeba` (§6.2).
   - Baseline results: [`RESULTS.md`](RESULTS.md). FNet is the best of the three baselines on
     every metric at both scales.
-- **Phase 2 (realistic degradations): in progress.**
+- **Phase 2 (realistic degradations): complete once PR 2.7 is merged.** The optional
+  H.264/H.265 item stays open.
   - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`), PR 2.2 (frozen synthetic test
     levels, PR #12, `4701155`) and PR 2.4 (FNet trained on realistic degradations, PR #13,
     `e090b74`; done before PR 2.3 at the user's choice) and PR 2.3 (real-world test set from
@@ -60,10 +61,12 @@ As of 2026-11-24:
   - Also merged: PR 2.5 (evaluation on real-world faces without reference, PR #15, `92f245f`).
     With it, the effect of the degradations on real photos is measured (§9), which is the
     Phase 2 "done when" criterion.
-  - In review: PR 2.6 (degradation ranges tuned against the WIDER `val` part, no training;
-    branch `feat/tune-degradations`). Result: a tuned mix for ×8; ×4 keeps `realistic.yaml`.
+  - Also merged: PR 2.6 (degradation ranges tuned against the WIDER `val` part, PR #16,
+    `14dbf6e`). Result: a tuned mix for ×8; ×4 keeps `realistic.yaml`.
+  - In review: PR 2.7 (FNet ×8 re-trained on the tuned mix; branch `feat/train-x8-tuned`).
+    Result: a trade-off between clean and heavy inputs, equal on real photos (§9).
   - Open:
-    - whether to re-train FNet ×8 on the tuned mix before Phase 3;
+    - which ×8 mix Phase 3 trains on (Q7);
     - the quality-gate thresholds for Phase 3 (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
@@ -81,7 +84,7 @@ robodream_cv/
 │                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # degrade/search/realistic.yaml (PR 2.6 search space),
 │                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
-│                              # train/fnet_x{4,8}_realistic.yaml,
+│                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
 │                              # eval/wider_real_x{4,8}.yaml (real-world, no reference)
 ├── .python-version            # 3.12
@@ -731,7 +734,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - FID and KID against CelebA cannot tell restoration from invention, so Phase 3 needs
         identity metrics on the synthetic levels and visual checks on the real-world set;
       - the ×8 outputs must carry the "plausible reconstruction" warning (`CLAUDE.md` §11).
-- **Degradation tuning against real faces (PR 2.6, in review).** Decision, rule and reasons in
+- **Degradation tuning against real faces (PR 2.6, done).** Decision, rule and reasons in
   `DECISIONS.md` (2026-11-24, "Degradation tuning against real faces").
   - **Code:** `facehall.eval.match` scores degradation configs by the KID and FID between their
     synthetic LR crops (5,000 CelebA validation crops) and the real WIDER `val` LR crops.
@@ -763,7 +766,45 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **Test levels:** medium is closest to real ×4 faces, and light to real ×8 faces. Heavy is
       far from both: mean KID ×10³ 56.7 at ×4 and 92.4 at ×8.
     - **Scales:** the ×8 winner is poor at ×4 and the other way round.
-  - **Not done:** re-training on the tuned ×8 mix. A ×8 FNet run takes about 10 min (PR 2.4).
+  - **Re-training** on the tuned ×8 mix: PR 2.7, below.
+- **FNet ×8 on the tuned mix (PR 2.7, in review).** Decision and reasons in `DECISIONS.md`
+  (2026-11-25, "FNet ×8 on the tuned mix (PR 2.7)").
+  - **Config:** `configs/train/fnet_x8_tuned.yaml`, the PR 2.4 recipe with `realistic_x8.yaml`.
+    Only the degradation differs from `fnet_x8_realistic`.
+  - **Run** on 2026-11-25 from commit `c0a655c` in a separate worktree:
+    `fnet_x8_tuned-20261125-090336`, 10 epochs, 7.5 min, best epoch 10. Its val loss is computed
+    on the tuned mix, so it cannot be compared with that of `fnet_x8_realistic`.
+  - **Evaluation:** 155–165 s per synthetic ×8 protocol and 12 s for the real-world one. Every
+    input digest matched its frozen value. Tables: [`RESULTS.md`](RESULTS.md). Synthetic levels:
+    PSNR-Y / LPIPS / ID sim; real photos: FID / KID ×10³:
+
+    | Protocol | Initial mix (`fnet_x8_realistic`) | Tuned mix (`fnet_x8_tuned`) | Plain bicubic |
+    |---|---|---|---|
+    | bicubic | 24.81 / 0.314 / 0.209 | 25.07 / 0.315 / 0.240 | 23.42 / 0.546 / 0.316 |
+    | light | 24.13 / 0.338 / 0.155 | 24.29 / 0.346 / 0.174 | 22.74 / 0.642 / 0.192 |
+    | medium | 23.04 / 0.379 / 0.102 | 22.99 / 0.399 / 0.110 | 21.38 / 0.689 / 0.088 |
+    | heavy | 21.64 / 0.428 / 0.070 | 21.37 / 0.468 / 0.069 | 19.89 / 0.716 / 0.043 |
+    | WIDER real | 106.9 / 101.8 | 108.6 / 103.6 | 317.3 / 379.4 |
+
+  - **Observations:**
+    - **A trade-off, not a gain everywhere:**
+      - the tuned mix raises ID similarity on clean, light and medium inputs (+0.031, +0.019,
+        +0.008), and PSNR-Y on clean and light inputs;
+      - it loses LPIPS on medium and heavy inputs (+0.020, +0.040) and 0.27 dB PSNR-Y on heavy
+        ones;
+      - this fits its smaller blur range, which the heavy level lies outside (PR 2.6).
+    - **Real photos:** FID and KID are about equal. KID ×10³ is 103.6 against 101.8, with a
+      subset std of 1.6. By this measure, matching the input statistics did not bring the
+      outputs closer to real HR faces.
+    - **Identity:** on clean and light inputs, ID similarity stays below plain bicubic
+      upsampling (0.240 against 0.316, 0.174 against 0.192).
+    - **Local grids** (8 light and 16 real samples, not measured):
+      - the two models look almost the same;
+      - both make older people look younger;
+      - on real photos, both invent whole faces from dark blurs.
+    - **Consequence:** the degradation mix only shifts the balance between clean and heavy
+      inputs. The generic, averaged faces fit the MSE recipe (a hypothesis, as in PR 2.4), which
+      Phase 3 changes.
 
 ## 10. Roadmap and progress
 
@@ -830,8 +871,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 2.6** Tune the realistic ranges against the WIDER `val` part: KID/FID between real
       and synthetic LR crops on three views, `configs/degrade/realistic_x8.yaml` for ×8, ×4
       unchanged (§9). Tests: spec expansion, views, gate, a search on synthetic data
-- [ ] *(to decide)* Re-train FNet ×8 on `realistic_x8.yaml` and compare on the synthetic levels
-      and the real-world test set
+- [x] **PR 2.7** Re-train FNet ×8 on `realistic_x8.yaml` (`configs/train/fnet_x8_tuned.yaml`)
+      and compare on the synthetic levels and the real-world test set (§9)
 
 **Done when** the effect of the degradations on real photos is measured and documented.
 
@@ -892,6 +933,7 @@ weights) by D21.
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
+| Q7 | Which ×8 degradation mix should Phase 3 train on: `realistic.yaml` (initial) or `realistic_x8.yaml` (tuned, PR 2.6)? | the first Phase 3 training run | The tuned mix. It comes from real photos and gives better ID similarity on clean, light and medium inputs; light is the level closest to real ×8 faces (PR 2.6). FID/KID on real photos are equal. It loses on medium and heavy, which are far from real ×8 faces |
 
 ### Risks
 
@@ -951,6 +993,7 @@ uv run python scripts/prepare_wider.py --raw /mnt/storage/AI/Face/wider_face/raw
     --out /mnt/storage/AI/Face/wider_face/realworld   # real-world LR crops (docs/DATA.md §7)
 uv run facehall train --config configs/train/fnet_x4.yaml --smoke   # pipeline check, seconds
 uv run facehall train --config configs/train/fnet_x4_realistic.yaml # realistic degradations, ~11 min
+uv run facehall train --config configs/train/fnet_x8_tuned.yaml     # tuned x8 mix (PR 2.6), ~8 min
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
 uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
 FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine

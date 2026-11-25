@@ -678,3 +678,83 @@ carry a periodic artifact, so the gain cannot be taken at face value:
 the reference until the user decides (`docs/PROJECT.md` §11, Q8): the gate does not see the
 artifact, and a reference whose ID score is inflated would make the gate harder for faithful
 models. `configs/gate.yaml` is unchanged.
+
+### D24 — The PR 3.3 ×8 identity model does not become the reference (closes Q8)
+**Decision** (the user, 2026-11-25): `srresnet_id_x8-20261125-153350` passes the gate (D23) but is
+not made the ×8 reference; `fnet_x8_tuned-20261125-090336` stays.
+
+**Reason:** its outputs carry a periodic grid of stripes that the gate does not see, and part of
+its ID gain may come from that pattern (PR 3.3). A reference with an inflated ID score would make
+the gate harder for faithful models. A gate check that sees such artifacts is not decided yet;
+PR 3.4 uses one for selecting its weights on val (below).
+
+### Identity loss robust to pixel patterns (PR 3.4)
+**Decision:**
+- **Defences** (`facehall.losses.identity`, acting on SR and HR alike):
+  - a random similarity of the recognition square per image: shift up to 0.05 of its side
+    (5.6 px at 128, more than one period of the PR 3.3 grid), rotation up to 5°, scale within
+    ×1.1, drawn from the loss's own seeded generator; the same transform for the SR and HR of one
+    image. A fixed pixel pattern then lands at a different phase in every step;
+  - a Gaussian low-pass, sigma 1 HR pixel, before resampling.
+- **Checked on CelebA validation pairs** (600 identities, two images each; the PR 3.3 test): the
+  defences keep the network's ability to tell people apart. ROC AUC of same against different
+  identity pairs: none 0.9842, jitter 0.9850, blur sigma 0.5 / 1.0 / 1.5 0.9842 / 0.9827 /
+  0.9780, jitter and blur 1.0 0.9837. Sigma 1.0 is the largest tested blur that loses at most
+  0.005 of AUC.
+- **Code:** the square is now sampled with `affine_grid` / `grid_sample`. Without jitter, the
+  network input equals the PR 3.3 resize inside the square (tested); its outermost pixels now
+  sample the image around the square instead of repeating its edge, so the PR 3.3 runs are not
+  bit-exact from this code. The jitter generator state is saved in `last_state.pt`, and a
+  resumed run equals an uninterrupted one (tested on CPU).
+- **Recipe:** `configs/train/srresnet_id_robust_x{4,8}.yaml`, the PR 3.3 recipe with the
+  defences: L1 + identity, 2 epochs, Adam 1e-4 with cosine decay, EMA 0.999.
+- **Weight selection on the val split, rule set before the runs:** 2-epoch runs with identity
+  weights 0.1, 0.3 and 1.0. A weight qualifies if, on val:
+  - on light and medium, it meets the D23 rules against the gate reference of its scale
+    (`srresnet_x4` at ×4, `fnet_x8_tuned` at ×8): LPIPS not higher, PSNR-Y at most 0.3 dB lower;
+  - on the WIDER `val` faces, its KID is at most the starting L1 model's KID plus two standard
+    deviations of that estimate. This is the artifact check: the PR 3.3 grid raised the test KID
+    ×10³ from 92 to 125 at ×4 and from 99 to 141 at ×8.
+
+  Among the qualifying weights, the highest mean ArcFace ID similarity on light and medium wins.
+  If none qualifies, the recipe is reported as failing and no final run is made.
+
+**Selection** (2026-11-25, runs from commit `21aa160`). Val, PSNR-Y and LPIPS change against
+the gate reference / ID similarity; WIDER val KID ×10³ (± std):
+
+| Scale | Weight | light | medium | WIDER val KID | Qualifies |
+|---|---|---|---|---|---|
+| ×4 | start (L1, also the reference) | 27.92 dB / 0.2004 / 0.4475 | 26.40 dB / 0.2465 / 0.2971 | 95.1 ± 2.2 (limit 99.5) | — |
+| ×4 | 0.1 | −0.08 / +0.0015 / 0.4858 | −0.08 / +0.0057 / 0.3236 | 87.6 | no: LPIPS |
+| ×4 | 0.3 | −0.15 / −0.0003 / 0.4880 | −0.16 / +0.0057 / 0.3238 | 84.5 | no: LPIPS on medium |
+| ×4 | 1.0 | −0.27 / −0.0108 / 0.4928 | −0.29 / −0.0073 / 0.3305 | 102.3 | no: KID |
+| ×4 | PR 3.3, 0.3 (no defences) | −0.27 / −0.0017 / 0.5080 | −0.27 / +0.0011 / 0.3425 | 121.4 | no: LPIPS, KID |
+| ×8 | reference `fnet_x8_tuned` | 24.22 dB / 0.3525 / 0.1779 | 22.94 dB / 0.4058 / 0.1120 | — | — |
+| ×8 | start (L1) | +0.22 / −0.0576 / 0.1725 | +0.15 / −0.0682 / 0.1060 | 93.8 ± 1.5 (limit 96.9) | — |
+| ×8 | **0.1** | +0.10 / −0.0515 / 0.2029 | +0.07 / −0.0649 / 0.1247 | 87.8 | **yes** |
+| ×8 | 0.3 | +0.00 / −0.0616 / 0.2023 | −0.01 / −0.0773 / 0.1253 | 117.3 | no: KID |
+| ×8 | 1.0 | −0.14 / −0.0702 / 0.2053 | −0.12 / −0.0844 / 0.1273 | 151.0 | no: KID |
+| ×8 | PR 3.3, 0.1 (no defences) | +0.07 / −0.0573 / 0.2124 | +0.04 / −0.0730 / 0.1296 | 125.9 | no: KID |
+
+- **The KID check works as intended:** it rejects both PR 3.3 models, and in the zoomed val
+  grids (3 synthetic and 4 real samples per model, not measured) the candidates it rejects show
+  faint stripes around the eyes, while the ones it keeps look clean.
+- **With the defences**, small weights leave the real-photo KID *lower* than the L1 start's.
+  Larger weights bring the artifact back, sooner at ×8.
+- **×4: no weight qualifies**, so ×4 gets no full run. The identity term costs LPIPS on medium
+  (+0.006 at 0.1 and 0.3) unless the weight is so high that the artifact returns.
+- **×8: weight 0.1**, full run below. Its val ID gain over the reference keeps most of PR 3.3's
+  (light 0.2029 against 0.2124), now without the grid.
+
+**Result** (2026-11-25, ×8 run `srresnet_id_robust_x8-20261125-174436` from commit `fb2c38c`,
+2 epochs, 400 s at 811 img/s):
+- **Gate (D23) against `fnet_x8_tuned`: passes all 14 checks.** Light: ID 0.1745 → 0.1968, LPIPS
+  0.346 → 0.294, PSNR-Y 24.29 → 24.39 dB; medium: ID 0.1098 → 0.1191, LPIPS 0.399 → 0.333;
+  every subgroup gains ID similarity.
+- **Against PR 3.3** (no defences): ID 0.206 → 0.197 on light, 0.124 → 0.119 on medium; WIDER
+  test FID / KID ×10³ 144.9 / 141.4 → 105.0 / 98.4, the same as the L1 start (100.8 / 98.8).
+- **Grids** (8 synthetic and 8 real test samples, not measured): no stripe grid; the faces look
+  like the L1 model's, with slightly more defined eyes and mouth.
+- **Reference:** by D23 the model would replace `fnet_x8_tuned`. The user said to keep the
+  reference when deciding on the PR 3.3 model (D24), so this replacement waits for an explicit
+  decision (`docs/PROJECT.md` §11, Q9); `configs/gate.yaml` is unchanged.

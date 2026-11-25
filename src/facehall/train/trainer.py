@@ -20,9 +20,10 @@ an interrupted run (``facehall train --resume``).
 
 The generator loss is ``facehall.train.objective.Objective``: the pixel loss ``train.loss``,
 optionally plus a perceptual (VGG19) and an adversarial term with a discriminator, which is
-updated after every generator step (the ESRGAN recipe, PR 3.2). ``train.init`` starts the model
-from the weights of another run's checkpoint, e.g. the L1-trained generator. Validation always
-reports the pixel loss.
+updated after every generator step (the ESRGAN recipe, PR 3.2), and an identity term on facenet
+embeddings (PR 3.3). ``train.init`` starts the model from the weights of another run's
+checkpoint, e.g. the L1-trained generator. Validation always reports the pixel loss; with an
+identity term it also reports the mean facenet cosine similarity of SR and HR.
 
 Reproducibility: the seed fixes the model initialisation, the order of the training samples
 (``EpochShuffle``) and the augmentation (``AlignedFaces``). On CPU two runs with one seed give
@@ -54,6 +55,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 
 from facehall.data.dataset import AlignedFaces, Sample
+from facehall.losses.facenet import load_facenet
+from facehall.losses.identity import IdentityLoss
 from facehall.losses.perceptual import PerceptualLoss, vgg19_features
 from facehall.models import build_model, count_parameters
 from facehall.models.discriminators import VGGDiscriminator
@@ -219,16 +222,23 @@ def train_epoch(
 
 @torch.no_grad()
 def evaluate(
-    model: nn.Module, batches: Iterable[Sample], loss_fn: LossFunction, *, device: torch.device
+    model: nn.Module,
+    batches: Iterable[Sample],
+    loss_fn: LossFunction,
+    *,
+    device: torch.device,
+    identity: IdentityLoss | None = None,
 ) -> dict[str, float]:
-    """Mean per-image loss and PSNR (RGB, [0, 1] range) in fp32.
+    """Mean per-image loss and PSNR (RGB, [0, 1] range) in fp32; with ``identity``, also the
+    mean cosine similarity of its embeddings of SR and HR.
 
-    The PSNR is a cheap monitoring value; the evaluation protocol (Y-channel PSNR, SSIM, LPIPS,
-    ID similarity) is ``facehall eval``.
+    These are cheap monitoring values; the evaluation protocol (Y-channel PSNR, SSIM, LPIPS,
+    ID similarity with another recognition model) is ``facehall eval``.
     """
     model.eval()
     loss_sum = torch.zeros((), dtype=torch.float64, device=device)
     psnr_sum = torch.zeros((), dtype=torch.float64, device=device)
+    identity_sum = torch.zeros((), dtype=torch.float64, device=device)
     count = 0
     for batch in batches:
         lr = batch["lr"].to(device, non_blocking=True)
@@ -237,10 +247,15 @@ def evaluate(
         loss_sum += loss_fn(sr, hr, reduction="none").flatten(1).mean(dim=1).sum()
         mse = (sr.clamp(0.0, 1.0) - hr).square().flatten(1).mean(dim=1)
         psnr_sum += (-10.0 * torch.log10(mse.clamp_min(1e-10))).sum()
+        if identity is not None:
+            identity_sum += identity.similarity(sr.clamp(0.0, 1.0), hr).sum()
         count += lr.shape[0]
     if count == 0:
         raise ValueError("no validation samples")
-    return {"loss": loss_sum.item() / count, "psnr_rgb": psnr_sum.item() / count, "samples": count}
+    result = {"loss": loss_sum.item() / count, "psnr_rgb": psnr_sum.item() / count}
+    if identity is not None:
+        result["identity"] = identity_sum.item() / count
+    return {**result, "samples": count}
 
 
 def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
@@ -422,7 +437,10 @@ def _run(
             terms = objective.take_epoch()
             step += result.steps
             val_start = time.perf_counter()
-            val = evaluate(eval_model, val_loader, loss_fn, device=device)
+            val = evaluate(
+                eval_model, val_loader, loss_fn, device=device, identity=objective.identity
+            )
+            val_metrics = {f"val_{name}": value for name, value in val.items() if name != "samples"}
             val_seconds = time.perf_counter() - val_start
             if not math.isfinite(val["loss"]):
                 raise FloatingPointError(f"validation loss is {val['loss']} after epoch {epoch}")
@@ -433,8 +451,7 @@ def _run(
                 "lr": optimizer.param_groups[0]["lr"],
                 "train_loss": result.loss,
                 "train_terms": terms,
-                "val_loss": val["loss"],
-                "val_psnr_rgb": val["psnr_rgb"],
+                **val_metrics,
                 "best": improved,
                 "train_seconds": result.seconds,
                 "train_images_per_s": result.images / result.seconds,
@@ -447,7 +464,7 @@ def _run(
                 "smoke": smoke,
                 "epoch": epoch,
                 "step": step,
-                "metrics": {"val_loss": val["loss"], "val_psnr_rgb": val["psnr_rgb"]},
+                "metrics": val_metrics,
                 "git_commit": commit,
                 "created_at": _now(),
                 "config": experiment_to_dict(config),
@@ -476,7 +493,7 @@ def _run(
                 objective=objective,
             )
             log.info(
-                "epoch %d/%d: train loss %.6f (%s), val loss %.6f, val PSNR (RGB) %.2f dB%s; "
+                "epoch %d/%d: train loss %.6f (%s), val loss %.6f, val PSNR (RGB) %.2f dB%s%s; "
                 "%.0f s, %s img/s",
                 epoch,
                 settings.epochs,
@@ -484,6 +501,7 @@ def _run(
                 ", ".join(f"{name} {value:.4g}" for name, value in terms.items()),
                 val["loss"],
                 val["psnr_rgb"],
+                f", val identity {val['identity']:.4f}" if "identity" in val else "",
                 " (best)" if improved else "",
                 result.seconds,
                 f"{result.images / result.seconds:,.0f}",
@@ -537,6 +555,22 @@ def make_objective(
             "weights": str(path),
             "sha256": file_sha256(path),
         }
+    identity = None
+    if weights.identity > 0:
+        path = Path(settings.identity.weights)
+        identity = IdentityLoss(
+            load_facenet(path),
+            config.data.hr_size,
+            side=settings.identity.crop_side,
+            center_y=settings.identity.crop_center_y,
+        ).to(device)
+        top, left, side = identity.box
+        extras["identity"] = {
+            "network": "facenet InceptionResnetV1",
+            "weights": str(path),
+            "sha256": file_sha256(path),
+            "crop": {"top": top, "left": left, "side": side},
+        }
     discriminator = d_optimizer = None
     if weights.adversarial > 0:
         d_config = settings.discriminator
@@ -550,6 +584,7 @@ def make_objective(
         LOSS_FUNCTIONS[settings.loss],
         weights,
         perceptual=perceptual,
+        identity=identity,
         discriminator=discriminator,
         d_optimizer=d_optimizer,
         g_lr=settings.optimizer.lr,

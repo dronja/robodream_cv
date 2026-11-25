@@ -1,20 +1,27 @@
-"""Tests for facehall.losses (perceptual and relativistic adversarial) and the discriminator."""
+"""Tests for facehall.losses (perceptual, relativistic adversarial, identity) and the
+discriminator."""
 
 import math
 from pathlib import Path
 
 import pytest
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torchvision.models import vgg19
 
 from facehall.losses import (
     LAYERS,
+    IdentityLoss,
+    InceptionResnetV1,
     PerceptualLoss,
+    crop_box,
+    load_facenet,
     ragan_discriminator_loss,
     ragan_generator_loss,
     vgg19_features,
 )
+from facehall.losses.facenet import INPUT_SIZE
 from facehall.models import count_parameters
 from facehall.models.discriminators import VGGDiscriminator
 
@@ -86,3 +93,79 @@ def test_vgg_discriminator() -> None:
     assert small(torch.rand(3, 3, 32, 32)).shape == (3,)
     with pytest.raises(ValueError, match="not divisible"):
         VGGDiscriminator(48)
+
+
+def test_facenet_layout_and_loading(tmp_path: Path) -> None:
+    # The embedding path of facenet-pytorch's InceptionResnetV1, without `logits`
+    with torch.device("meta"):
+        assert count_parameters(InceptionResnetV1()) == 23_482_624
+    torch.manual_seed(0)
+    network = InceptionResnetV1()
+    state = {
+        **network.state_dict(),
+        "logits.weight": torch.zeros(8631, 512),  # in the published file, dropped on load
+        "logits.bias": torch.zeros(8631),
+    }
+    torch.save(state, tmp_path / "facenet.pt")
+    loaded = load_facenet(tmp_path / "facenet.pt")
+    assert not loaded.training
+    faces = torch.randn(2, 3, INPUT_SIZE, INPUT_SIZE)
+    with torch.no_grad():
+        embeddings = loaded(faces)
+        assert torch.equal(embeddings, network.eval()(faces))
+    assert embeddings.shape == (2, 512)
+    assert torch.allclose(embeddings.norm(dim=1), torch.ones(2))
+    with pytest.raises(FileNotFoundError, match="download_weights.py facenet_vggface2"):
+        load_facenet(tmp_path / "missing.pt")
+
+
+def test_identity_crop_box() -> None:
+    assert crop_box(128, 0.875, 0.55) == (14, 8, 112)  # the default of train.identity
+    assert crop_box(32, 1.0, 0.5) == (0, 0, 32)
+    for side, center_y in ((0.875, 0.6), (1.1, 0.5), (0.0, 0.5)):
+        with pytest.raises(ValueError, match="leaves the image"):
+            crop_box(128, side, center_y)
+
+
+class Recorder(nn.Module):
+    """Stands in for the recognition network: records its input, embeds by channel means."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = nn.Parameter(torch.ones(3))
+        self.seen: list[torch.Tensor] = []
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self.seen.append(x.detach())
+        return x.mean(dim=(2, 3)) * self.scale + torch.tensor([0.0, 0.0, 3.0])
+
+
+def test_identity_loss() -> None:
+    network = Recorder()
+    loss = IdentityLoss(network, 32, side=0.5, center_y=0.5)
+    assert loss.box == (8, 8, 16)
+    hr = torch.rand(2, 3, 32, 32)
+    assert loss(hr, hr).item() == pytest.approx(0.0, abs=1e-6)
+    # the network sees the standardized centre square at 160 px
+    grey = torch.zeros(1, 3, 32, 32)
+    grey[:, :, 8:24, 8:24] = 0.5
+    loss.embed(grey)
+    seen = network.seen[-1]
+    assert seen.shape == (1, 3, INPUT_SIZE, INPUT_SIZE)
+    assert torch.allclose(seen, torch.full_like(seen, (0.5 * 255 - 127.5) / 128))
+    # 1 - cosine, averaged over the batch; gradients reach SR only
+    sr = torch.rand(2, 3, 32, 32, requires_grad=True)
+    value = loss(sr, hr)
+
+    def embed(x: torch.Tensor) -> torch.Tensor:
+        face = F.interpolate(x[:, :, 8:24, 8:24], size=INPUT_SIZE, mode="bilinear", antialias=True)
+        return ((face * 255 - 127.5) / 128).mean(dim=(2, 3)) + torch.tensor([0, 0, 3.0])
+
+    expected = 1 - F.cosine_similarity(embed(sr), embed(hr), dim=1).mean()
+    assert value.item() == pytest.approx(expected.item(), rel=1e-5)
+    torch.autograd.backward(value)
+    assert sr.grad is not None and sr.grad[:, :, :8].abs().sum() == 0  # outside the square
+    assert sr.grad.abs().sum() > 0
+    assert all(p.grad is None and not p.requires_grad for p in loss.parameters())
+    loss.train()
+    assert loss.training and not loss.network.training

@@ -70,9 +70,12 @@ As of 2026-11-25:
   - Merged: PR 3.1 (SRResNet-v2, L1 recipe, training resume, quality gate; PR #18,
     `795dbdd`). Result: ×4 passes the gate and becomes the ×4 reference; ×8 fails it on ID
     similarity (§9).
-  - In review: PR 3.2 (ESRGAN recipe: perceptual and adversarial losses; branch
-    `feat/esrgan-recipe`). Result: much better LPIPS and FID, but ID similarity halves at both
-    scales, so it fails the gate (§9).
+  - Merged: PR 3.2 (ESRGAN recipe: perceptual and adversarial losses; PR #19, `4363fe5`).
+    Result: much better LPIPS and FID, but ID similarity halves at both scales, so it fails the
+    gate (§9).
+  - In review: PR 3.3 (identity loss on facenet embeddings; branch `feat/identity-loss`).
+    Result: ID similarity rises a lot and ×8 passes the gate, but the outputs carry a periodic
+    grid artifact; whether the ×8 model becomes the reference is open (Q8, §9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -89,7 +92,7 @@ robodream_cv/
 │                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # degrade/search/realistic.yaml (PR 2.6 search space),
 │                              # model/{bicubic,fnet,cnet,srresnet}.yaml,
-│                              # train/{fnet,cnet,srresnet,srresnet_gan}_x{4,8}.yaml,
+│                              # train/{fnet,cnet,srresnet,srresnet_gan,srresnet_id}_x{4,8}.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
@@ -106,7 +109,8 @@ robodream_cv/
 │   ├── config.py              # load_config: dataclass schema + YAML (include, overrides)
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults),
 │   │                          # srresnet.py (SRResNet-v2, Phase 3), discriminators.py (PR 3.2)
-│   ├── losses/                # perceptual.py (VGG19), adversarial.py (relativistic GAN), PR 3.2
+│   ├── losses/                # perceptual.py (VGG19), adversarial.py (relativistic GAN), PR 3.2;
+│   │                          # facenet.py (Inception-ResNet-v1 port), identity.py, PR 3.3
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py,
 │   │                          # objective.py (generator loss terms, discriminator step)
 │   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
@@ -162,7 +166,7 @@ robodream_cv/
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
-| Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
+| Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2), `facenet_vggface2/20180402-114759-vggface2.pt` (identity loss, PR 3.3). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |
 
 ## 5. Legacy research code
@@ -365,6 +369,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
 | WIDER FACE and the RetinaFace annotations (D20) | Done in PR 2.3: CC BY-NC-ND 4.0 and non-commercial research only (`docs/THIRD_PARTY_LICENSES.md` §2) |
 | VGG19 weights for the perceptual loss (torchvision) | Approved and downloaded on 2026-11-25 (PR 3.2). Terms follow the ImageNet training data, *needs verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
+| facenet weights for the identity loss (facenet-pytorch, VGGFace2) | Approved and downloaded on 2026-11-25 (PR 3.3) with the weight license unknown: the code of facenet-pytorch and of David Sandberg's facenet is MIT, the weights state no license, and the VGGFace2 terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3). Not to be distributed without a separate review |
 | InceptionV3 weights for FID/KID (torch-fidelity) | Approved and downloaded (D21). Apache 2.0 per the torch-fidelity source; the ImageNet terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 
 ## 9. Technical design
@@ -882,7 +887,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - glasses still disappear.
     - **Consequence:** architecture and L1 do not fix identity. That needs the identity loss
       and the perceptual and adversarial losses of the next Phase 3 steps.
-- **ESRGAN recipe (PR 3.2, in review).** Decision, defaults and reasons in `DECISIONS.md`
+- **ESRGAN recipe (PR 3.2, done).** Decision, defaults and reasons in `DECISIONS.md`
   (2026-11-25, "ESRGAN recipe on SRResNet-v2 (PR 3.2)").
   - **Code:**
     - `facehall.losses`: the VGG19 perceptual loss (`conv5_4`, before the activation) and the
@@ -944,6 +949,59 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - the recipe is not used as is. The next step is the identity loss; the adversarial
         term should return only under an identity constraint and with a smaller weight
         (a proposal, not decided).
+- **Identity loss (PR 3.3, in review).** Decision, crop and weight selection, and reasons in
+  `DECISIONS.md` (2026-11-25, "Identity loss on facenet embeddings (PR 3.3)").
+  - **Code:**
+    - `facehall.losses.facenet`: facenet's Inception-ResNet-v1, re-implemented with the
+      facenet-pytorch layer names; 23,482,624 parameters without the classifier; the output
+      equals the original's exactly;
+    - `facehall.losses.identity.IdentityLoss`: mean `1 - cos` of the embeddings of SR and HR,
+      on a fixed 112 px square of the 128 px crop resized to 160 px;
+    - `train.losses.identity`, `train.identity`; validation also reports the mean facenet
+      similarity (`val_identity`).
+  - **Weights:** `facenet_vggface2` (VGGFace2 model `20180402-114759`), approved with the
+    license unknown (§8). Not the metric model (`buffalo_l`).
+  - **Recipe:** `configs/train/srresnet_id_x{4,8}.yaml`: the PR 3.1 generator of each scale
+    fine-tuned with L1 + identity, Adam 1e-4 with cosine decay, EMA 0.999, 2 epochs. Identity
+    weight 0.3 at ×4 and 0.1 at ×8, chosen on the val split among 0.1, 0.3 and 1.0 by a rule set
+    before the runs.
+  - **Speed:** 809 img/s alone (batch 16, bf16), about a quarter of the L1 speed: the
+    recognition network dominates. About 3.3 min per epoch, 7 min per run. Peak memory of a
+    training step (EMA and the data loader aside) is 0.5 GiB, so it fits 8 GB (D6).
+  - **Runs** on 2026-11-25 from commit `423675c` in a separate worktree, both scales at once:
+    `srresnet_id_x4-20261125-153350` and `srresnet_id_x8-20261125-153350`, 2 epochs, 9.4 min
+    each.
+  - **Evaluation:** every input digest matched. Tables: [`RESULTS.md`](RESULTS.md). PSNR-Y /
+    LPIPS / ID sim:
+
+    | Protocol | ×4 SRResNet-v2 (L1) | ×4 + identity | ×8 `fnet_x8_tuned` (reference) | ×8 SRResNet-v2 (L1) | ×8 + identity |
+    |---|---|---|---|---|---|
+    | bicubic | 29.36 / 0.156 / 0.660 | 29.13 / 0.153 / 0.706 | 25.07 / 0.315 / 0.240 | 25.48 / 0.255 / 0.274 | 25.32 / 0.259 / 0.324 |
+    | light | 28.03 / 0.195 / 0.445 | 27.76 / 0.195 / 0.509 | 24.29 / 0.346 / 0.174 | 24.51 / 0.288 / 0.170 | 24.35 / 0.289 / 0.206 |
+    | medium | 26.49 / 0.241 / 0.292 | 26.22 / 0.244 / 0.340 | 22.99 / 0.399 / 0.110 | 23.14 / 0.331 / 0.104 | 23.03 / 0.327 / 0.124 |
+    | heavy | 24.81 / 0.285 / 0.187 | 24.57 / 0.293 / 0.214 | 21.37 / 0.468 / 0.069 | 21.56 / 0.386 / 0.066 | 21.48 / 0.375 / 0.076 |
+    | WIDER real: FID / KID ×10³ | 89.5 / 92.3 | 118.3 / 124.6 | 108.6 / 103.6 | 100.8 / 98.8 | 144.9 / 141.4 |
+
+  - **Gate (D23):**
+    - ×4 fails one of 14 checks: LPIPS on medium, 0.2441 against 0.2407. ID similarity rises
+      by 0.064 on light and 0.048 on medium, in every subgroup; PSNR-Y drops by 0.27 dB.
+    - ×8 passes all 14 checks against `fnet_x8_tuned`: ID similarity 0.174 → 0.206 on light,
+      LPIPS 0.346 → 0.289.
+    - The ×8 model is **not** made the reference yet (Q8): see the artifact below.
+  - **Observations:**
+    - **Identity metric:** the largest ID gains of the project so far. At ×4 on clean inputs,
+      ID sim 0.706 almost reaches plain bicubic upsampling (0.711).
+    - **Artifact:** zoomed grids (8 synthetic and 8 real samples per scale, not measured) show
+      a regular grid of thin stripes, a period of about 3–4 px, over the face. Clear at ×8 on
+      every sample, faint at ×4. It is the known pattern that raises a recognition network's
+      similarity. Part of the ArcFace gain may come from it (a hypothesis, not tested).
+    - **Real photos:** FID and KID get clearly worse at both scales, which fits the artifact.
+      LPIPS and PSNR-Y on the synthetic levels barely react to it.
+    - **Consequences:**
+      - the gate needs a check that sees such artifacts (Q8);
+      - next step (a proposal): make the identity term robust, e.g. a random shift and scale of
+        the recognition crop, the same for SR and HR, so that a fixed pixel pattern no longer
+        pays off, and a low-pass of the input; then repeat the val selection.
 
 ## 10. Roadmap and progress
 
@@ -1022,7 +1080,9 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 3.2** ESRGAN recipe: L1 pretraining → GAN fine-tuning, VGG perceptual loss +
       relativistic adversarial loss, EMA of weights. Fails the gate at both scales: identity
       halves (§9)
-- [ ] Identity loss (ArcFace; D2, D11)
+- [x] **PR 3.3** Identity loss: facenet (Inception-ResNet-v1, VGGFace2) embeddings, another
+      model than the ID-similarity metric; weight chosen on val. ×8 passes the gate and ×4
+      fails it on one LPIPS check, but both show a periodic grid artifact (§9, Q8)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1073,6 +1133,7 @@ weights) by D21, Q7 (×8 training mix for Phase 3) by D22.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
+| Q8 | The PR 3.3 ×8 identity model passes the gate (D23) but shows a periodic grid artifact that the gate does not see. Make it the ×8 reference? | before the next ×8 gate run | No: keep `fnet_x8_tuned`; fix the artifact first, and consider a real-world check (FID/KID must not get much worse) or a visual sign-off in the gate |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -1134,6 +1195,7 @@ uv run facehall train --config configs/train/fnet_x4_realistic.yaml # realistic 
 uv run facehall train --config configs/train/fnet_x8_tuned.yaml     # tuned x8 mix (PR 2.6), ~8 min
 uv run facehall train --config configs/train/srresnet_x4.yaml       # SRResNet-v2 (PR 3.1), ~27 min
 uv run facehall train --config configs/train/srresnet_gan_x4.yaml   # ESRGAN recipe (PR 3.2), ~30 min
+uv run facehall train --config configs/train/srresnet_id_x4.yaml    # identity loss (PR 3.3), ~7 min
 uv run facehall train --resume runs/<id>                            # continue an interrupted run
 uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23)
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
@@ -1142,6 +1204,7 @@ FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root 
 uv run python scripts/download_weights.py buffalo_l                  # recognition model (D18)
 uv run python scripts/download_weights.py inception                  # FID/KID network (D21)
 uv run python scripts/download_weights.py vgg19                      # perceptual loss (PR 3.2)
+uv run python scripts/download_weights.py facenet_vggface2           # identity loss (PR 3.3)
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/

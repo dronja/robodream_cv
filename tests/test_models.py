@@ -15,6 +15,7 @@ from facehall.models import (
     CNet,
     FNet,
     ModelConfig,
+    SRResNet,
     build_model,
     count_parameters,
 )
@@ -73,7 +74,7 @@ def test_output_shape_and_range(name: str, scale: int, lr_size: int) -> None:
     assert sr.min() >= 0.0 and sr.max() <= 1.0
 
 
-@pytest.mark.parametrize("name", ["fnet", "cnet"])
+@pytest.mark.parametrize("name", ["fnet", "cnet", "srresnet"])
 def test_training_step_updates_every_parameter(name: str) -> None:
     torch.manual_seed(0)
     model = build_model(ModelConfig(name=name), 4, 16).train()
@@ -138,3 +139,33 @@ def test_invalid_settings_are_rejected() -> None:
             FNet(scale=scale)
     with pytest.raises(ValueError, match="positive"):
         Bicubic(scale=0)
+    with pytest.raises(ValueError, match="res_scale"):
+        SRResNet(scale=4, res_scale=0.0)
+    with pytest.raises(ValueError, match="positive"):
+        SRResNet(scale=4, residual_blocks=0)
+
+
+def test_srresnet_layout() -> None:
+    channels, blocks = 64, 16
+    conv = 9 * channels * channels + channels
+    upsample = 9 * channels * 4 * channels + 4 * channels
+    head, tail = 9 * 3 * channels + channels, 9 * channels * 3 + 3
+    expected = head + (2 * blocks + 1) * conv + tail
+    assert count_parameters(SRResNet(4, channels, blocks)) == expected + 2 * upsample
+    assert count_parameters(SRResNet(8, channels, blocks)) == expected + 3 * upsample
+    assert not any(isinstance(m, nn.BatchNorm2d) for m in SRResNet(4).modules())
+
+
+def test_srresnet_bicubic_skip_and_clamp() -> None:
+    model = SRResNet(scale=4, channels=8, residual_blocks=2)
+    nn.init.zeros_(model.tail.weight)
+    assert model.tail.bias is not None
+    nn.init.zeros_(model.tail.bias)
+    lr = torch.rand(2, 3, 8, 8)
+    bicubic = F.interpolate(lr, scale_factor=4, mode="bicubic", align_corners=False)
+    assert bicubic.min() < 0.0 or bicubic.max() > 1.0  # overshoot at edges, kept in training
+    torch.testing.assert_close(model.train()(lr), bicubic)
+    torch.testing.assert_close(model.eval()(lr), bicubic.clamp(0.0, 1.0))
+    plain = SRResNet(scale=4, channels=8, residual_blocks=2, bicubic_skip=False)
+    plain.load_state_dict(model.state_dict())
+    torch.testing.assert_close(plain.train()(lr), torch.zeros_like(bicubic))

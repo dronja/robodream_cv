@@ -17,9 +17,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         "train",
         help="train a model from a config",
         description="Train a model from a config (configs/train/*.yaml) and write a run "
-        "directory with the config, provenance, metrics and checkpoints.",
+        "directory with the config, provenance, metrics and checkpoints; or continue an "
+        "interrupted run with --resume.",
     )
-    train.add_argument("--config", type=Path, required=True, help="training config (YAML)")
+    start = train.add_mutually_exclusive_group(required=True)
+    start.add_argument("--config", type=Path, help="training config (YAML)")
+    start.add_argument(
+        "--resume",
+        type=Path,
+        metavar="RUN_DIR",
+        help="continue an interrupted run after its last completed epoch, with its own config",
+    )
     train.add_argument(
         "--smoke",
         action="store_true",
@@ -63,11 +71,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"
     )
     if args.command == "train":
-        from facehall.train import load_experiment
+        from facehall.train import load_experiment, resume
         from facehall.train import train as run_training
 
-        config = load_experiment(args.config, args.overrides)
-        print(run_training(config, smoke=args.smoke))
+        if args.resume is not None:
+            if args.smoke or args.overrides:
+                parser.error("--resume takes the run's own config: no --smoke or --set")
+            print(resume(args.resume))
+        else:
+            config = load_experiment(args.config, args.overrides)
+            print(run_training(config, smoke=args.smoke))
     elif args.command == "eval":
         from facehall.eval.cli import run_eval
 

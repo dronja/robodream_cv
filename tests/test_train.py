@@ -27,8 +27,22 @@ from facehall.train import (
     save_checkpoint,
     train,
 )
-from facehall.train.config import experiment_from_dict, experiment_to_dict, validate
-from facehall.train.trainer import EarlyStopping, EpochShuffle, evaluate, make_loader, train_epoch
+from facehall.train.config import (
+    SchedulerConfig,
+    experiment_from_dict,
+    experiment_to_dict,
+    validate,
+)
+from facehall.train.trainer import (
+    EarlyStopping,
+    EpochShuffle,
+    evaluate,
+    learning_rate,
+    make_loader,
+    resume,
+    steps_per_epoch,
+    train_epoch,
+)
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs" / "train"
 TRAIN_SAMPLES, VAL_SAMPLES = 8, 3
@@ -73,6 +87,7 @@ def test_run_directory(root: Path, tmp_path: Path) -> None:
         "metrics.jsonl",
         "train.log",
         "summary.json",
+        "last_state.pt",
         *(f"{c}.{s}" for c in ("last", "best") for s in ("safetensors", "json")),
     }
     epochs = records(run, "epoch")
@@ -207,33 +222,40 @@ def test_config_round_trip(root: Path, tmp_path: Path) -> None:
     assert experiment_from_dict(json.loads(json.dumps(experiment_to_dict(config)))) == config
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "fnet_x4",
-        "fnet_x8",
-        "cnet_x4",
-        "cnet_x8",
-        "fnet_x4_realistic",
-        "fnet_x8_realistic",
-        "fnet_x8_tuned",
-    ],
-)
-def test_repository_train_configs(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+# train config -> its degradation config (configs/degrade/)
+TRAIN_CONFIGS = {
+    "fnet_x4": "bicubic",
+    "fnet_x8": "bicubic",
+    "cnet_x4": "bicubic",
+    "cnet_x8": "bicubic",
+    "fnet_x4_realistic": "realistic",
+    "fnet_x8_realistic": "realistic",
+    "fnet_x8_tuned": "realistic_x8",
+    "srresnet_x4": "realistic",
+    "srresnet_x8": "realistic_x8",  # Q7
+}
+
+
+@pytest.mark.parametrize(("name", "degrade"), TRAIN_CONFIGS.items())
+def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FACEHALL_DATA", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
     model, rest = name.split("_x")
-    scale, _, mix = rest.partition("_")
+    scale = rest.partition("_")[0]
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
-    degrade = {"": "bicubic", "realistic": "realistic", "tuned": "realistic_x8"}[mix]
     expected = load_config(CONFIGS.parent / "degrade" / f"{degrade}.yaml", DegradeConfig)
     assert config.degrade == expected
     assert config.data.root == "/mnt/storage/AI/Face/celeba" and config.data.hr_size == 128
-    assert config.train.batch_size == 16 and config.train.loss == "mse"
-    assert config.train.optimizer.lr == 1e-3 and config.train.optimizer.eps == 1e-7
-    assert (config.train.epochs, config.train.early_stopping) == (
-        (10, 3) if model == "fnet" else (50, 0)
-    )
+    assert config.train.batch_size == 16
+    recipe = (config.train.loss, config.train.optimizer.lr, config.train.scheduler.name)
+    if model == "srresnet":
+        assert recipe == ("l1", 2e-4, "cosine")
+        assert (config.train.epochs, config.train.early_stopping) == (30, 0)
+    else:  # the legacy recipe
+        assert recipe == ("mse", 1e-3, "constant") and config.train.optimizer.eps == 1e-7
+        assert (config.train.epochs, config.train.early_stopping) == (
+            (10, 3) if model == "fnet" else (50, 0)
+        )
     overridden = load_experiment(CONFIGS / f"{name}.yaml", ["train.batch_size=64", "seed=7"])
     assert (overridden.train.batch_size, overridden.seed) == (64, 7)
 
@@ -246,6 +268,17 @@ def test_invalid_settings_are_rejected(root: Path, tmp_path: Path) -> None:
         (replace(config, train=replace(config.train, grad_accum=0)), "grad_accum must be"),
         (replace(config, train=replace(config.train, ema_decay=1.0)), "ema_decay must be"),
         (replace(config, model=ModelConfig(name="srgan")), "unknown model"),
+        (
+            replace(config, train=replace(config.train, scheduler=SchedulerConfig(name="step"))),
+            "unknown scheduler",
+        ),
+        (
+            replace(
+                config,
+                train=replace(config.train, scheduler=SchedulerConfig("cosine", min_lr=1.0)),
+            ),
+            "min_lr must be",
+        ),
     ]
     for value, message in bad:
         with pytest.raises(ValueError, match=message):
@@ -254,3 +287,75 @@ def test_invalid_settings_are_rejected(root: Path, tmp_path: Path) -> None:
         train(replace(config, model=ModelConfig(name="bicubic")))
     with pytest.raises(ValueError, match="smaller than one batch"):
         train(replace(config, train=replace(config.train, batch_size=TRAIN_SAMPLES + 1)))
+
+
+def test_cosine_schedule() -> None:
+    settings = TrainConfig(epochs=2, batch_size=3, grad_accum=2)
+    settings.optimizer.lr = 1e-3
+    assert steps_per_epoch(14, settings) == 2  # 4 full batches of 3, 2 steps of 2 batches
+    assert learning_rate(settings, 10, 7) == 1e-3  # constant
+    settings.scheduler = SchedulerConfig(name="cosine", min_lr=1e-5)
+    rates = [learning_rate(settings, 10, i) for i in range(11)]
+    assert rates[0] == pytest.approx(1e-3) and rates[10] == pytest.approx(1e-5)
+    assert rates[5] == pytest.approx((1e-3 + 1e-5) / 2)
+    assert all(a > b for a, b in zip(rates, rates[1:], strict=False))
+
+
+def interrupt_after(monkeypatch: pytest.MonkeyPatch, calls: int) -> None:
+    """Make the ``calls``-th validation raise KeyboardInterrupt (an interrupted run)."""
+    original = evaluate
+    count = 0
+
+    def evaluate_or_stop(*args: Any, **kwargs: Any) -> dict[str, float]:
+        nonlocal count
+        count += 1
+        if count == calls:
+            raise KeyboardInterrupt
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("facehall.train.trainer.evaluate", evaluate_or_stop)
+
+
+def test_resume_continues_as_if_uninterrupted(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def config(output: str) -> ExperimentConfig:
+        base = experiment(root, tmp_path / output, epochs=3, ema_decay=0.5)
+        base.train.scheduler = SchedulerConfig(name="cosine", min_lr=1e-5)
+        return base
+
+    reference = train(config("reference"))
+    with monkeypatch.context() as patch:
+        interrupt_after(patch, 3)
+        with pytest.raises(KeyboardInterrupt):
+            train(config("interrupted"))
+    run = next((tmp_path / "interrupted").iterdir())
+    assert json.loads((run / "summary.json").read_text())["status"] == "interrupted"
+    assert resume(run) == run
+
+    for name in ("last", "last_ema", "best"):
+        expected = load_file(reference / f"{name}.safetensors")
+        resumed = load_file(run / f"{name}.safetensors")
+        assert all(torch.equal(expected[k], resumed[k]) for k in expected), name
+    summary = json.loads((run / "summary.json").read_text())
+    assert (summary["status"], summary["epochs"], summary["steps"]) == ("finished", 3, 12)
+    assert [r["epoch"] for r in records(run, "epoch")] == [1, 2, 3]
+    assert [r["lr"] for r in records(run, "epoch")] == [
+        r["lr"] for r in records(reference, "epoch")
+    ]
+    assert [(r["epoch"], r["step"]) for r in records(run, "resume")] == [(2, 8)]
+    info = json.loads((run / "run.json").read_text())
+    assert [r["after_epoch"] for r in info["resumed"]] == [2]
+    with pytest.raises(ValueError, match="already complete"):
+        resume(run)
+
+
+def test_resume_needs_a_completed_epoch(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    interrupt_after(monkeypatch, 1)
+    with pytest.raises(KeyboardInterrupt):
+        train(experiment(root, tmp_path))
+    run = next(tmp_path.iterdir())
+    with pytest.raises(FileNotFoundError, match="no completed epoch"):
+        resume(run)

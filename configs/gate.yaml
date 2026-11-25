@@ -1,0 +1,11 @@
+# Quality gate for a new model (D23, CLAUDE.md §10; facehall.eval.gate, scripts/quality_gate.py).
+# The synthetic levels closest to real faces (PR 2.6): medium for x4, light for x8; both are
+# gated at both scales.
+protocols: [celeba128_light, celeba128_medium]
+split: test
+psnr_drop: 0.3              # dB of PSNR-Y the candidate may lose
+subgroup_id_drop: 0.01      # ID similarity the candidate may lose in any subgroup
+subgroups: [male, not_male, young, not_young]
+references:                 # current reference per scale: a model that passes replaces it
+  4: srresnet_x4-20261125-093232-best      # PR 3.1; before: fnet_x4_realistic-20261124-153302-best
+  8: fnet_x8_tuned-20261125-090336-best

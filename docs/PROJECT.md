@@ -52,8 +52,8 @@ As of 2026-11-25:
   - The prepared CelebA dataset is at `/mnt/storage/AI/Face/celeba` (§6.2).
   - Baseline results: [`RESULTS.md`](RESULTS.md). FNet is the best of the three baselines on
     every metric at both scales.
-- **Phase 2 (realistic degradations): complete once PR 2.7 is merged.** The optional
-  H.264/H.265 item stays open.
+- **Phase 2 (realistic degradations): done** on 2026-11-25. The optional H.264/H.265 item
+  stays open.
   - Merged: PR 2.1 (degradation pipeline, PR #11, `7c4c250`), PR 2.2 (frozen synthetic test
     levels, PR #12, `4701155`) and PR 2.4 (FNet trained on realistic degradations, PR #13,
     `e090b74`; done before PR 2.3 at the user's choice) and PR 2.3 (real-world test set from
@@ -63,11 +63,13 @@ As of 2026-11-25:
     Phase 2 "done when" criterion.
   - Also merged: PR 2.6 (degradation ranges tuned against the WIDER `val` part, PR #16,
     `14dbf6e`). Result: a tuned mix for ×8; ×4 keeps `realistic.yaml`.
-  - In review: PR 2.7 (FNet ×8 re-trained on the tuned mix; branch `feat/train-x8-tuned`).
-    Result: a trade-off between clean and heavy inputs, equal on real photos (§9).
-  - Open:
-    - which ×8 mix Phase 3 trains on (Q7);
-    - the quality-gate thresholds for Phase 3 (`CLAUDE.md` §10).
+  - Also merged: PR 2.7 (FNet ×8 re-trained on the tuned mix, PR #17, `f0d0895`). Result: a
+    trade-off between clean and heavy inputs, equal on real photos (§9).
+- **Phase 3 (model quality): in progress.**
+  - Decided: ×8 trains on the tuned mix (D22); quality-gate thresholds (D23, `configs/gate.yaml`).
+  - In review: PR 3.1 (SRResNet-v2, L1 recipe, training resume, quality gate; branch
+    `feat/srresnet-v2`). Result: ×4 passes the gate and becomes the ×4 reference; ×8 fails it
+    on ID similarity (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -83,24 +85,29 @@ robodream_cv/
 ├── configs/                   # data/celeba_128.yaml, degrade/{bicubic,realistic,realistic_x8}.yaml,
 │                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # degrade/search/realistic.yaml (PR 2.6 search space),
-│                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
+│                              # model/{bicubic,fnet,cnet,srresnet}.yaml,
+│                              # train/{fnet,cnet,srresnet}_x{4,8}.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
+│                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
 │                              # eval/wider_real_x{4,8}.yaml (real-world, no reference)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
-├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train, eval)
+├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train
+│                              # [--resume], eval)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
 │   │                          # wider.py (real-world set), realworld.py (RealFaces)
 │   ├── config.py              # load_config: dataclass schema + YAML (include, overrides)
-│   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
+│   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults),
+│   │                          # srresnet.py (SRResNet-v2, Phase 3)
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py
 │   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
 │   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner),
-│   │                          # match.py (degradation tuning against real LR crops)
+│   │                          # match.py (degradation tuning against real LR crops),
+│   │                          # gate.py (quality gate, D23)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
@@ -108,13 +115,13 @@ robodream_cv/
 │                              # license_report.py (license table from package metadata),
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
 │                              # preview_degradations.py, protocol_digest.py,
-│                              # match_degradations.py (PR 2.6)
+│                              # match_degradations.py (PR 2.6), quality_gate.py (D23)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
-│                              # degradation matching
+│                              # degradation matching, quality gate
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -332,6 +339,10 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D19 | Comparison grids with CelebA faces stay in `outputs/`; `RESULTS.md` holds numbers only |
 | D20 | Real-world test set: native low-resolution faces from WIDER FACE (training photos) with RetinaFace landmarks; split by photo into val (tuning) and test (frozen); stays local |
 | — | Evaluation protocol: Y-channel PSNR/SSIM, LPIPS (AlexNet), ArcFace cosine; SR quantized to 8 bit; subsets (`DECISIONS.md`, 2026-11-24) |
+| D21 | InceptionV3 weights (torch-fidelity) for FID and KID; non-commercial research |
+| — | Degradation tuning against real faces: tuned ×8 mix `realistic_x8.yaml`, ×4 unchanged (`DECISIONS.md`, PR 2.6) |
+| D22 | Phase 3 trains ×8 on `realistic_x8.yaml` and ×4 on `realistic.yaml` |
+| D23 | Quality gate: on light and medium, lower LPIPS and higher ID sim than the reference, PSNR-Y −0.3 dB at most, subgroup ID sim −0.01 at most (`configs/gate.yaml`) |
 
 ## 8. Licenses — status
 
@@ -499,8 +510,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - FNet's val loss still fell in its last epoch, so the 10 epochs of the legacy recipe
       probably stop it early.
     - Some epochs took about 70 s instead of about 46 s while an evaluation ran on the same CPU.
-  - **Not done:** resuming from `last`, because the optimizer state is not saved (tech debt,
-    §11).
+  - **Resuming** from `last` was added in PR 3.1 (`facehall train --resume`, §9 Phase 3).
 - **Evaluation (PR 1.7, done).** `facehall eval --config configs/eval/celeba128_x{4,8}.yaml
   (--ckpt runs/<id>/best.safetensors | --model bicubic)`; protocol details in `DECISIONS.md`
   (2026-11-24, "Evaluation protocol").
@@ -806,6 +816,67 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       inputs. The generic, averaged faces fit the MSE recipe (a hypothesis, as in PR 2.4), which
       Phase 3 changes.
 
+### Phase 3
+
+- **SRResNet-v2 (PR 3.1, in review).** Decision, defaults and reasons in `DECISIONS.md`
+  (2026-11-25, "SRResNet-v2 and the L1 recipe (PR 3.1)"); quality gate in D23.
+  - **Model:** `facehall.models.srresnet`:
+    - SRResNet without BatchNorm, residual scaling 0.1, 16 blocks of 64 channels;
+    - the bicubic upsampling of the input added to the output;
+    - output clamped to [0, 1] in eval mode only;
+    - 1,517,571 parameters at ×4 and 1,665,283 at ×8.
+  - **Recipe:** `configs/train/srresnet_x{4,8}.yaml`: L1 loss; Adam 2e-4 with cosine decay to
+    1e-6 per step (`train.scheduler`); batch 16; 30 epochs; ×4 on `realistic.yaml`, ×8 on
+    `realistic_x8.yaml` (D22).
+  - **Speed and memory:** median 3,260 img/s at ×4 and 3,150 img/s at ×8 (batch 16, bf16, RTX
+    6000 Ada), about 51 s per epoch with validation. Peak memory of a training step is 0.2 GiB,
+    so it fits 8 GB (D6).
+  - **Resume:** every epoch writes `last_state.pt`, with weights, EMA, optimizer state, epoch,
+    step and early stopping. `facehall train --resume runs/<id>` continues after the last
+    completed epoch. On CPU, a resumed run gives the same weights as an uninterrupted one
+    (tested).
+  - **Quality gate:** `configs/gate.yaml`, `scripts/quality_gate.py` (D23).
+  - **Runs** on 2026-11-25 from commit `f682d0e` in a separate worktree:
+
+    | Run | Epochs | Time | Best epoch (val loss) |
+    |---|---|---|---|
+    | `srresnet_x4-20261125-093232` | 30 | 25.4 min | 30 |
+    | `srresnet_x8-20261125-095801` | 30 | 26.0 min | 29 |
+
+  - **Evaluation:** 151–166 s per synthetic protocol, 11–18 s per real-world protocol; every
+    input digest matched. Tables: [`RESULTS.md`](RESULTS.md). PSNR-Y / LPIPS / ID sim against
+    the previous models on the same mix:
+
+    | Protocol | ×4 FNet (`fnet_x4_realistic`) | ×4 SRResNet-v2 | ×8 FNet (`fnet_x8_tuned`) | ×8 SRResNet-v2 |
+    |---|---|---|---|---|
+    | bicubic | 28.56 / 0.184 / 0.584 | 29.36 / 0.156 / 0.660 | 25.07 / 0.315 / 0.240 | 25.48 / 0.255 / 0.274 |
+    | light | 27.66 / 0.217 / 0.428 | 28.03 / 0.195 / 0.445 | 24.29 / 0.346 / 0.174 | 24.51 / 0.288 / 0.170 |
+    | medium | 26.26 / 0.270 / 0.281 | 26.49 / 0.241 / 0.292 | 22.99 / 0.399 / 0.110 | 23.14 / 0.331 / 0.104 |
+    | heavy | 24.54 / 0.327 / 0.180 | 24.81 / 0.285 / 0.187 | 21.37 / 0.468 / 0.069 | 21.56 / 0.386 / 0.066 |
+    | WIDER real: FID / KID ×10³ | 96.9 / 95.6 | 89.5 / 92.3 | 108.6 / 103.6 | 100.8 / 98.8 |
+
+  - **Gate (D23):**
+    - **×4 passes** all 14 checks and becomes the ×4 reference in `configs/gate.yaml`;
+    - **×8 fails:** ID similarity is lower on light (0.170 against 0.175) and medium (0.104
+      against 0.110), and `Young` = 0 on medium drops by 0.0101. `fnet_x8_tuned` stays the ×8
+      reference.
+  - **Observations:**
+    - **×4:** better on every metric of every level. The gains are largest on clean inputs
+      (ID sim 0.584 → 0.660) and in LPIPS. ID sim on clean inputs is still below plain bicubic
+      upsampling (0.711).
+    - **×8:** much better LPIPS (0.346 → 0.288 on light) and better PSNR-Y, but no identity
+      gain on degraded inputs. At 16 px, the L1 model sharpens the face it invents rather than
+      the person's face (a hypothesis).
+    - **Real photos:** FID and KID improve at both scales. They reward realism, not identity
+      (PR 2.5).
+    - **Local grids** (8 synthetic samples per scale, not measured):
+      - SRResNet-v2 is a little sharper than FNet (eyes, lips, ears), with the same generic
+        look;
+      - older people still look younger;
+      - glasses still disappear.
+    - **Consequence:** architecture and L1 do not fix identity. That needs the identity loss
+      and the perceptual and adversarial losses of the next Phase 3 steps.
+
 ## 10. Roadmap and progress
 
 Each step is compared with the previous best on the same frozen test set. A smoke run (a few
@@ -878,7 +949,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Phase 3 — model quality
 
-- [ ] SRResNet-v2: no BN, residual scaling, more blocks, L1 loss
+- [x] **PR 3.1** SRResNet-v2: no BN, residual scaling, more blocks, L1 loss; cosine learning
+      rate; `facehall train --resume`; quality gate (D23). ×4 passes the gate, ×8 does not (§9)
 - [ ] ESRGAN recipe: L1 pretraining → GAN fine-tuning, VGG perceptual loss + adversarial loss with
       a small weight, EMA of weights
 - [ ] Identity loss (ArcFace; D2, D11)
@@ -886,8 +958,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
 - [ ] NME metric (landmark model; license verified)
-- [ ] Subgroup metrics (`Male`, `Young`; skin tone per D10); quality-gate thresholds fixed after
-      Phase 1
+- [x] Quality-gate thresholds (D23) and the subgroup check for `Male` and `Young`
+- [ ] Skin-tone subgroup (D10)
 
 **Done when** the new model passes the quality gates in `CLAUDE.md` §10.
 
@@ -928,12 +1000,11 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
-weights) by D21.
+weights) by D21, Q7 (×8 training mix for Phase 3) by D22.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
-| Q7 | Which ×8 degradation mix should Phase 3 train on: `realistic.yaml` (initial) or `realistic_x8.yaml` (tuned, PR 2.6)? | the first Phase 3 training run | The tuned mix. It comes from real photos and gives better ID similarity on clean, light and medium inputs; light is the level closest to real ×8 faces (PR 2.6). FID/KID on real photos are equal. It loses on medium and heavy, which are far from real ×8 faces |
 
 ### Risks
 
@@ -971,8 +1042,6 @@ weights) by D21.
 - *Needs verification:* whether rows inside each split follow the official file order
   (`docs/DATA.md` §4.4). This is needed before joining annotations keyed by file name (D10).
 - The legacy weights are still in HEAD (D7).
-- Training cannot resume from `last`: the optimizer state is not saved. Add this before runs
-  long enough for interruptions to matter (Phase 3).
 
 ## 12. Commands
 
@@ -994,6 +1063,9 @@ uv run python scripts/prepare_wider.py --raw /mnt/storage/AI/Face/wider_face/raw
 uv run facehall train --config configs/train/fnet_x4.yaml --smoke   # pipeline check, seconds
 uv run facehall train --config configs/train/fnet_x4_realistic.yaml # realistic degradations, ~11 min
 uv run facehall train --config configs/train/fnet_x8_tuned.yaml     # tuned x8 mix (PR 2.6), ~8 min
+uv run facehall train --config configs/train/srresnet_x4.yaml       # SRResNet-v2 (PR 3.1), ~27 min
+uv run facehall train --resume runs/<id>                            # continue an interrupted run
+uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23)
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
 uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
 FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine

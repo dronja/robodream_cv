@@ -12,7 +12,11 @@
 - checkpoints (``facehall.train.checkpoint``): ``last`` after every epoch and ``best`` at the
   lowest validation loss. With EMA, validation and ``best`` use the EMA weights, and
   ``last_ema`` is written too;
+- ``last_state.pt``: the training state after the last completed epoch, for ``resume``;
 - ``summary.json``: the status and the best epoch, written when the run ends.
+
+The learning rate follows ``train.scheduler`` per optimizer step. ``resume(run_dir)`` continues
+an interrupted run (``facehall train --resume``).
 
 Reproducibility: the seed fixes the model initialisation, the order of the training samples
 (``EpochShuffle``) and the augmentation (``AlignedFaces``). On CPU two runs with one seed give
@@ -23,6 +27,7 @@ differences.
 import json
 import logging
 import math
+import os
 import platform
 import sys
 import time
@@ -45,13 +50,23 @@ from facehall.data.dataset import AlignedFaces, Sample
 from facehall.models import build_model, count_parameters
 from facehall.provenance import git_commit, package_versions
 from facehall.train.checkpoint import save_checkpoint
-from facehall.train.config import ExperimentConfig, experiment_to_dict, validate
+from facehall.train.config import (
+    ExperimentConfig,
+    TrainConfig,
+    experiment_to_dict,
+    load_experiment,
+    validate,
+)
 from facehall.train.ema import ModelEMA
 
 log = logging.getLogger(__name__)
 
 LossFunction = Callable[..., torch.Tensor]  # (prediction, target, reduction=...) -> loss
 LOSS_FUNCTIONS: dict[str, LossFunction] = {"mse": F.mse_loss, "l1": F.l1_loss}
+COMPLETE = ("finished", "early_stopped")  # summary statuses that cannot be resumed
+STATE_FILE = "last_state.pt"
+STATE_FORMAT = "facehall-train-state"
+STATE_VERSION = 1
 VERSIONED = (
     "facehall",
     "torch",
@@ -133,10 +148,14 @@ def train_epoch(
     grad_accum: int = 1,
     ema: ModelEMA | None = None,
     step: int = 0,
+    schedule: Callable[[int], float] | None = None,
     log_every: int = 0,
     on_log: Callable[..., None] | None = None,
 ) -> EpochResult:
     """One pass over ``batches``: an optimizer step every ``grad_accum`` micro-batches.
+
+    ``schedule(i)`` sets the learning rate of optimizer step ``i`` (0-based, counted over the
+    run from ``step``).
 
     Micro-batches left over at the end (fewer than ``grad_accum``) are discarded. ``on_log`` is
     called as ``on_log(step=…, loss=…)`` every ``log_every`` optimizer steps, counted from
@@ -160,6 +179,10 @@ def train_epoch(
         micro, window_size, images = micro + 1, window_size + 1, images + lr.shape[0]
         if micro % grad_accum:
             continue
+        if schedule is not None:
+            rate = schedule(step + steps)
+            for group in optimizer.param_groups:
+                group["lr"] = rate
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         steps += 1
@@ -209,6 +232,34 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
     validate(config)
     if smoke:
         config = replace(config, train=replace(config.train, epochs=config.smoke.epochs))
+    run_dir = create_run_dir(Path(config.output), config.name, smoke)
+    return _run(config, run_dir, smoke=smoke, state=None)
+
+
+def resume(run_dir: Path | str) -> Path:
+    """Continue an interrupted run in ``run_dir`` after its last completed epoch.
+
+    The config, the smoke flag and the training state (``last_state.pt``: weights, EMA weights,
+    optimizer state, epoch, step, early-stopping state) come from the run directory, so the run
+    continues as if it had not stopped: the sample order and augmentation depend only on the
+    seed and the epoch, and the learning rate only on the step. ``run.json`` records the resume,
+    and ``metrics.jsonl`` gets a ``resume`` record; step records of the interrupted epoch that
+    precede it are superseded.
+    """
+    run_dir = Path(run_dir)
+    summary_path = run_dir / "summary.json"
+    if summary_path.is_file():
+        status = json.loads(summary_path.read_text()).get("status")
+        if status in COMPLETE:
+            raise ValueError(f"{run_dir} is already complete ({status})")
+    info = json.loads((run_dir / "run.json").read_text())
+    config = load_experiment(run_dir / "config.yaml")
+    return _run(config, run_dir, smoke=bool(info["smoke"]), state=load_state(run_dir))
+
+
+def _run(
+    config: ExperimentConfig, run_dir: Path, *, smoke: bool, state: dict[str, Any] | None
+) -> Path:
     settings = config.train
     device = resolve_device(config.device)
     torch.backends.cudnn.benchmark = device.type == "cuda"
@@ -242,29 +293,54 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
     ema = ModelEMA(model, settings.ema_decay) if settings.ema_decay > 0 else None
     eval_model = ema.module if ema is not None else model
     loss_fn = LOSS_FUNCTIONS[settings.loss]
+    total_steps = settings.epochs * steps_per_epoch(train_size, settings)
+    schedule = partial(learning_rate, settings, total_steps)
+    stopper = EarlyStopping(settings.early_stopping)
+    best: dict[str, Any] | None = None
+    epoch = step = 0
+    elapsed = 0.0
+    if state is not None:
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        if ema is not None:
+            ema.module.load_state_dict(state["ema"])
+        epoch, step, elapsed, best = state["epoch"], state["step"], state["seconds"], state["best"]
+        stopper.best, stopper.stale = state["stopper"]["best"], state["stopper"]["stale"]
 
-    run_dir = create_run_dir(Path(config.output), config.name, smoke)
     commit = git_commit()
     device_info = describe_device(device)
-    (run_dir / "config.yaml").write_text(OmegaConf.to_yaml(experiment_to_dict(config)))
-    run_info = {
-        "name": config.name,
-        "run": run_dir.name,
-        "created_at": _now(),
-        "command": sys.argv,
-        "smoke": smoke,
-        "seed": config.seed,
-        "git_commit": commit,
-        "python": platform.python_version(),
-        "versions": package_versions(VERSIONED),
-        "device": device_info,
-        "model": {"name": config.model.name, "parameters": count_parameters(model)},
-        "data": {
-            "train": {**train_set.describe(), "used": train_size},
-            "val": {**val_set.describe(), "used": val_size},
-        },
-        "manifest": manifest_info(Path(config.data.root)),
-    }
+    if state is None:
+        (run_dir / "config.yaml").write_text(OmegaConf.to_yaml(experiment_to_dict(config)))
+        run_info = {
+            "name": config.name,
+            "run": run_dir.name,
+            "created_at": _now(),
+            "command": sys.argv,
+            "smoke": smoke,
+            "seed": config.seed,
+            "git_commit": commit,
+            "python": platform.python_version(),
+            "versions": package_versions(VERSIONED),
+            "device": device_info,
+            "model": {"name": config.model.name, "parameters": count_parameters(model)},
+            "data": {
+                "train": {**train_set.describe(), "used": train_size},
+                "val": {**val_set.describe(), "used": val_size},
+            },
+            "manifest": manifest_info(Path(config.data.root)),
+        }
+    else:
+        run_info = json.loads((run_dir / "run.json").read_text())
+        run_info.setdefault("resumed", []).append(
+            {
+                "created_at": _now(),
+                "command": sys.argv,
+                "after_epoch": epoch,
+                "git_commit": commit,
+                "versions": package_versions(VERSIONED),
+                "device": device_info,
+            }
+        )
     write_json(run_dir / "run.json", run_info)
 
     package_log = logging.getLogger("facehall")
@@ -277,14 +353,19 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
 
     sampler = EpochShuffle(train_size, config.seed)
     val_loader = make_loader(val_data, settings.val_batch_size, settings.workers, device)
-    stopper = EarlyStopping(settings.early_stopping)
     summary: dict[str, Any] = {"status": "running"}
-    best: dict[str, Any] | None = None
-    epoch = step = 0
     start = time.perf_counter()
     try:
+        if state is not None:
+            write_record(metrics, "resume", epoch=epoch, step=step, git_commit=commit)
+            if commit != run_info.get("git_commit"):
+                log.warning(
+                    "resuming at commit %s; the run started at %s",
+                    commit,
+                    run_info.get("git_commit"),
+                )
         log.info(
-            "run %s: %s x%d, %s parameters, %s train / %s val samples, %s, %s",
+            "run %s: %s x%d, %s parameters, %s train / %s val samples, %s, %s%s",
             run_dir,
             config.model.name,
             config.scale,
@@ -293,9 +374,11 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
             f"{val_size:,}",
             device_info["name"],
             settings.precision,
+            f", resumed after epoch {epoch}" if state is not None else "",
         )
         status = "finished"
-        for epoch in range(1, settings.epochs + 1):
+        first_epoch = epoch + 1
+        for epoch in range(first_epoch, settings.epochs + 1):
             train_set.set_epoch(epoch)
             sampler.set_epoch(epoch)
             loader = make_loader(
@@ -311,6 +394,7 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
                 grad_accum=settings.grad_accum,
                 ema=ema,
                 step=step,
+                schedule=schedule,
                 log_every=settings.log_every,
                 on_log=partial(write_record, metrics, "step", epoch=epoch),
             )
@@ -324,6 +408,7 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
             record = {
                 "epoch": epoch,
                 "step": step,
+                "lr": optimizer.param_groups[0]["lr"],
                 "train_loss": result.loss,
                 "val_loss": val["loss"],
                 "val_psnr_rgb": val["psnr_rgb"],
@@ -355,6 +440,17 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
                     run_dir / "best.safetensors", eval_model, {**meta, "weights": weights}
                 )
                 best = record
+            save_state(
+                run_dir,
+                epoch=epoch,
+                step=step,
+                seconds=elapsed + time.perf_counter() - start,
+                model=model,
+                ema=ema,
+                optimizer=optimizer,
+                stopper=stopper,
+                best=best,
+            )
             log.info(
                 "epoch %d/%d: train loss %.6f, val loss %.6f, val PSNR (RGB) %.2f dB%s; "
                 "%.0f s, %s img/s",
@@ -377,7 +473,9 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
         summary["error"] = repr(error)
         raise
     finally:
-        summary.update(epochs=epoch, steps=step, seconds=time.perf_counter() - start, best=best)
+        summary.update(
+            epochs=epoch, steps=step, seconds=elapsed + time.perf_counter() - start, best=best
+        )
         write_json(run_dir / "summary.json", summary)
         metrics.close()
         package_log.removeHandler(handler)
@@ -385,6 +483,63 @@ def train(config: ExperimentConfig, *, smoke: bool = False) -> Path:
         package_log.setLevel(level)
     log.info("run %s %s in %.0f s", run_dir, summary["status"], summary["seconds"])
     return run_dir
+
+
+def steps_per_epoch(train_size: int, settings: TrainConfig) -> int:
+    """Optimizer steps per epoch: full batches only, leftover micro-batches discarded."""
+    return (train_size // settings.batch_size) // settings.grad_accum
+
+
+def learning_rate(settings: TrainConfig, total_steps: int, step: int) -> float:
+    """Learning rate of optimizer step ``step`` (0-based) of ``total_steps``."""
+    base = settings.optimizer.lr
+    if settings.scheduler.name == "constant":
+        return base
+    low = settings.scheduler.min_lr
+    progress = min(step / max(total_steps, 1), 1.0)
+    return low + 0.5 * (base - low) * (1.0 + math.cos(math.pi * progress))
+
+
+def save_state(
+    run_dir: Path,
+    *,
+    epoch: int,
+    step: int,
+    seconds: float,
+    model: nn.Module,
+    ema: ModelEMA | None,
+    optimizer: torch.optim.Optimizer,
+    stopper: EarlyStopping,
+    best: dict[str, Any] | None,
+) -> None:
+    """Write ``last_state.pt``, everything ``resume`` needs, under a temporary name first."""
+    state = {
+        "format": STATE_FORMAT,
+        "version": STATE_VERSION,
+        "epoch": epoch,
+        "step": step,
+        "seconds": seconds,
+        "model": model.state_dict(),
+        "ema": ema.module.state_dict() if ema is not None else None,
+        "optimizer": optimizer.state_dict(),
+        "stopper": {"best": stopper.best, "stale": stopper.stale},
+        "best": best,
+    }
+    path = run_dir / STATE_FILE
+    partial_path = path.with_name(path.name + ".partial")
+    torch.save(state, partial_path)
+    os.replace(partial_path, path)
+
+
+def load_state(run_dir: Path) -> dict[str, Any]:
+    """Read ``last_state.pt`` (tensors and plain values only: ``weights_only=True``)."""
+    path = run_dir / STATE_FILE
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} not found: the run has no completed epoch to resume")
+    state: dict[str, Any] = torch.load(path, map_location="cpu", weights_only=True)
+    if state.get("format") != STATE_FORMAT or state.get("version") != STATE_VERSION:
+        raise ValueError(f"{path} is not a {STATE_FORMAT} version {STATE_VERSION}")
+    return state
 
 
 def make_loader(

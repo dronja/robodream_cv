@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 from torch import nn
 
+from facehall.config import load_config
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
 from facehall.data.dataset import AlignedFaces
 from facehall.models import ModelConfig
@@ -208,15 +209,25 @@ def test_config_round_trip(root: Path, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["fnet_x4", "fnet_x8", "cnet_x4", "cnet_x8", "fnet_x4_realistic", "fnet_x8_realistic"],
+    [
+        "fnet_x4",
+        "fnet_x8",
+        "cnet_x4",
+        "cnet_x8",
+        "fnet_x4_realistic",
+        "fnet_x8_realistic",
+        "fnet_x8_tuned",
+    ],
 )
 def test_repository_train_configs(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FACEHALL_DATA", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
     model, rest = name.split("_x")
-    scale = rest.removesuffix("_realistic")
+    scale, _, mix = rest.partition("_")
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
-    assert config.degrade.kind == ("pipeline" if name.endswith("_realistic") else "bicubic")
+    degrade = {"": "bicubic", "realistic": "realistic", "tuned": "realistic_x8"}[mix]
+    expected = load_config(CONFIGS.parent / "degrade" / f"{degrade}.yaml", DegradeConfig)
+    assert config.degrade == expected
     assert config.data.root == "/mnt/storage/AI/Face/celeba" and config.data.hr_size == 128
     assert config.train.batch_size == 16 and config.train.loss == "mse"
     assert config.train.optimizer.lr == 1e-3 and config.train.optimizer.eps == 1e-7

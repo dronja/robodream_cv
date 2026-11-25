@@ -469,3 +469,95 @@ Run on 2026-11-24 from commit `a9bff19`, about 25 min per scale. The full tables
   - The tuned mix raises ID similarity on clean, light and medium inputs.
   - It loses LPIPS on medium and heavy inputs. Those levels lie outside its smaller blur range.
   - On real photos, FID and KID are about equal.
+
+### D22 — Phase 3 trains ×8 on the tuned mix (closes Q7)
+**Decision:**
+- ×8 models of Phase 3 train on `configs/degrade/realistic_x8.yaml` (PR 2.6).
+- ×4 models train on `configs/degrade/realistic.yaml`, which PR 2.6 left unchanged.
+
+**Reason:**
+- The tuned mix comes from real photos.
+- In PR 2.7 it gave better ID similarity on clean, light and medium inputs. Light is the level
+  closest to real ×8 faces (PR 2.6).
+- FID and KID on real photos were equal.
+- It loses LPIPS on medium and heavy inputs, which are far from real ×8 faces.
+- The user chose it on 2026-11-25.
+
+### D23 — Quality gate thresholds (`CLAUDE.md` §10)
+**Decision:** a new model passes if, against the current reference model of its scale, on both
+the light and the medium synthetic test levels (frozen `test` split):
+- LPIPS is lower and ID similarity is higher (all images);
+- PSNR-Y is at most 0.3 dB lower;
+- in every subgroup (`Male` = 1 / 0, `Young` = 1 / 0), ID similarity is at most 0.01 lower.
+
+**Implementation:** `configs/gate.yaml`, `facehall.eval.gate` and `scripts/quality_gate.py`.
+
+**References:**
+- **Initial:** the models trained on the same degradation mix with the previous recipe:
+  `fnet_x4_realistic-20261124-153302` for ×4 and `fnet_x8_tuned-20261125-090336` for ×8.
+- **Replacement:** a model that passes becomes the new reference, in the same PR.
+
+**Not gated:**
+- the real-world set: its FID and KID reward invented faces (PR 2.5). It is reported and checked
+  visually;
+- the bicubic and heavy levels: reported only. Heavy is far from real faces (PR 2.6).
+
+**Defaults taken without a separate question:**
+- the choice of light and medium;
+- the reference models;
+- applying the subgroup rule to both levels.
+
+**Reason:**
+- **Thresholds:** the user approved them on 2026-11-25.
+- **Levels:** light and medium are the synthetic levels closest to real faces: medium at ×4, light
+  at ×8 (PR 2.6).
+- **Same mix:** a reference on the same mix isolates the change of model and recipe.
+- **Checked on an earlier pair:** the PR 2.7 model (`fnet_x8_tuned`) fails this gate against
+  `fnet_x8_realistic` on LPIPS, although the user chose its mix (D22). The gate compares models,
+  not degradation mixes.
+
+### SRResNet-v2 and the L1 recipe (PR 3.1)
+**Decision:**
+- **Model** `srresnet` (`facehall.models.srresnet`, `configs/model/srresnet.yaml`):
+  - SRResNet without BatchNorm, with residual scaling 0.1 (EDSR);
+  - 16 residual blocks of 64 channels; 3×3 head and tail; ReLU;
+  - one conv + pixel-shuffle ×2 stage per factor of 2;
+  - the bicubic upsampling of the input added to the output;
+  - output linear in training and clamped to [0, 1] in eval mode;
+  - 1,517,571 parameters at ×4 and 1,665,283 at ×8.
+- **Recipe** (`configs/train/srresnet_x{4,8}.yaml`):
+  - L1 loss; Adam with lr 2e-4 and β (0.9, 0.999);
+  - cosine decay per optimizer step down to 1e-6;
+  - batch 16, 30 epochs, no early stopping, no EMA;
+  - ×4 on `realistic.yaml`, ×8 on `realistic_x8.yaml` (D22).
+- **Resume:** `facehall train --resume RUN_DIR`. It continues an interrupted run after its last
+  completed epoch, from `last_state.pt`, with the run's own config; `--set` and `--smoke` are
+  not accepted.
+- **Gate result** (D23):
+  - ×4 passes all 14 checks and becomes the ×4 reference in `configs/gate.yaml`;
+  - ×8 fails: ID similarity is lower than `fnet_x8_tuned` on light (0.170 against 0.175) and
+    medium (0.104 against 0.110), and `Young` = 0 on medium drops by 0.0101. `fnet_x8_tuned`
+    stays the ×8 reference.
+
+**Defaults taken without a separate question:** residual scaling 0.1, the bicubic skip, lr 2e-4
+with cosine decay, 30 epochs and no EMA.
+
+**Reason:**
+- **Architecture:** `CLAUDE.md` §9 plans these changes. EDSR (arXiv:1707.02921) removed
+  BatchNorm from SR networks. In FNet it may also explain the early gap between train and val
+  loss in the PR 1.6 smoke runs (not checked).
+- **L1 and lr 2e-4:** the PSNR-oriented setting of ESRGAN (arXiv:1809.00219). The cosine
+  decay replaces ESRGAN's step halving: one setting fewer, and the rate depends only on the
+  step, which makes resuming exact.
+- **Bicubic skip:** the network predicts only the difference from upsampling, so colours and
+  low frequencies start right.
+- **30 epochs:** about 25 min per run on the RTX 6000 Ada (about 50 s per epoch), under the
+  30 minutes that need a separate confirmation. Validation loss still fell slightly at the end
+  (best epochs 30 and 29), so a longer run may gain a little more.
+- **No EMA:** it belongs to the ESRGAN-recipe step (PR 3.2). Keeping it out leaves the
+  architecture and loss as the changes of this step.
+- **Resume:** it was tech debt (§11). It becomes needed with longer Phase 3 runs. On CPU, an
+  interrupted and resumed run gives the same weights as an uninterrupted one (tested).
+- **No ×8 exception:** at ×8 the new model is clearly better on LPIPS (0.288 against 0.346 on
+  light) and on PSNR-Y. Its ID losses are small. The gate is still applied as agreed: a model
+  that fails it does not replace the reference.

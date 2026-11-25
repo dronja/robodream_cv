@@ -756,5 +756,13 @@ the gate reference / ID similarity; WIDER val KID ×10³ (± std):
 - **Grids** (8 synthetic and 8 real test samples, not measured): no stripe grid; the faces look
   like the L1 model's, with slightly more defined eyes and mouth.
 - **Reference:** by D23 the model would replace `fnet_x8_tuned`. The user said to keep the
-  reference when deciding on the PR 3.3 model (D24), so this replacement waits for an explicit
-  decision (`docs/PROJECT.md` §11, Q9); `configs/gate.yaml` is unchanged.
+  reference when deciding on the PR 3.3 model (D24), so this replacement waited for an explicit
+  decision: D25.
+
+### D25 — The PR 3.4 ×8 model becomes the ×8 reference (closes Q9)
+**Decision** (the user, 2026-11-25): `srresnet_id_robust_x8-20261125-174436` replaces
+`fnet_x8_tuned-20261125-090336` as the ×8 reference in `configs/gate.yaml`. ×4 keeps
+`srresnet_x4-20261125-093232`.
+
+**Reason:** it passes all 14 gate checks (D23), and unlike the PR 3.3 model (D24) it shows no
+stripe grid and keeps the real-photo KID of the L1 model.

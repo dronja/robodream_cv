@@ -77,9 +77,8 @@ As of 2026-11-25:
     similarity rises a lot, but the outputs carry a periodic grid artifact; the ×8 model is not
     the reference (D24, §9).
   - In review: PR 3.4 (identity loss robust to pixel patterns; branch
-    `feat/robust-identity-loss`). Result: ×8 passes the gate without the artifact; ×4 has no
-    identity weight that meets the val rule (§9). Whether the ×8 model becomes the reference is
-    open (Q9).
+    `feat/robust-identity-loss`). Result: ×8 passes the gate without the artifact and becomes
+    the ×8 reference (D25); ×4 has no identity weight that meets the val rule (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -357,6 +356,7 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D22 | Phase 3 trains ×8 on `realistic_x8.yaml` and ×4 on `realistic.yaml` |
 | D23 | Quality gate: on light and medium, lower LPIPS and higher ID sim than the reference, PSNR-Y −0.3 dB at most, subgroup ID sim −0.01 at most (`configs/gate.yaml`) |
 | D24 | The PR 3.3 ×8 identity model is not the ×8 reference despite passing the gate: its outputs carry a grid artifact |
+| D25 | The PR 3.4 ×8 model (`srresnet_id_robust_x8-20261125-174436`) is the ×8 reference; ×4 keeps `srresnet_x4-20261125-093232` |
 
 ## 8. Licenses — status
 
@@ -1043,8 +1043,8 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     | heavy | 21.37 / 0.468 / 0.069 | 21.56 / 0.386 / 0.066 | 21.48 / 0.375 / 0.076 | 21.48 / 0.381 / 0.073 |
     | WIDER real: FID / KID ×10³ | 108.6 / 103.6 | 100.8 / 98.8 | 144.9 / 141.4 | 105.0 / 98.4 |
 
-  - **Gate (D23):** passes all 14 checks against `fnet_x8_tuned`. Whether it becomes the ×8
-    reference is open (Q9).
+  - **Gate (D23):** passes all 14 checks against `fnet_x8_tuned` and becomes the ×8 reference
+    (D25).
   - **Observations:**
     - **Artifact gone:** no stripe grid in 8 synthetic and 8 real test samples (zoomed, not
       measured); real-photo KID equals the L1 start's.
@@ -1136,8 +1136,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       model than the ID-similarity metric; weight chosen on val. ×8 passes the gate and ×4
       fails it on one LPIPS check, but both show a periodic grid artifact (§9, D24)
 - [x] **PR 3.4** Robust identity loss: jitter and low-pass of the recognition input; artifact
-      check (WIDER val KID) in the val selection. ×8 passes the gate without the artifact; ×4
-      has no qualifying weight (§9)
+      check (WIDER val KID) in the val selection. ×8 passes the gate without the artifact and
+      becomes the ×8 reference (D25); ×4 has no qualifying weight (§9)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1185,11 +1185,10 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
-by D24.
+by D24, Q9 (the PR 3.4 ×8 model as reference) by D25.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q9 | The PR 3.4 ×8 model (`srresnet_id_robust_x8-20261125-174436`) passes the gate (D23) without the PR 3.3 artifact. Make it the ×8 reference? | before merging PR 3.4 | Yes, as D23 says |
 | Q10 | Add an artifact check to the gate, like the WIDER val KID rule of the PR 3.4 selection (on the test faces: KID at most the reference's plus two standard deviations)? | before the next gate run | Yes |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 

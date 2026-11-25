@@ -8,4 +8,4 @@ subgroup_id_drop: 0.01      # ID similarity the candidate may lose in any subgro
 subgroups: [male, not_male, young, not_young]
 references:                 # current reference per scale: a model that passes replaces it
   4: srresnet_x4-20261125-093232-best      # PR 3.1; before: fnet_x4_realistic-20261124-153302-best
-  8: fnet_x8_tuned-20261125-090336-best
+  8: srresnet_id_robust_x8-20261125-174436-best   # PR 3.4 (D25); before: fnet_x8_tuned-20261125-090336-best

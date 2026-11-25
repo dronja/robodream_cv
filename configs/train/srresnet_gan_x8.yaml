@@ -1,0 +1,45 @@
+# ESRGAN recipe (PR 3.2) on SRResNet-v2, x8: the L1-trained generator of PR 3.1 fine-tuned with
+# a perceptual (VGG19 conv5_4, before the activation) and a relativistic adversarial loss,
+# weights as in ESRGAN (arXiv:1809.00219, Sec. 4.1): perceptual 1, adversarial 5e-3, L1 1e-2;
+# Adam 1e-4 for both networks; EMA of the generator weights. Same data and degradations as
+# srresnet_x8 (tuned mix, D22). `best` is the last epoch: the pixel val loss does not rank a GAN.
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic_x8.yaml
+  model: ../model/srresnet.yaml
+name: srresnet_gan_x8
+scale: 8
+seed: 0
+train:
+  epochs: 8           # ~30 min on the RTX 6000 Ada (about 3.7 min per epoch)
+  init: runs/srresnet_x8-20261125-095801/best.safetensors   # local run (PR 3.1)
+  batch_size: 16
+  loss: l1
+  losses:
+    pixel: 1.0e-2
+    perceptual: 1.0
+    adversarial: 5.0e-3
+  perceptual:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/vgg19/vgg19-dcbb9e9d.pth
+    layer: conv5_4
+  discriminator:
+    name: vgg
+    channels: 64
+    optimizer:
+      name: adam
+      lr: 1.0e-4
+      beta1: 0.9
+      beta2: 0.999
+      eps: 1.0e-8
+  best_metric: none
+  optimizer:
+    name: adam
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+  scheduler:
+    name: cosine
+    min_lr: 1.0e-6
+  ema_decay: 0.999
+  precision: bf16

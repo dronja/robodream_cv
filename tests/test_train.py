@@ -15,6 +15,7 @@ from torch import nn
 from facehall.config import load_config
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
 from facehall.data.dataset import AlignedFaces
+from facehall.losses import ragan_generator_loss
 from facehall.models import ModelConfig
 from facehall.train import (
     ExperimentConfig,
@@ -28,11 +29,16 @@ from facehall.train import (
     train,
 )
 from facehall.train.config import (
+    DiscriminatorConfig,
+    LossWeights,
+    OptimizerConfig,
+    PerceptualConfig,
     SchedulerConfig,
     experiment_from_dict,
     experiment_to_dict,
     validate,
 )
+from facehall.train.objective import Objective
 from facehall.train.trainer import (
     EarlyStopping,
     EpochShuffle,
@@ -233,14 +239,18 @@ TRAIN_CONFIGS = {
     "fnet_x8_tuned": "realistic_x8",
     "srresnet_x4": "realistic",
     "srresnet_x8": "realistic_x8",  # Q7
+    "srresnet_gan_x4": "realistic",
+    "srresnet_gan_x8": "realistic_x8",
 }
 
 
 @pytest.mark.parametrize(("name", "degrade"), TRAIN_CONFIGS.items())
 def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FACEHALL_DATA", raising=False)
+    monkeypatch.delenv("FACEHALL_WEIGHTS", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
-    model, rest = name.split("_x")
+    recipe_name, rest = name.split("_x")
+    model = recipe_name.removesuffix("_gan")
     scale = rest.partition("_")[0]
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
     expected = load_config(CONFIGS.parent / "degrade" / f"{degrade}.yaml", DegradeConfig)
@@ -248,7 +258,17 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
     assert config.data.root == "/mnt/storage/AI/Face/celeba" and config.data.hr_size == 128
     assert config.train.batch_size == 16
     recipe = (config.train.loss, config.train.optimizer.lr, config.train.scheduler.name)
-    if model == "srresnet":
+    if recipe_name == "srresnet_gan":  # ESRGAN recipe (PR 3.2)
+        assert recipe == ("l1", 1e-4, "cosine") and config.train.ema_decay == 0.999
+        assert config.train.losses == LossWeights(pixel=1e-2, perceptual=1.0, adversarial=5e-3)
+        assert config.train.perceptual == PerceptualConfig(
+            "/mnt/storage/AI/Face/weights/vgg19/vgg19-dcbb9e9d.pth", "conv5_4"
+        )
+        assert config.train.discriminator.optimizer.lr == 1e-4
+        assert config.train.best_metric == "none"
+        assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
+        assert (config.train.epochs, config.train.early_stopping) == (8, 0)
+    elif model == "srresnet":
         assert recipe == ("l1", 2e-4, "cosine")
         assert (config.train.epochs, config.train.early_stopping) == (30, 0)
     else:  # the legacy recipe
@@ -359,3 +379,165 @@ def test_resume_needs_a_completed_epoch(
     run = next(tmp_path.iterdir())
     with pytest.raises(FileNotFoundError, match="no completed epoch"):
         resume(run)
+
+
+def tiny_features() -> nn.Module:
+    torch.manual_seed(1)
+    return nn.Sequential(nn.Conv2d(3, 4, 3, padding=1), nn.ReLU(), nn.Conv2d(4, 4, 3, padding=1))
+
+
+@pytest.fixture
+def gan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., ExperimentConfig]:
+    """Experiments with all three loss terms; a tiny network stands in for VGG19."""
+    weights = tmp_path / "vgg19.pth"
+    weights.write_bytes(b"stand-in")
+    monkeypatch.setattr(
+        "facehall.train.trainer.vgg19_features", lambda path, layer: tiny_features()
+    )
+
+    def make(output: Path, **train: Any) -> ExperimentConfig:
+        settings: dict[str, Any] = {
+            "losses": LossWeights(pixel=1e-2, perceptual=1.0, adversarial=5e-3),
+            "perceptual": PerceptualConfig(str(weights), "conv5_4"),
+            "discriminator": DiscriminatorConfig(channels=4, optimizer=OptimizerConfig(lr=1e-3)),
+            "best_metric": "none",
+            "loss": "l1",
+        }
+        return experiment(train.pop("root"), output, **{**settings, **train})
+
+    return make
+
+
+def test_adversarial_training_run(
+    root: Path, tmp_path: Path, gan: Callable[..., ExperimentConfig]
+) -> None:
+    run = train(gan(tmp_path / "runs", root=root, epochs=3))
+    info = json.loads((run / "run.json").read_text())
+    assert info["losses"] == {"loss": "l1", "pixel": 1e-2, "perceptual": 1.0, "adversarial": 5e-3}
+    assert info["discriminator"]["name"] == "vgg" and info["discriminator"]["parameters"] > 0
+    assert info["perceptual"]["layer"] == "conv5_4" and len(info["perceptual"]["sha256"]) == 64
+    epochs = records(run, "epoch")
+    assert all(r["best"] for r in epochs)  # best_metric none: `best` is the latest epoch
+    assert read_metadata(run / "best.safetensors")["epoch"] == 3
+    terms = epochs[-1]["train_terms"]
+    assert set(terms) == {"pixel", "perceptual", "adversarial", "discriminator", "d_real", "d_fake"}
+    total = 1e-2 * terms["pixel"] + terms["perceptual"] + 5e-3 * terms["adversarial"]
+    assert epochs[-1]["train_loss"] == pytest.approx(total, rel=1e-5)
+    assert set(records(run, "step")[0]["terms"]) == set(terms)
+    state = torch.load(run / "last_state.pt", weights_only=True)
+    assert state["discriminator"] is not None and state["d_optimizer"] is not None
+
+
+def test_adversarial_resume_continues_as_if_uninterrupted(
+    root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gan: Callable[..., ExperimentConfig],
+) -> None:
+    def config(output: str) -> ExperimentConfig:
+        base = gan(tmp_path / output, root=root, epochs=3, ema_decay=0.5)
+        base.train.scheduler = SchedulerConfig(name="cosine", min_lr=1e-5)
+        return base
+
+    reference = train(config("reference"))
+    with monkeypatch.context() as patch:
+        interrupt_after(patch, 2)
+        with pytest.raises(KeyboardInterrupt):
+            train(config("interrupted"))
+    run = next((tmp_path / "interrupted").iterdir())
+    resume(run)
+    for name in ("last", "last_ema"):
+        expected = load_file(reference / f"{name}.safetensors")
+        resumed = load_file(run / f"{name}.safetensors")
+        assert all(torch.equal(expected[k], resumed[k]) for k in expected), name
+    expected_d = torch.load(reference / "last_state.pt", weights_only=True)["discriminator"]
+    resumed_d = torch.load(run / "last_state.pt", weights_only=True)["discriminator"]
+    assert all(torch.equal(expected_d[k], resumed_d[k]) for k in expected_d)
+    assert [r["train_terms"] for r in records(run, "epoch")][1:] == [
+        r["train_terms"] for r in records(reference, "epoch")
+    ][1:]
+
+
+def test_init_from_a_checkpoint(root: Path, tmp_path: Path) -> None:
+    srresnet = ModelConfig(name="srresnet", channels=4, residual_blocks=1)  # no BatchNorm
+    source = replace(experiment(root, tmp_path / "source", epochs=1), model=srresnet)
+    init = train(source) / "last.safetensors"
+    frozen = replace(experiment(root, tmp_path / "init", epochs=1, init=str(init)), model=srresnet)
+    frozen.train.optimizer.lr = 0.0  # the weights stay at their initial values
+    run = train(frozen)
+    expected, started = load_file(init), load_file(run / "last.safetensors")
+    assert all(torch.equal(expected[k], started[k]) for k in expected)
+    info = json.loads((run / "run.json").read_text())["init"]
+    assert (info["path"], info["sha256"], info["epoch"]) == (
+        str(init),
+        read_metadata(init)["sha256"],
+        1,
+    )
+    other = experiment(root, tmp_path / "other", init=str(init))  # a tiny FNet
+    with pytest.raises(ValueError, match="another model"):
+        train(other)
+
+
+def test_objective_and_discriminator_step() -> None:
+    torch.manual_seed(0)
+    discriminator = nn.Sequential(nn.Flatten(), nn.Linear(3 * 4 * 4, 1), nn.Flatten(0))
+    d_optimizer = torch.optim.SGD(discriminator.parameters(), lr=0.1)
+    weights = LossWeights(pixel=2.0, perceptual=0.0, adversarial=0.5)
+    objective = Objective(
+        F.l1_loss, weights, discriminator=discriminator, d_optimizer=d_optimizer, g_lr=1e-3
+    )
+    sr = torch.rand(4, 3, 4, 4, requires_grad=True)
+    hr = torch.rand(4, 3, 4, 4)
+    with pytest.raises(RuntimeError, match="before a generator loss"):
+        objective.after_step(1e-3)
+    loss = objective(sr, hr)
+    with torch.no_grad():
+        real, fake = discriminator(hr), discriminator(sr)
+    expected = 2.0 * F.l1_loss(sr, hr) + 0.5 * ragan_generator_loss(real, fake)
+    assert loss.item() == pytest.approx(expected.item())
+    torch.autograd.backward(loss)
+    assert all(p.grad is None for p in discriminator.parameters())
+    before = [p.detach().clone() for p in discriminator.parameters()]
+    objective.after_step(5e-4)  # half the generator's base rate
+    assert d_optimizer.param_groups[0]["lr"] == pytest.approx(0.05)
+    assert any(
+        not torch.equal(a, b) for a, b in zip(before, discriminator.parameters(), strict=True)
+    )
+    window = objective.take_window()
+    assert set(window) == {"pixel", "adversarial", "discriminator", "d_real", "d_fake"}
+    assert objective.take_window() == {}
+    assert set(objective.take_epoch()) == set(window)
+    with pytest.raises(ValueError, match="needs a discriminator"):
+        Objective(F.l1_loss, weights)
+    with pytest.raises(ValueError, match="needs a perceptual loss"):
+        Objective(F.l1_loss, LossWeights(perceptual=1.0))
+
+
+def test_invalid_loss_settings_are_rejected(root: Path, tmp_path: Path) -> None:
+    config = experiment(root, tmp_path)
+
+    def with_train(**values: Any) -> ExperimentConfig:
+        return replace(config, train=replace(config.train, **values))
+
+    bad = [
+        (with_train(losses=LossWeights(pixel=-1.0)), "must not be negative"),
+        (with_train(losses=LossWeights(pixel=0.0)), "at least one weight"),
+        (with_train(losses=LossWeights(perceptual=1.0)), "perceptual.weights is required"),
+        (
+            with_train(
+                losses=LossWeights(perceptual=1.0), perceptual=PerceptualConfig("w.pth", "fc7")
+            ),
+            "unknown VGG19 layer",
+        ),
+        (with_train(losses=LossWeights(adversarial=1.0), grad_accum=2), "grad_accum must be 1"),
+        (
+            with_train(
+                losses=LossWeights(adversarial=1.0), discriminator=DiscriminatorConfig(name="unet")
+            ),
+            "unknown discriminator",
+        ),
+        (with_train(best_metric="lpips"), "unknown best metric"),
+    ]
+    for value, message in bad:
+        with pytest.raises(ValueError, match=message):
+            validate(value)

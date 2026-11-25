@@ -561,3 +561,51 @@ with cosine decay, 30 epochs and no EMA.
 - **No ×8 exception:** at ×8 the new model is clearly better on LPIPS (0.288 against 0.346 on
   light) and on PSNR-Y. Its ID losses are small. The gate is still applied as agreed: a model
   that fails it does not replace the reference.
+
+### ESRGAN recipe on SRResNet-v2 (PR 3.2)
+**Decision:**
+- **Losses** (`facehall.losses`, `facehall.train.objective`): the generator loss of ESRGAN
+  (arXiv:1809.00219, Sec. 3.3, Eq. 3), perceptual + λ · adversarial + η · L1, with λ = 5e-3 and
+  η = 1e-2 (Sec. 4.1):
+  - perceptual: L1 between VGG19 `conv5_4` features of SR and HR, before the activation
+    ("VGG19-54"), inputs normalized with the ImageNet statistics; torchvision weights (approved
+    on 2026-11-25);
+  - adversarial: the relativistic average GAN of Sec. 3.2, Eqs. 1–2;
+  - the discriminator is updated once after every generator step, on the same batch.
+- **Discriminator:** the layer layout of `VGGStyleDiscriminator` in the authors' BasicSR code
+  (Apache-2.0), re-implemented: 128 px input, 64 to 512 channels, BatchNorm, LeakyReLU 0.2,
+  14,499,401 parameters.
+- **Recipe** (`configs/train/srresnet_gan_x{4,8}.yaml`):
+  - the generator starts from the PR 3.1 `best` checkpoint of its scale (`train.init`), as
+    ESRGAN starts from its PSNR-oriented model;
+  - Adam 1e-4, β (0.9, 0.999), for both networks; cosine decay to 1e-6, which the
+    discriminator follows;
+  - batch 16, 8 epochs (about 77,000 steps), EMA of the generator with decay 0.999;
+  - `best` is the last epoch (`train.best_metric: none`): the pixel validation loss does not
+    rank a GAN, and the evaluation protocol is the measure.
+- **Code:** `train.init` checks that the checkpoint holds the same model, scale and HR size;
+  the discriminator and its optimizer are part of `last_state.pt`, so `--resume` works for GAN
+  runs too (tested on CPU).
+
+**Defaults taken without a separate question:**
+- the SRResNet-v2 generator instead of ESRGAN's RRDB network: it isolates the effect of the
+  losses, and keeps the comparison with PR 3.1 direct;
+- cosine decay instead of halving at 50k, 100k, 200k and 300k of 400k steps;
+- 8 epochs: one run is about 30 minutes, under the limit that needs a separate confirmation.
+  That is about a fifth of ESRGAN's 400,000 steps;
+- the paper's relativistic loss and β2 = 0.999. The BasicSR config `train_ESRGAN_x4.yml` (read
+  on 2026-11-25) uses a vanilla GAN loss and β2 = 0.99; the paper is the reference here;
+- EMA decay 0.999, from the same BasicSR config (the paper does not give one).
+
+**Result** (2026-11-25, from commit `d4f7713`): the recipe fails the quality gate (D23) at both
+scales, and the references stay as they are:
+- LPIPS and FID improve a lot: ×4 light LPIPS 0.195 → 0.122, WIDER FID 89.5 → 58.5;
+- ID similarity falls by about half on every level, below plain bicubic upsampling: ×4 light
+  0.445 → 0.243 (bicubic 0.547); PSNR-Y falls by 2.8–5.2 dB;
+- in the grids, the faces are sharp but belong to other people, with stains and blotches; at
+  ×8, a dark smudge under the nose appears on almost every face.
+
+**Reason for keeping the code:** the losses, the discriminator, `train.init` and the
+discriminator state in `last_state.pt` are the base of the next Phase 3 steps (identity loss,
+and a smaller adversarial weight under an identity constraint). The configs stay as the record
+of this run; they are not a recommended recipe.

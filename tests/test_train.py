@@ -283,7 +283,7 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
         )
         assert config.train.best_metric == "none"
         assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
-        assert config.train.early_stopping == 0
+        assert (config.train.epochs, config.train.early_stopping) == (2, 0)
     elif model == "srresnet":
         assert recipe == ("l1", 2e-4, "cosine")
         assert (config.train.epochs, config.train.early_stopping) == (30, 0)

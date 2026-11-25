@@ -1,10 +1,10 @@
-"""The generator objective of one batch, and the discriminator update (Phase 3, PR 3.2).
+"""The generator objective of one batch, and the discriminator update (Phase 3, PR 3.2, 3.3).
 
-``Objective(sr, hr)`` returns the weighted sum of the pixel loss, the perceptual loss and the
-generator's adversarial loss. With an adversarial weight it also owns the discriminator and its
-optimizer: ``after_step`` updates the discriminator on the last batch, after the generator step,
-as ESRGAN alternates the two (arXiv:1809.00219, Sec. 4.1). The discriminator's learning rate
-follows the generator's schedule: it is scaled by the same factor.
+``Objective(sr, hr)`` returns the weighted sum of the pixel loss, the perceptual loss, the
+identity loss and the generator's adversarial loss. With an adversarial weight it also owns the
+discriminator and its optimizer: ``after_step`` updates the discriminator on the last batch,
+after the generator step, as ESRGAN alternates the two (arXiv:1809.00219, Sec. 4.1). The
+discriminator's learning rate follows the generator's schedule: it is scaled by the same factor.
 
 The loss terms are accumulated for logging: ``take_window`` returns their means since the
 previous call, ``take_epoch`` since the start of the epoch.
@@ -16,6 +16,7 @@ import torch
 from torch import nn
 
 from facehall.losses.adversarial import ragan_discriminator_loss, ragan_generator_loss
+from facehall.losses.identity import IdentityLoss
 from facehall.losses.perceptual import PerceptualLoss
 from facehall.train.config import LossWeights
 
@@ -29,6 +30,7 @@ class Objective:
         weights: LossWeights,
         *,
         perceptual: PerceptualLoss | None = None,
+        identity: IdentityLoss | None = None,
         discriminator: nn.Module | None = None,
         d_optimizer: torch.optim.Optimizer | None = None,
         g_lr: float = 1.0,
@@ -37,11 +39,14 @@ class Objective:
     ) -> None:
         if weights.perceptual > 0 and perceptual is None:
             raise ValueError("a perceptual weight needs a perceptual loss")
+        if weights.identity > 0 and identity is None:
+            raise ValueError("an identity weight needs an identity loss")
         if weights.adversarial > 0 and (discriminator is None or d_optimizer is None):
             raise ValueError("an adversarial weight needs a discriminator and its optimizer")
         self.pixel = pixel
         self.weights = weights
         self.perceptual = perceptual
+        self.identity = identity
         self.discriminator = discriminator if weights.adversarial > 0 else None
         self.d_optimizer = d_optimizer if weights.adversarial > 0 else None
         self.d_lr = [group["lr"] for group in d_optimizer.param_groups] if d_optimizer else []
@@ -68,6 +73,9 @@ class Objective:
         if self.perceptual is not None and self.weights.perceptual > 0:
             with self._autocast():
                 parts["perceptual"] = self.perceptual(sr, hr)
+        if self.identity is not None and self.weights.identity > 0:
+            with self._autocast():
+                parts["identity"] = self.identity(sr, hr)
         if self.discriminator is not None:
             self.discriminator.requires_grad_(False)
             with self._autocast():

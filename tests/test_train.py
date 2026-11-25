@@ -15,8 +15,9 @@ from torch import nn
 from facehall.config import load_config
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
 from facehall.data.dataset import AlignedFaces
-from facehall.losses import ragan_generator_loss
+from facehall.losses import IdentityLoss, ragan_generator_loss
 from facehall.models import ModelConfig
+from facehall.provenance import file_sha256
 from facehall.train import (
     ExperimentConfig,
     ModelEMA,
@@ -30,6 +31,7 @@ from facehall.train import (
 )
 from facehall.train.config import (
     DiscriminatorConfig,
+    IdentityConfig,
     LossWeights,
     OptimizerConfig,
     PerceptualConfig,
@@ -241,6 +243,8 @@ TRAIN_CONFIGS = {
     "srresnet_x8": "realistic_x8",  # Q7
     "srresnet_gan_x4": "realistic",
     "srresnet_gan_x8": "realistic_x8",
+    "srresnet_id_x4": "realistic",
+    "srresnet_id_x8": "realistic_x8",
 }
 
 
@@ -250,7 +254,7 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
     monkeypatch.delenv("FACEHALL_WEIGHTS", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
     recipe_name, rest = name.split("_x")
-    model = recipe_name.removesuffix("_gan")
+    model = recipe_name.removesuffix("_gan").removesuffix("_id")
     scale = rest.partition("_")[0]
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
     expected = load_config(CONFIGS.parent / "degrade" / f"{degrade}.yaml", DegradeConfig)
@@ -268,6 +272,18 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
         assert config.train.best_metric == "none"
         assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
         assert (config.train.epochs, config.train.early_stopping) == (8, 0)
+    elif recipe_name == "srresnet_id":  # identity loss (PR 3.3)
+        assert recipe == ("l1", 1e-4, "cosine") and config.train.ema_decay == 0.999
+        assert config.train.losses.pixel == 1.0 and config.train.losses.identity > 0
+        assert config.train.losses.perceptual == config.train.losses.adversarial == 0
+        assert config.train.identity == IdentityConfig(
+            "/mnt/storage/AI/Face/weights/facenet_vggface2/20180402-114759-vggface2.pt",
+            0.875,
+            0.55,
+        )
+        assert config.train.best_metric == "none"
+        assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
+        assert (config.train.epochs, config.train.early_stopping) == (2, 0)
     elif model == "srresnet":
         assert recipe == ("l1", 2e-4, "cosine")
         assert (config.train.epochs, config.train.early_stopping) == (30, 0)
@@ -413,7 +429,13 @@ def test_adversarial_training_run(
 ) -> None:
     run = train(gan(tmp_path / "runs", root=root, epochs=3))
     info = json.loads((run / "run.json").read_text())
-    assert info["losses"] == {"loss": "l1", "pixel": 1e-2, "perceptual": 1.0, "adversarial": 5e-3}
+    assert info["losses"] == {
+        "loss": "l1",
+        "pixel": 1e-2,
+        "perceptual": 1.0,
+        "adversarial": 5e-3,
+        "identity": 0.0,
+    }
     assert info["discriminator"]["name"] == "vgg" and info["discriminator"]["parameters"] > 0
     assert info["perceptual"]["layer"] == "conv5_4" and len(info["perceptual"]["sha256"]) == 64
     epochs = records(run, "epoch")
@@ -456,6 +478,61 @@ def test_adversarial_resume_continues_as_if_uninterrupted(
     assert [r["train_terms"] for r in records(run, "epoch")][1:] == [
         r["train_terms"] for r in records(reference, "epoch")
     ][1:]
+
+
+class TinyRecognition(nn.Module):
+    """Stands in for facenet: a strided conv, pooled and L2-normalized."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        torch.manual_seed(2)
+        self.conv = nn.Conv2d(3, 8, 5, stride=8)
+        self.bn = nn.BatchNorm2d(8)  # must stay in eval mode during training
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.normalize(self.bn(self.conv(x)).mean(dim=(2, 3)), dim=1)
+
+
+def test_identity_training_run(root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    weights = tmp_path / "facenet.pt"
+    weights.write_bytes(b"stand-in")
+    networks: list[TinyRecognition] = []
+
+    def fake_facenet(path: Path) -> nn.Module:
+        networks.append(TinyRecognition().eval())
+        return networks[-1]
+
+    monkeypatch.setattr("facehall.train.trainer.load_facenet", fake_facenet)
+    config = experiment(
+        root,
+        tmp_path / "runs",
+        epochs=2,
+        loss="l1",
+        losses=LossWeights(pixel=1.0, identity=0.5),
+        identity=IdentityConfig(str(weights)),
+        best_metric="none",
+    )
+    run = train(config)
+    info = json.loads((run / "run.json").read_text())
+    assert info["losses"]["identity"] == 0.5
+    assert info["identity"]["crop"] == {"top": 4, "left": 2, "side": 28}  # 32 px HR crops
+    assert info["identity"]["sha256"] == file_sha256(weights)
+    epochs = records(run, "epoch")
+    terms = epochs[-1]["train_terms"]
+    assert set(terms) == {"pixel", "identity"}
+    assert epochs[-1]["train_loss"] == pytest.approx(terms["pixel"] + 0.5 * terms["identity"])
+    assert all(-1.0 <= r["val_identity"] <= 1.0 for r in epochs)
+    assert read_metadata(run / "best.safetensors")["metrics"]["val_identity"] == pytest.approx(
+        epochs[-1]["val_identity"]
+    )
+    # the recognition network is frozen: its weights and BN statistics did not change
+    reference = TinyRecognition()
+    assert all(
+        torch.equal(a, b)
+        for a, b in zip(
+            reference.state_dict().values(), networks[0].state_dict().values(), strict=True
+        )
+    )
 
 
 def test_init_from_a_checkpoint(root: Path, tmp_path: Path) -> None:
@@ -511,6 +588,18 @@ def test_objective_and_discriminator_step() -> None:
         Objective(F.l1_loss, weights)
     with pytest.raises(ValueError, match="needs a perceptual loss"):
         Objective(F.l1_loss, LossWeights(perceptual=1.0))
+    with pytest.raises(ValueError, match="needs an identity loss"):
+        Objective(F.l1_loss, LossWeights(identity=1.0))
+
+
+def test_objective_identity_term() -> None:
+    identity = IdentityLoss(TinyRecognition().eval(), 32)
+    objective = Objective(F.l1_loss, LossWeights(pixel=2.0, identity=0.3), identity=identity)
+    sr, hr = torch.rand(2, 3, 32, 32, requires_grad=True), torch.rand(2, 3, 32, 32)
+    loss = objective(sr, hr)
+    expected = 2.0 * F.l1_loss(sr, hr) + 0.3 * identity(sr, hr)
+    assert loss.item() == pytest.approx(expected.item(), rel=1e-6)
+    assert set(objective.take_epoch()) == {"pixel", "identity"}
 
 
 def test_invalid_loss_settings_are_rejected(root: Path, tmp_path: Path) -> None:
@@ -537,6 +626,13 @@ def test_invalid_loss_settings_are_rejected(root: Path, tmp_path: Path) -> None:
             "unknown discriminator",
         ),
         (with_train(best_metric="lpips"), "unknown best metric"),
+        (with_train(losses=LossWeights(identity=1.0)), "identity.weights is required"),
+        (
+            with_train(
+                losses=LossWeights(identity=1.0), identity=IdentityConfig("w.pt", crop_side=1.2)
+            ),
+            "leaves the image",
+        ),
     ]
     for value, message in bad:
         with pytest.raises(ValueError, match=message):

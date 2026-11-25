@@ -9,6 +9,7 @@ from omegaconf import MISSING, OmegaConf
 
 from facehall.config import load_config, require_choice
 from facehall.data.config import DataConfig, DegradeConfig
+from facehall.losses.identity import crop_box
 from facehall.losses.perceptual import LAYERS
 from facehall.models import MODELS, ModelConfig
 
@@ -46,12 +47,22 @@ class LossWeights:
     pixel: float = 1.0  # the pixel loss ``train.loss``
     perceptual: float = 0.0  # VGG19 features (``train.perceptual``)
     adversarial: float = 0.0  # relativistic average GAN (``train.discriminator``)
+    identity: float = 0.0  # 1 - cosine of facenet embeddings (``train.identity``)
 
 
 @dataclass
 class PerceptualConfig:
     weights: str = ""  # VGG19 weights file (scripts/download_weights.py vgg19)
     layer: str = "conv5_4"  # facehall.losses.LAYERS; features before the activation
+
+
+@dataclass
+class IdentityConfig:
+    """Input square of the recognition network, relative to the HR crop (``crop_box``)."""
+
+    weights: str = ""  # facenet weights file (scripts/download_weights.py facenet_vggface2)
+    crop_side: float = 0.875
+    crop_center_y: float = 0.55  # vertical centre; the square is centred horizontally
 
 
 @dataclass
@@ -70,6 +81,7 @@ class TrainConfig:
     loss: str = "mse"  # pixel loss, one of LOSSES; also the validation loss
     losses: LossWeights = field(default_factory=LossWeights)
     perceptual: PerceptualConfig = field(default_factory=PerceptualConfig)
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
     discriminator: DiscriminatorConfig = field(default_factory=DiscriminatorConfig)
     best_metric: str = "val_loss"  # one of BEST_METRICS: what selects the `best` checkpoint
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
@@ -121,14 +133,19 @@ def validate(config: ExperimentConfig) -> None:
     require_choice(train.scheduler.name, SCHEDULERS, "scheduler")
     require_choice(train.best_metric, BEST_METRICS, "best metric")
     weights = train.losses
-    if min(weights.pixel, weights.perceptual, weights.adversarial) < 0:
+    values = vars(weights).values()
+    if min(values) < 0:
         raise ValueError("train.losses weights must not be negative")
-    if weights.pixel + weights.perceptual + weights.adversarial == 0:
+    if sum(values) == 0:
         raise ValueError("train.losses: at least one weight must be positive")
     if weights.perceptual > 0:
         require_choice(train.perceptual.layer, tuple(LAYERS), "VGG19 layer")
         if not train.perceptual.weights:
             raise ValueError("train.perceptual.weights is required with a perceptual loss")
+    if weights.identity > 0:
+        if not train.identity.weights:
+            raise ValueError("train.identity.weights is required with an identity loss")
+        crop_box(config.data.hr_size, train.identity.crop_side, train.identity.crop_center_y)
     if weights.adversarial > 0:
         require_choice(train.discriminator.name, DISCRIMINATORS, "discriminator")
         require_choice(train.discriminator.optimizer.name, OPTIMIZERS, "optimizer")

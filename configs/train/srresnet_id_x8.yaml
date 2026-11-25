@@ -1,0 +1,38 @@
+# Identity loss (PR 3.3) on SRResNet-v2, x8: the L1-trained generator of PR 3.1 fine-tuned with
+# L1 plus 1 - cosine of facenet embeddings (Inception-ResNet-v1, VGGFace2) of SR and HR. The
+# recognition network is not the one of the ID-similarity metric (buffalo_l, D18). No perceptual
+# or adversarial term. Adam 1e-4 with cosine decay; EMA of the weights. Same data and degradations
+# as srresnet_x8 (tuned mix, D22). The identity weight and the 2 epochs were chosen on the val split
+# (docs/DECISIONS.md, PR 3.3). `best` is the last epoch: the pixel val loss does not rank the
+# identity term.
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic_x8.yaml
+  model: ../model/srresnet.yaml
+name: srresnet_id_x8
+scale: 8
+seed: 0
+train:
+  epochs: 2           # ~7 min on the RTX 6000 Ada (about 3.3 min per epoch)
+  init: runs/srresnet_x8-20261125-095801/best.safetensors   # local run (PR 3.1)
+  batch_size: 16
+  loss: l1
+  losses:
+    pixel: 1.0
+    identity: 0.1       # chosen on val among 0.1, 0.3, 1.0
+  identity:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/facenet_vggface2/20180402-114759-vggface2.pt
+    crop_side: 0.875
+    crop_center_y: 0.55
+  best_metric: none
+  optimizer:
+    name: adam
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+  scheduler:
+    name: cosine
+    min_lr: 1.0e-6
+  ema_decay: 0.999
+  precision: bf16

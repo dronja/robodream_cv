@@ -65,9 +65,24 @@ ASSETS = {
             "the ImageNet training data and need verification"
         ),
     ),
+    "facenet_vggface2": Asset(
+        name="facenet_vggface2",
+        url=(
+            "https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/"
+            "20180402-114759-vggface2.pt"
+        ),
+        size=111_898_327,
+        sha256="281cebca8662831adb987a874bdcb36e73f5b1c6dc5ee5878f305e985625d99b",  # 2026-11-25
+        members=(),
+        license=(
+            "facenet-pytorch port (MIT) of David Sandberg's facenet 20180402-114759 (MIT); no "
+            "license stated for the weights; trained on VGGFace2, whose terms need verification"
+        ),
+    ),
 }
 INCEPTION_FILE = "weights-inception-2015-12-05-6726825d.pth"
 VGG19_FILE = "vgg19-dcbb9e9d.pth"
+FACENET_FILE = "20180402-114759-vggface2.pt"
 
 
 def inception_weights(root: Path | None = None) -> Path:
@@ -78,6 +93,12 @@ def inception_weights(root: Path | None = None) -> Path:
 def vgg19_weights(root: Path | None = None) -> Path:
     """Path of the VGG19 weights used for the perceptual loss (``download_weights.py vgg19``)."""
     return asset_dir("vgg19", root) / VGG19_FILE
+
+
+def facenet_weights(root: Path | None = None) -> Path:
+    """Path of the facenet weights used for the identity loss (``download_weights.py
+    facenet_vggface2``)."""
+    return asset_dir("facenet_vggface2", root) / FACENET_FILE
 
 
 def weights_root() -> Path:

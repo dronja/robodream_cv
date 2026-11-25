@@ -609,3 +609,72 @@ scales, and the references stay as they are:
 discriminator state in `last_state.pt` are the base of the next Phase 3 steps (identity loss,
 and a smaller adversarial weight under an identity constraint). The configs stay as the record
 of this run; they are not a recommended recipe.
+
+### Identity loss on facenet embeddings (PR 3.3)
+**Decision:**
+- **Recognition network:** facenet's Inception-ResNet-v1, model `20180402-114759` trained on
+  VGGFace2, in the PyTorch port of facenet-pytorch. The user approved the download on
+  2026-11-25 with the weight license unknown (`docs/THIRD_PARTY_LICENSES.md` §3). It is not the
+  model of the ID-similarity metric (`buffalo_l`, D18): another architecture, other training data
+  and another input crop, so the metric stays an independent measure. Candidates considered:
+  AdaFace (weights license not stated, the same 112 px ArcFace input), SFace (Apache 2.0, ONNX
+  only, so it is not differentiable without a conversion), InsightFace `arcface_torch`
+  (non-commercial, and the same family as the metric).
+- **Code:** `facehall.losses.facenet` re-implements the network with the facenet-pytorch layer
+  names (MIT notice kept), so the published state dict loads as it is; its output equals the
+  original's exactly (checked on random inputs). `facehall.losses.identity.IdentityLoss` is the
+  mean `1 - cos` of the embeddings of SR and HR; the network is frozen and stays in eval mode.
+- **Input crop:** a fixed square of the aligned crop, side 0.875 and vertical centre 0.55 (112 px
+  at 128), resized to 160 px. Chosen on CelebA validation: 600 identities with two images each;
+  the ROC AUC of same against different identity pairs was 0.977–0.984 over 18 squares of side
+  0.56–1.0, highest for this one (same-identity mean cosine 0.667, different 0.020). The crop
+  barely matters.
+- **Recipe** (`configs/train/srresnet_id_x{4,8}.yaml`): the PR 3.1 `best` checkpoint of each
+  scale fine-tuned with L1 (weight 1) plus the identity loss; no perceptual or adversarial term,
+  so the effect of the identity term is isolated after PR 3.2. Adam 1e-4 with cosine decay to
+  1e-6, batch 16, EMA 0.999, `best` = the last epoch. Validation also reports the mean facenet
+  similarity.
+- **Weight and length, chosen on the val split** (never on test): 2-epoch runs with identity
+  weights 0.1, 0.3 and 1.0, scored with `facehall eval --split val` on the light and medium
+  levels. Rule, set before the runs: the highest mean ArcFace ID similarity over light and
+  medium among the weights that lose at most 0.3 dB of PSNR-Y against the starting L1 model on
+  both levels (the PSNR rule of D23). The recipe keeps the 2 epochs of the selection runs;
+  longer runs were not tested.
+
+  Val results, PSNR-Y change / LPIPS / ID similarity:
+
+  | Scale | Weight | light | medium |
+  |---|---|---|---|
+  | ×4 | start (L1) | 27.92 dB / 0.2004 / 0.4475 | 26.40 dB / 0.2465 / 0.2971 |
+  | ×4 | 0.1 | −0.14 / 0.2028 / 0.5012 | −0.15 / 0.2510 / 0.3377 |
+  | ×4 | **0.3** | −0.27 / 0.1987 / 0.5080 | −0.27 / 0.2476 / 0.3425 |
+  | ×4 | 1.0 | −0.42 / 0.1971 / 0.5120 | −0.40 / 0.2497 / 0.3460 |
+  | ×8 | start (L1) | 24.44 dB / 0.2950 / 0.1725 | 23.09 dB / 0.3377 / 0.1060 |
+  | ×8 | **0.1** | −0.15 / 0.2952 / 0.2124 | −0.11 / 0.3329 / 0.1296 |
+  | ×8 | 0.3 | −0.26 / 0.2881 / 0.2118 | −0.19 / 0.3261 / 0.1280 |
+  | ×8 | 1.0 | −0.39 / 0.2984 / 0.2139 | −0.28 / 0.3390 / 0.1303 |
+
+  So ×4 uses 0.3 and ×8 uses 0.1. At ×8, 0.1 and 0.3 are nearly equal on ID (mean 0.1710
+  against 0.1699), and 0.3 has the better LPIPS; the rule, fixed in advance, decides.
+
+**Result** (2026-11-25, runs from commit `423675c`): the ID metric rises a lot, but the outputs
+carry a periodic artifact, so the gain cannot be taken at face value:
+- **Test, PSNR-Y / LPIPS / ID similarity on light and medium:** ×4 27.76 / 0.195 / 0.509 and
+  26.22 / 0.244 / 0.340 (the L1 start: 28.03 / 0.195 / 0.445 and 26.49 / 0.241 / 0.292); ×8
+  24.35 / 0.289 / 0.206 and 23.03 / 0.327 / 0.124 (the reference `fnet_x8_tuned`: 24.29 / 0.346 /
+  0.174 and 22.99 / 0.399 / 0.110). ID similarity rises in every subgroup.
+- **Gate (D23):** ×4 fails one of 14 checks, LPIPS on medium (0.2441 against 0.2407); ×8 passes
+  all 14.
+- **Real photos:** FID / KID ×10³ get worse at both scales: ×4 89.5 / 92.3 → 118.3 / 124.6, ×8
+  100.8 / 98.8 → 144.9 / 141.4.
+- **Grids** (8 synthetic and 8 real samples per scale, zoomed; not measured): a regular grid of
+  thin horizontal and vertical stripes, a period of about 3–4 px, over the face, strongest
+  around the eyes and nose. Clear at ×8 on every sample, faint at ×4 at full size and clear when
+  zoomed. This is the known failure of optimizing a recognition network's embedding: a pattern
+  that raises its similarity. Recognition models share such patterns to some degree, so part of
+  the ArcFace gain may come from the pattern, not from the face (a hypothesis, not tested).
+
+**Reference:** by the letter of D23, the ×8 model would replace `fnet_x8_tuned`. It is not made
+the reference until the user decides (`docs/PROJECT.md` §11, Q8): the gate does not see the
+artifact, and a reference whose ID score is inflated would make the gate harder for faithful
+models. `configs/gate.yaml` is unchanged.

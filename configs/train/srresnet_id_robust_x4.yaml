@@ -1,0 +1,41 @@
+# Robust identity loss (PR 3.4) on SRResNet-v2, x4: the recipe of srresnet_id_x4 (PR 3.3) with
+# the defences against pixel patterns of facehall.losses.identity: a random shift, rotation and
+# scale of the recognition crop per image (the same for SR and HR), and a Gaussian low-pass
+# before resampling. Same data and degradations as srresnet_x4. The identity weight was chosen on the
+# val split (docs/DECISIONS.md, PR 3.4). `best` is the last epoch.
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic.yaml
+  model: ../model/srresnet.yaml
+name: srresnet_id_robust_x4
+scale: 4
+seed: 0
+train:
+  epochs: 2           # ~7 min on the RTX 6000 Ada (about 3.3 min per epoch)
+  init: runs/srresnet_x4-20261125-093232/best.safetensors   # local run (PR 3.1)
+  batch_size: 16
+  loss: l1
+  losses:
+    pixel: 1.0
+    identity: 0.3       # placeholder until the val selection
+  identity:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/facenet_vggface2/20180402-114759-vggface2.pt
+    crop_side: 0.875
+    crop_center_y: 0.55
+    jitter:
+      shift: 0.05       # x the square side (5.6 px at 128): more than one period of the PR 3.3 grid
+      rotation: 5.0     # degrees
+      scale: 0.1
+    blur: 1.0           # HR px: the largest sigma that keeps the val pair AUC within 0.005
+  best_metric: none
+  optimizer:
+    name: adam
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+  scheduler:
+    name: cosine
+    min_lr: 1.0e-6
+  ema_decay: 0.999
+  precision: bf16

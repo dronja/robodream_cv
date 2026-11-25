@@ -16,6 +16,7 @@ from facehall.losses import (
     InceptionResnetV1,
     PerceptualLoss,
     crop_box,
+    gaussian_kernel,
     load_facenet,
     ragan_discriminator_loss,
     ragan_generator_loss,
@@ -146,26 +147,69 @@ def test_identity_loss() -> None:
     assert loss.box == (8, 8, 16)
     hr = torch.rand(2, 3, 32, 32)
     assert loss(hr, hr).item() == pytest.approx(0.0, abs=1e-6)
-    # the network sees the standardized centre square at 160 px
-    grey = torch.zeros(1, 3, 32, 32)
-    grey[:, :, 8:24, 8:24] = 0.5
-    loss.embed(grey)
+    # the network sees the standardized square at 160 px: inside, the bilinear resize of the
+    # crop (PR 3.3); its outermost pixels sample the image around the square
+    loss.embed(hr)
     seen = network.seen[-1]
-    assert seen.shape == (1, 3, INPUT_SIZE, INPUT_SIZE)
-    assert torch.allclose(seen, torch.full_like(seen, (0.5 * 255 - 127.5) / 128))
-    # 1 - cosine, averaged over the batch; gradients reach SR only
+    assert seen.shape == (2, 3, INPUT_SIZE, INPUT_SIZE)
+    crop = F.interpolate(hr[:, :, 8:24, 8:24], size=INPUT_SIZE, mode="bilinear")
+    inner = (slice(None), slice(None), slice(5, -5), slice(5, -5))
+    assert torch.allclose(seen[inner], ((crop * 255 - 127.5) / 128)[inner], atol=1e-4)
+    loss.embed(torch.full((1, 3, 32, 32), 0.75))
+    assert torch.allclose(network.seen[-1], torch.tensor((0.75 * 255 - 127.5) / 128))
+    # 1 - cosine of the two embeddings, averaged over the batch; gradients reach SR only
     sr = torch.rand(2, 3, 32, 32, requires_grad=True)
     value = loss(sr, hr)
-
-    def embed(x: torch.Tensor) -> torch.Tensor:
-        face = F.interpolate(x[:, :, 8:24, 8:24], size=INPUT_SIZE, mode="bilinear", antialias=True)
-        return ((face * 255 - 127.5) / 128).mean(dim=(2, 3)) + torch.tensor([0, 0, 3.0])
-
-    expected = 1 - F.cosine_similarity(embed(sr), embed(hr), dim=1).mean()
+    target, output = (network(x) for x in network.seen[-2:])  # HR is embedded first
+    expected = 1 - F.cosine_similarity(output, target, dim=1).mean()
     assert value.item() == pytest.approx(expected.item(), rel=1e-5)
     torch.autograd.backward(value)
-    assert sr.grad is not None and sr.grad[:, :, :8].abs().sum() == 0  # outside the square
+    assert sr.grad is not None and sr.grad[:, :, :6].abs().sum() == 0  # outside the square
     assert sr.grad.abs().sum() > 0
     assert all(p.grad is None and not p.requires_grad for p in loss.parameters())
     loss.train()
     assert loss.training and not loss.network.training
+
+
+def test_identity_jitter() -> None:
+    def make(seed: int = 0) -> IdentityLoss:
+        return IdentityLoss(Recorder(), 32, side=0.5, shift=0.1, rotation=10, scale=0.2, seed=seed)
+
+    loss = make()
+    base = loss.transforms(3, jitter=False)
+    first, second = loss.transforms(3, jitter=True), loss.transforms(3, jitter=True)
+    assert not torch.equal(first, second) and not torch.equal(first, base)
+    assert torch.equal(make().transforms(3, jitter=True), first)  # the seed fixes the stream
+    assert not torch.equal(make(seed=1).transforms(3, jitter=True), first)
+    # limits: the square moves by at most shift x its side, and its size stays within scale
+    half = base[0, 0, 0]
+    shifts = (first[:, :, 2] - base[:, :, 2]).abs()
+    assert (shifts <= 2 * half * 0.1 + 1e-6).all()
+    sizes = first[:, :, :2].det().sqrt() / half
+    assert ((sizes >= 1 / 1.2 - 1e-6) & (sizes <= 1.2 + 1e-6)).all()
+    # SR and HR of one image share one transform: equal images give zero loss
+    hr = torch.rand(3, 3, 32, 32)
+    assert loss(hr, hr).item() == pytest.approx(0.0, abs=1e-6)
+    # the generator state can be saved and restored (training resume)
+    state = loss.generator.get_state()
+    expected = loss.transforms(2, jitter=True)
+    loss.generator.set_state(state)
+    assert torch.equal(loss.transforms(2, jitter=True), expected)
+    # similarity (validation) never jitters
+    assert torch.equal(loss.similarity(hr, hr.flip(3)), loss.similarity(hr, hr.flip(3)))
+    with pytest.raises(ValueError, match="non-negative"):
+        IdentityLoss(Recorder(), 32, side=0.5, blur=-1.0)
+
+
+def test_identity_blur() -> None:
+    kernel = gaussian_kernel(1.0)
+    assert kernel.numel() == 7 and kernel.sum().item() == pytest.approx(1.0)
+    plain = IdentityLoss(Recorder(), 32, side=0.5)
+    blurred = IdentityLoss(Recorder(), 32, side=0.5, blur=1.0)
+    flat = torch.full((1, 3, 32, 32), 0.3)
+    theta = plain.transforms(1, jitter=False)
+    assert torch.allclose(blurred.faces(flat, theta), plain.faces(flat, theta))
+    # a one-pixel checkerboard (the kind of pattern the defence targets) is mostly removed
+    board = (torch.arange(32)[:, None] + torch.arange(32)[None, :]) % 2
+    images = (0.5 + 0.2 * (board * 2 - 1)).float().expand(1, 3, 32, 32)
+    assert blurred.faces(images, theta).std() < 0.1 * plain.faces(images, theta).std()

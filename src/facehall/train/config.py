@@ -8,7 +8,7 @@ from typing import Any
 from omegaconf import MISSING, OmegaConf
 
 from facehall.config import load_config, require_choice
-from facehall.data.config import DataConfig, DegradeConfig
+from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
 from facehall.losses.identity import crop_box
 from facehall.losses.perceptual import LAYERS
 from facehall.models import MODELS, ModelConfig
@@ -58,11 +58,14 @@ class PerceptualConfig:
 
 @dataclass
 class IdentityConfig:
-    """Input square of the recognition network, relative to the HR crop (``crop_box``)."""
+    """Input square of the recognition network, relative to the HR crop (``crop_box``), and
+    the defences against pixel patterns (``facehall.losses.identity``, PR 3.4)."""
 
     weights: str = ""  # facenet weights file (scripts/download_weights.py facenet_vggface2)
     crop_side: float = 0.875
     crop_center_y: float = 0.55  # vertical centre; the square is centred horizontally
+    jitter: JitterConfig = field(default_factory=JitterConfig)  # per image; shift: x square side
+    blur: float = 0.0  # Gaussian sigma in HR pixels before resampling; 0 disables
 
 
 @dataclass
@@ -146,6 +149,9 @@ def validate(config: ExperimentConfig) -> None:
         if not train.identity.weights:
             raise ValueError("train.identity.weights is required with an identity loss")
         crop_box(config.data.hr_size, train.identity.crop_side, train.identity.crop_center_y)
+        jitter = train.identity.jitter
+        if min(jitter.shift, jitter.rotation, jitter.scale, train.identity.blur) < 0:
+            raise ValueError("train.identity jitter and blur must be non-negative")
     if weights.adversarial > 0:
         require_choice(train.discriminator.name, DISCRIMINATORS, "discriminator")
         require_choice(train.discriminator.optimizer.name, OPTIMIZERS, "optimizer")

@@ -131,9 +131,10 @@ def test_default_pipeline_is_the_bicubic_downscale(scale: int) -> None:
     }
 
 
+@pytest.mark.parametrize("name", ["realistic", "realistic_x8"])
 @pytest.mark.parametrize("scale", [4, 8])
-def test_realistic_config_runs(scale: int) -> None:
-    config = load_config(CONFIGS / "degrade" / "realistic.yaml", DegradeConfig)
+def test_realistic_config_runs(scale: int, name: str) -> None:
+    config = load_config(CONFIGS / "degrade" / f"{name}.yaml", DegradeConfig)
     degradation = build_degradation(config)
     hr = smooth_image()
     outputs = [degradation(hr, scale, np.random.default_rng(seed)) for seed in range(30)]

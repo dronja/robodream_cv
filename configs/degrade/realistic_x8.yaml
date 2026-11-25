@@ -1,0 +1,63 @@
+# Realistic degradation for x8 (16 px LR), tuned against real LR faces (PR 2.6): the base
+# realistic.yaml with the accepted winner of configs/degrade/search/realistic.yaml on the WIDER
+# FACE val crops, blur=x0.6, noise=s35, jpeg=q70, second=p0.5 (DECISIONS.md, 2026-11-24,
+# "Degradation tuning against real faces"). x4 keeps realistic.yaml: no candidate passed the gate.
+# Blur sizes are in LR pixels; noise sigma is in 8-bit levels; probabilities are per sample;
+# kind and mode values are relative sampling weights.
+kind: pipeline
+quantize: true
+first:
+  blur:
+    prob: 0.9
+    gaussian: 0.45
+    anisotropic: 0.35
+    motion: 0.1
+    defocus: 0.1
+    sigma: [0.1, 0.6]       # realistic: [0.1, 1.0]
+    motion_length: [0.5, 1.8]   # [0.5, 3.0]
+    defocus_radius: [0.3, 0.9]  # [0.3, 1.5]
+  resize:
+    bicubic: 0.4
+    bilinear: 0.3
+    area: 0.2
+    nearest: 0.1
+    antialias: 0.7          # bicubic and bilinear only
+  noise:
+    prob: 0.7
+    gaussian: 0.6
+    poisson: 0.4
+    sigma: [1.0, 35.0]      # realistic: [1.0, 15.0]
+    peak: [26.5, 32500.0]   # photons at white: 35 to 1 levels at mid-grey; realistic: [100, 3000]
+    gray: 0.4
+  jpeg:
+    prob: 0.8
+    quality: [70, 95]       # realistic: [30, 95]
+second:
+  prob: 0.5
+  size: [0.75, 2.0]         # the first stage ends at this multiple of the LR size
+  stage:
+    blur:
+      prob: 0.5
+      gaussian: 0.6
+      anisotropic: 0.4
+      sigma: [0.1, 0.6]
+    resize:
+      bicubic: 0.4
+      bilinear: 0.3
+      area: 0.2
+      nearest: 0.1
+      antialias: 0.7
+    noise:
+      prob: 0.5
+      gaussian: 0.6
+      poisson: 0.4
+      sigma: [1.0, 10.0]
+      peak: [300.0, 3000.0]
+      gray: 0.4
+    jpeg:
+      prob: 0.8
+      quality: [70, 95]     # realistic: [30, 95]
+grayscale: 0.02             # the HR target is turned grey too
+color_shift:                # off: an LR-only colour shift teaches the model to invent colours
+  prob: 0.0
+  shift: 0.0

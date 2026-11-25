@@ -57,11 +57,13 @@ As of 2026-11-24:
     levels, PR #12, `4701155`) and PR 2.4 (FNet trained on realistic degradations, PR #13,
     `e090b74`; done before PR 2.3 at the user's choice) and PR 2.3 (real-world test set from
     WIDER FACE, D20, PR #14, `06416f3`).
-  - In review: PR 2.5 (evaluation on real-world faces without reference; branch
-    `feat/eval-realworld`). With it, the effect of the degradations on real photos is measured
-    (§9), which is the Phase 2 "done when" criterion.
+  - Also merged: PR 2.5 (evaluation on real-world faces without reference, PR #15, `92f245f`).
+    With it, the effect of the degradations on real photos is measured (§9), which is the
+    Phase 2 "done when" criterion.
+  - In review: PR 2.6 (degradation ranges tuned against the WIDER `val` part, no training;
+    branch `feat/tune-degradations`). Result: a tuned mix for ×8; ×4 keeps `realistic.yaml`.
   - Open:
-    - whether to tune the realistic ranges against the WIDER `val` part before Phase 3;
+    - whether to re-train FNet ×8 on the tuned mix before Phase 3;
     - the quality-gate thresholds for Phase 3 (`CLAUDE.md` §10).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
@@ -75,8 +77,9 @@ robodream_cv/
 ├── README.md                  # public description (English)
 ├── LICENSE
 ├── pyproject.toml, uv.lock    # uv project, hatchling build; ruff, mypy, pytest config
-├── configs/                   # data/celeba_128.yaml, degrade/{bicubic,realistic}.yaml,
+├── configs/                   # data/celeba_128.yaml, degrade/{bicubic,realistic,realistic_x8}.yaml,
 │                              # degrade/levels/{light,medium,heavy}.yaml,
+│                              # degrade/search/realistic.yaml (PR 2.6 search space),
 │                              # model/{bicubic,fnet,cnet}.yaml, train/{fnet,cnet}_x{4,8}.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml,
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
@@ -93,19 +96,22 @@ robodream_cv/
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults)
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py
 │   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
-│   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner)
+│   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner),
+│   │                          # match.py (degradation tuning against real LR crops)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # prepare_wider.py (WIDER FACE → real-world LR crops),
 │                              # license_report.py (license table from package metadata),
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
-│                              # preview_degradations.py, protocol_digest.py
+│                              # preview_degradations.py, protocol_digest.py,
+│                              # match_degradations.py (PR 2.6)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
-│                              # dataset, models, train, eval, WIDER preparation, real-world eval
+│                              # dataset, models, train, eval, WIDER preparation, real-world eval,
+│                              # degradation matching
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -674,7 +680,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **No-reference metrics:** NIQE needs 96 px blocks and cannot be computed on 128 px
     outputs; `pyiqa` is non-commercial and heavy. FID/KID through torchmetrics need the
     InceptionV3 weights (Q6), so the evaluation itself is PR 2.5.
-- **Evaluation on real-world faces (PR 2.5, in review).** Protocol decisions and reasons in
+- **Evaluation on real-world faces (PR 2.5, done).** Protocol decisions and reasons in
   `DECISIONS.md` (2026-11-24, D21 and "Real-world evaluation protocol").
   - **Protocols:** `configs/eval/wider_real_x{4,8}.yaml` (`kind: realworld`) on the frozen WIDER
     `test` crops: 8,645 faces at ×4, 2,172 at ×8. `facehall eval` dispatches on `kind`.
@@ -725,6 +731,39 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - FID and KID against CelebA cannot tell restoration from invention, so Phase 3 needs
         identity metrics on the synthetic levels and visual checks on the real-world set;
       - the ×8 outputs must carry the "plausible reconstruction" warning (`CLAUDE.md` §11).
+- **Degradation tuning against real faces (PR 2.6, in review).** Decision, rule and reasons in
+  `DECISIONS.md` (2026-11-24, "Degradation tuning against real faces").
+  - **Code:** `facehall.eval.match` scores degradation configs by the KID and FID between their
+    synthetic LR crops (5,000 CelebA validation crops) and the real WIDER `val` LR crops.
+    `scripts/match_degradations.py` runs a search spec and writes `results.json`,
+    `results.md` and `winner.yaml` to `outputs/degrade_match/` (local).
+  - **Search:** `configs/degrade/search/realistic.yaml`, 135 candidates around `realistic.yaml`
+    on four axes: blur size, noise strength, lowest JPEG quality and second-stage probability.
+    The base and the four test levels are scored as references.
+  - **Views:** all real faces; typical faces (no occlusion, typical pose: 6,324 at ×4, 1,971 at
+    ×8); the centre square of the crop. The views separate degradation from content: at ×4 the
+    first search, on whole crops only, was mostly driven by occluded and atypical faces.
+  - **Rule:** rank by mean KID; re-score the 5 best on a fresh sample; adopt the winner only if
+    it beats the base on all three KIDs and both FIDs.
+  - **Run** on 2026-11-24 from commit `a9bff19`: about 25 min per scale on the RTX 6000 Ada.
+    Round 2, mean KID ×10³ / FID (whole crop):
+
+    | Scale | Base `realistic.yaml` | Winner | Accepted |
+    |---|---|---|---|
+    | ×4 | 20.00 / 34.44 | 17.74 / 35.81 (blur ×1.5, noise σ ≤ 25, no second stage) | no: worse on both FIDs |
+    | ×8 | 24.49 / 31.98 | 14.25 / 25.38 (blur ×0.6, noise σ ≤ 35, JPEG ≥ 70) | yes: `realistic_x8.yaml` |
+
+  - **Observations:**
+    - **×4:** `realistic.yaml` is already about as close to real ×4 faces as this search space
+      allows. PR 2.4's suspicion that it is too heavy holds for the clean and light synthetic
+      levels, not for real photos.
+    - **×8:** real 16 px faces are matched by less blur, lighter JPEG and stronger noise than
+      `realistic.yaml` has. In a local grid (10 samples), the tuned crops show the sharp,
+      grainy pixel structure of the real ones, where the base crops look smooth.
+    - **Test levels:** medium is closest to real ×4 faces, and light to real ×8 faces. Heavy is
+      far from both: mean KID ×10³ 56.7 at ×4 and 92.4 at ×8.
+    - **Scales:** the ×8 winner is poor at ×4 and the other way round.
+  - **Not done:** re-training on the tuned ×8 mix. A ×8 FNet run takes about 10 min (PR 2.4).
 
 ## 10. Roadmap and progress
 
@@ -788,8 +827,11 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 2.4** Re-train FNet ×4 and ×8 with realistic degradations (approved by the user on
       2026-11-24); compare clean vs realistic training on the synthetic levels
 - [x] Compare clean vs realistic training on the real-world set (PR 2.5)
-- [ ] *(to decide)* Tune the realistic ranges against the WIDER `val` part, for example by
-      matching real and synthetic LR statistics (KID between real and synthetic LR crops)
+- [x] **PR 2.6** Tune the realistic ranges against the WIDER `val` part: KID/FID between real
+      and synthetic LR crops on three views, `configs/degrade/realistic_x8.yaml` for ×8, ×4
+      unchanged (§9). Tests: spec expansion, views, gate, a search on synthetic data
+- [ ] *(to decide)* Re-train FNet ×8 on `realistic_x8.yaml` and compare on the synthetic levels
+      and the real-world test set
 
 **Done when** the effect of the degradations on real photos is measured and documented.
 
@@ -866,10 +908,11 @@ weights) by D21.
   multi-threaded process may deadlock (seen in the tests). The one deadlock found so far is the
   OpenCV one (§9), and the trainer avoids it. Python 3.14 changes the default to `forkserver`;
   revisit this when moving to it.
-- The realistic degradation ranges (§9, Phase 2) are initial values chosen from the literature
-  and a visual check. If they do not match real low-quality faces, a model trained on them may
-  over-smooth light inputs or under-restore heavy ones. PR 2.4 suggests they are too heavy for
-  clean and light inputs (§9). They are tuned against the real-world test set after PR 2.3.
+- The realistic degradation ranges were tuned against real LR faces in PR 2.6, but only by
+  feature statistics (KID/FID), which also react to content. At ×8 the tuned mix allows strong
+  noise (σ ≤ 35), part of which may stand for background clutter rather than camera noise (§9).
+  The tuned ×8 mix also lies outside the medium and heavy synthetic levels in blur and JPEG, so
+  a model trained on it is tested out of range there.
 - MSE-trained models on heavy inputs invent generic faces: they change apparent age and drop
   accessories such as glasses (seen in PR 2.4 grids, not measured). Report this in the model
   card and the UI (`CLAUDE.md` §11). Any identity gate in Phase 3 should be checked on such
@@ -923,6 +966,8 @@ uv run facehall eval --config configs/eval/celeba128_heavy_x8.yaml --model bicub
 uv run python scripts/protocol_digest.py configs/eval/*.yaml   # check the frozen inputs
 uv run facehall eval --config configs/eval/wider_real_x4.yaml --ckpt runs/<id>/best.safetensors
                                                # real-world faces, no reference (~15 s)
+uv run python scripts/match_degradations.py --spec configs/degrade/search/realistic.yaml \
+    --real configs/eval/wider_real_x8.yaml     # degradation tuning on WIDER val, outputs/ (local)
 ```
 
 Planned (target interface):

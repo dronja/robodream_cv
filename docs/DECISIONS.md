@@ -369,3 +369,85 @@ Configs are composed with a small `include` mechanism plus `--set` overrides, no
   - a model that removes noise or compression scores lower, because the input itself contains them.
 - **KID besides FID:** KID is unbiased in the sample size. Subsets of 15–550 faces cannot support a reliable FID, and the ×8 test split has only 2,172 faces.
 - **Feature cache:** computing the reference features once makes each model evaluation take about 15 s (×4) or 9 s (×8).
+
+### Degradation tuning against real faces (PR 2.6)
+**Decision:**
+- **Method:** `facehall.eval.match` with the search space `configs/degrade/search/realistic.yaml`
+  (`scripts/match_degradations.py`):
+  - real LR crops: the WIDER FACE `val` part (D20), 8,160 faces at ×4 and 2,752 at ×8;
+  - synthetic LR crops: 5,000 CelebA validation crops, degraded by each candidate;
+  - distance: KID and FID on the InceptionV3 features of PR 2.5.
+- **Search space:** 135 candidates around `realistic.yaml`:
+  - first-stage blur sizes with their upper ends scaled by 0.3, 0.6, 1.0, 1.5 or 2.0;
+  - first-stage noise σ up to 15, 25 or 35 levels, with the matching Poisson peaks;
+  - lowest JPEG quality 30, 50 or 70, in both stages;
+  - second-stage probability 0, 0.5 or 1.
+
+  The base and the four synthetic test levels are scored as references.
+- **Views:** every candidate is scored on three views:
+  - all real faces, whole crop;
+  - typical faces only: no occlusion, typical pose;
+  - the centre square of the crop: x 0.1875–0.8125, y 0.28–0.905, from the eyebrows to the
+    chin.
+- **Selection rule:**
+  1. rank the candidates by the mean KID of the three views;
+  2. score the 5 best, the base and the references again on a fresh synthetic sample (seed 1);
+  3. the best of those 5 replaces the base only if, on that sample, it is better on all three
+     KIDs and on FID of the whole crop and of the centre.
+- **×8:** the winner passed the rule. It is `configs/degrade/realistic_x8.yaml`:
+  - first-stage blur ×0.6: σ ≤ 0.6, motion ≤ 1.8, defocus ≤ 0.9 LR px;
+  - noise σ ≤ 35 levels (Poisson peak 26.5–32,500);
+  - JPEG quality 70–95 in both stages;
+  - second stage unchanged at 0.5.
+- **×4:** the winner (blur ×1.5, noise σ ≤ 25, no second stage) was better on the three KIDs but
+  worse on both FIDs. `realistic.yaml` stays the ×4 mix.
+- **Data use:** the WIDER `test` crops were not used. Re-training on the ×8 mix is a separate
+  step.
+
+**Results,** round 2 (seed 1), KID ×10³ (all / typical / centre) and FID (all / centre):
+
+| | ×4 | ×8 |
+|---|---|---|
+| base `realistic.yaml` | 24.58 / 19.76 / 15.65; 34.44 / 24.13 | 25.35 / 25.96 / 22.17; 31.98 / 24.85 |
+| winner | 20.62 / 18.55 / 14.06; 35.81 / 27.05 | 14.22 / 13.40 / 15.13; 25.38 / 21.89 |
+| closest test level | medium: 39.49 / 32.39 / 26.71; 44.39 / 30.73 | light: 27.91 / 24.24 / 27.30; 34.15 / 28.03 |
+
+Run on 2026-11-24 from commit `a9bff19`, about 25 min per scale. The full tables are in the local
+`outputs/degrade_match/`.
+
+**Reason:**
+- **Real photos as the target:** the ranges were initial values from the literature and a visual
+  check (PR 2.1). Tuning them on our own synthetic levels would be circular.
+- **Content confound:** real and synthetic faces differ in content as well as in degradation:
+  occlusions, poses, crowds and backgrounds against posed portraits. Noise can stand in for
+  clutter.
+  - The first version of the search ranked by KID on whole crops only.
+  - At ×4 most of its gain disappears on the content-controlled views. In round 2, base → winner
+    is −4.0 on all faces, but −1.2 on typical faces and −1.6 on the centre.
+  - Hence the three views and the FID check.
+- **Both KID and FID:** the two metrics weigh the feature distributions differently. A change
+  that only one of them prefers is not adopted.
+- **Second round:** with 135 candidates, the best first-round score is biased low by chance. On
+  the fresh sample, the ×8 finalists moved by 0.2–0.9 (mean KID ×10³), and the winner stayed far
+  from the base: 14.25 against 24.49.
+- **One mix per scale:** the two scales prefer different settings, and neither winner suits the
+  other scale. Mean KID ×10³, round 1:
+  - the ×8 winner at ×4: 26.89, rank 92 of 135 (base 20.03);
+  - the ×4 winner at ×8: 29.39, rank 88 of 135 (base 24.26).
+
+  Why real 16 px faces look less blurred and less compressed than 32 px ones, relative to our
+  pipeline, was not checked.
+- **Caveat on noise:** the ×8 winner is at the top of the noise axis (σ ≤ 35).
+  - The centre view barely separates it from the σ ≤ 25 finalist (centre KID ×10³ 15.13 against
+    15.16). That finalist has the better FIDs (24.70 / 20.39).
+  - So part of the extra noise may stand for clutter around small faces rather than camera
+    noise.
+  - A scratch probe outside the committed grid (σ up to 50, not in the repository) scored worse
+    than σ ≤ 35 on all three views.
+  - The rule's choice is kept, and the caveat is recorded.
+- **Frozen test levels are not changed:** the ×8 mix now lies below the medium and heavy levels in
+  blur (medium σ 0.4–0.7, motion 1–2, defocus 0.6–1.0 LR px), and above them in JPEG quality
+  (medium 50–75, heavy 30–50).
+  - A model trained on it is evaluated outside its training range on those levels.
+  - The levels stay frozen, so that results remain comparable.
+  - Of the levels, medium is closest to real ×4 faces and light to real ×8 faces (table above).

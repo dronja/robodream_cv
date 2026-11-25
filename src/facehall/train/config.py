@@ -13,6 +13,7 @@ from facehall.models import MODELS, ModelConfig
 
 LOSSES = ("mse", "l1")
 OPTIMIZERS = ("adam",)
+SCHEDULERS = ("constant", "cosine")
 PRECISIONS = ("fp32", "bf16")
 
 
@@ -27,12 +28,22 @@ class OptimizerConfig:
 
 
 @dataclass
+class SchedulerConfig:
+    """Learning rate per optimizer step. ``cosine`` decays from ``optimizer.lr`` to ``min_lr``
+    over all steps of the run (half a cosine period, no restarts)."""
+
+    name: str = "constant"  # one of SCHEDULERS
+    min_lr: float = 0.0  # cosine only
+
+
+@dataclass
 class TrainConfig:
     epochs: int = MISSING
     batch_size: int = 16
     grad_accum: int = 1  # micro-batches per optimizer step: effective batch = batch_size * this
     loss: str = "mse"  # one of LOSSES
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     precision: str = "bf16"  # autocast dtype of the training forward pass; loss and val in fp32
     early_stopping: int = 0  # patience: epochs without a lower val loss; 0 disables
     ema_decay: float = 0.0  # EMA of the weights, used for validation and `best`; 0 disables
@@ -77,6 +88,7 @@ def validate(config: ExperimentConfig) -> None:
     require_choice(config.model.name, MODELS, "model")
     require_choice(train.loss, LOSSES, "loss")
     require_choice(train.optimizer.name, OPTIMIZERS, "optimizer")
+    require_choice(train.scheduler.name, SCHEDULERS, "scheduler")
     require_choice(train.precision, PRECISIONS, "precision")
     minimum = {
         "train.epochs": (train.epochs, 1),
@@ -93,6 +105,8 @@ def validate(config: ExperimentConfig) -> None:
     for name, (value, lowest) in minimum.items():
         if value < lowest:
             raise ValueError(f"{name} must be at least {lowest}, got {value}")
+    if not 0.0 <= train.scheduler.min_lr <= train.optimizer.lr:
+        raise ValueError("train.scheduler.min_lr must be in [0, train.optimizer.lr]")
     if not 0.0 <= train.ema_decay < 1.0:
         raise ValueError(f"train.ema_decay must be in [0, 1), got {train.ema_decay}")
 

@@ -1,0 +1,7 @@
+# SRResNet-v2 (facehall.models.srresnet): SRResNet without BatchNorm, with EDSR residual scaling,
+# 16 residual blocks of 64 channels, and the bicubic upsampling of the input added to the output.
+name: srresnet
+channels: 64
+residual_blocks: 16
+res_scale: 0.1
+bicubic_skip: true

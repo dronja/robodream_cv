@@ -38,3 +38,14 @@ def test_train_smoke_run(
     assert run.parent == tmp_path / "runs" and run.name.endswith("-smoke")
     assert (run / "best.safetensors").is_file()
     assert "channels: 4" in (run / "config.yaml").read_text()
+
+
+def test_train_resume_rejects_other_options(tmp_path: Path) -> None:
+    for extra in (["--smoke"], ["--set", "seed=1"]):
+        with pytest.raises(SystemExit) as exc:
+            main(["train", "--resume", str(tmp_path), *extra])
+        assert exc.value.code == 2
+    with pytest.raises(SystemExit):
+        main(["train", "--resume", str(tmp_path), "--config", str(tmp_path / "c.yaml")])
+    with pytest.raises(SystemExit):
+        main(["train"])

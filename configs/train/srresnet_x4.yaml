@@ -1,0 +1,25 @@
+# SRResNet-v2 (configs/model/srresnet.yaml) with an L1 recipe (PR 3.1): x4, 32 -> 128 px,
+# CelebA aligned, realistic degradations; x4 keeps realistic.yaml (PR 2.6).
+# Recipe: L1 loss; Adam lr 2e-4 (the PSNR-oriented ESRGAN setting, arXiv:1809.00219) with cosine
+# decay per step; no early stopping. Fits 8 GB VRAM at this batch size (D6).
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic.yaml
+  model: ../model/srresnet.yaml
+name: srresnet_x4
+scale: 4
+seed: 0
+train:
+  epochs: 30          # ~27 min on the RTX 6000 Ada (about 55 s per epoch)
+  batch_size: 16
+  loss: l1
+  optimizer:
+    name: adam
+    lr: 2.0e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+  scheduler:
+    name: cosine
+    min_lr: 1.0e-6
+  precision: bf16

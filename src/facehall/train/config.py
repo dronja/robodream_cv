@@ -9,11 +9,14 @@ from omegaconf import MISSING, OmegaConf
 
 from facehall.config import load_config, require_choice
 from facehall.data.config import DataConfig, DegradeConfig
+from facehall.losses.perceptual import LAYERS
 from facehall.models import MODELS, ModelConfig
 
 LOSSES = ("mse", "l1")
 OPTIMIZERS = ("adam",)
 SCHEDULERS = ("constant", "cosine")
+DISCRIMINATORS = ("vgg",)
+BEST_METRICS = ("val_loss", "none")  # none: `best` is the latest epoch
 PRECISIONS = ("fp32", "bf16")
 
 
@@ -37,11 +40,38 @@ class SchedulerConfig:
 
 
 @dataclass
+class LossWeights:
+    """Weights of the generator loss terms (ESRGAN: perceptual 1, adversarial 5e-3, pixel 1e-2)."""
+
+    pixel: float = 1.0  # the pixel loss ``train.loss``
+    perceptual: float = 0.0  # VGG19 features (``train.perceptual``)
+    adversarial: float = 0.0  # relativistic average GAN (``train.discriminator``)
+
+
+@dataclass
+class PerceptualConfig:
+    weights: str = ""  # VGG19 weights file (scripts/download_weights.py vgg19)
+    layer: str = "conv5_4"  # facehall.losses.LAYERS; features before the activation
+
+
+@dataclass
+class DiscriminatorConfig:
+    name: str = "vgg"  # one of DISCRIMINATORS
+    channels: int = 64
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+
+
+@dataclass
 class TrainConfig:
     epochs: int = MISSING
+    init: str = ""  # checkpoint (.safetensors) whose weights initialize the model
     batch_size: int = 16
     grad_accum: int = 1  # micro-batches per optimizer step: effective batch = batch_size * this
-    loss: str = "mse"  # one of LOSSES
+    loss: str = "mse"  # pixel loss, one of LOSSES; also the validation loss
+    losses: LossWeights = field(default_factory=LossWeights)
+    perceptual: PerceptualConfig = field(default_factory=PerceptualConfig)
+    discriminator: DiscriminatorConfig = field(default_factory=DiscriminatorConfig)
+    best_metric: str = "val_loss"  # one of BEST_METRICS: what selects the `best` checkpoint
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     precision: str = "bf16"  # autocast dtype of the training forward pass; loss and val in fp32
@@ -89,6 +119,21 @@ def validate(config: ExperimentConfig) -> None:
     require_choice(train.loss, LOSSES, "loss")
     require_choice(train.optimizer.name, OPTIMIZERS, "optimizer")
     require_choice(train.scheduler.name, SCHEDULERS, "scheduler")
+    require_choice(train.best_metric, BEST_METRICS, "best metric")
+    weights = train.losses
+    if min(weights.pixel, weights.perceptual, weights.adversarial) < 0:
+        raise ValueError("train.losses weights must not be negative")
+    if weights.pixel + weights.perceptual + weights.adversarial == 0:
+        raise ValueError("train.losses: at least one weight must be positive")
+    if weights.perceptual > 0:
+        require_choice(train.perceptual.layer, tuple(LAYERS), "VGG19 layer")
+        if not train.perceptual.weights:
+            raise ValueError("train.perceptual.weights is required with a perceptual loss")
+    if weights.adversarial > 0:
+        require_choice(train.discriminator.name, DISCRIMINATORS, "discriminator")
+        require_choice(train.discriminator.optimizer.name, OPTIMIZERS, "optimizer")
+        if train.grad_accum != 1:
+            raise ValueError("train.grad_accum must be 1 with an adversarial loss")
     require_choice(train.precision, PRECISIONS, "precision")
     minimum = {
         "train.epochs": (train.epochs, 1),

@@ -54,13 +54,30 @@ ASSETS = {
             "torch-fidelity source; ImageNet terms need verification (Q6)"
         ),
     ),
+    "vgg19": Asset(
+        name="vgg19",
+        url="https://download.pytorch.org/models/vgg19-dcbb9e9d.pth",
+        size=574_673_361,
+        sha256="dcbb9e9dad569fff7a846263a77324fc34978fea2bfb039c012d710e1776ae44",  # 2026-11-25
+        members=(),
+        license=(
+            "torchvision VGG19 IMAGENET1K_V1 (code BSD-3-Clause); the terms of the weights follow "
+            "the ImageNet training data and need verification"
+        ),
+    ),
 }
 INCEPTION_FILE = "weights-inception-2015-12-05-6726825d.pth"
+VGG19_FILE = "vgg19-dcbb9e9d.pth"
 
 
 def inception_weights(root: Path | None = None) -> Path:
     """Path of the InceptionV3 weights used for FID and KID (``download_weights.py inception``)."""
     return asset_dir("inception", root) / INCEPTION_FILE
+
+
+def vgg19_weights(root: Path | None = None) -> Path:
+    """Path of the VGG19 weights used for the perceptual loss (``download_weights.py vgg19``)."""
+    return asset_dir("vgg19", root) / VGG19_FILE
 
 
 def weights_root() -> Path:

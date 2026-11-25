@@ -10,13 +10,19 @@
   epoch (``"event": "epoch"``);
 - ``train.log``: the text log;
 - checkpoints (``facehall.train.checkpoint``): ``last`` after every epoch and ``best`` at the
-  lowest validation loss. With EMA, validation and ``best`` use the EMA weights, and
-  ``last_ema`` is written too;
+  lowest validation loss (or after every epoch with ``train.best_metric: none``). With EMA,
+  validation and ``best`` use the EMA weights, and ``last_ema`` is written too;
 - ``last_state.pt``: the training state after the last completed epoch, for ``resume``;
 - ``summary.json``: the status and the best epoch, written when the run ends.
 
 The learning rate follows ``train.scheduler`` per optimizer step. ``resume(run_dir)`` continues
 an interrupted run (``facehall train --resume``).
+
+The generator loss is ``facehall.train.objective.Objective``: the pixel loss ``train.loss``,
+optionally plus a perceptual (VGG19) and an adversarial term with a discriminator, which is
+updated after every generator step (the ESRGAN recipe, PR 3.2). ``train.init`` starts the model
+from the weights of another run's checkpoint, e.g. the L1-trained generator. Validation always
+reports the pixel loss.
 
 Reproducibility: the seed fixes the model initialisation, the order of the training samples
 (``EpochShuffle``) and the augmentation (``AlignedFaces``). On CPU two runs with one seed give
@@ -43,21 +49,27 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from omegaconf import OmegaConf
+from safetensors.torch import load_file
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 
 from facehall.data.dataset import AlignedFaces, Sample
+from facehall.losses.perceptual import PerceptualLoss, vgg19_features
 from facehall.models import build_model, count_parameters
-from facehall.provenance import git_commit, package_versions
-from facehall.train.checkpoint import save_checkpoint
+from facehall.models.discriminators import VGGDiscriminator
+from facehall.provenance import file_sha256, git_commit, package_versions
+from facehall.train.checkpoint import read_metadata, save_checkpoint
 from facehall.train.config import (
     ExperimentConfig,
+    OptimizerConfig,
     TrainConfig,
+    experiment_from_dict,
     experiment_to_dict,
     load_experiment,
     validate,
 )
 from facehall.train.ema import ModelEMA
+from facehall.train.objective import Objective
 
 log = logging.getLogger(__name__)
 
@@ -149,13 +161,15 @@ def train_epoch(
     ema: ModelEMA | None = None,
     step: int = 0,
     schedule: Callable[[int], float] | None = None,
+    after_step: Callable[[float], None] | None = None,
     log_every: int = 0,
     on_log: Callable[..., None] | None = None,
 ) -> EpochResult:
     """One pass over ``batches``: an optimizer step every ``grad_accum`` micro-batches.
 
     ``schedule(i)`` sets the learning rate of optimizer step ``i`` (0-based, counted over the
-    run from ``step``).
+    run from ``step``). ``after_step(lr)`` is called after every optimizer step with its
+    learning rate (the discriminator update of an adversarial ``loss_fn``).
 
     Micro-batches left over at the end (fewer than ``grad_accum``) are discarded. ``on_log`` is
     called as ``on_log(step=…, loss=…)`` every ``log_every`` optimizer steps, counted from
@@ -186,6 +200,8 @@ def train_epoch(
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         steps += 1
+        if after_step is not None:
+            after_step(optimizer.param_groups[0]["lr"])
         if ema is not None:
             ema.update(model)
         if on_log is not None and log_every and (step + steps) % log_every == 0:
@@ -278,21 +294,20 @@ def _run(
 
     torch.manual_seed(config.seed)
     model = build_model(config.model, config.scale, config.data.hr_size // config.scale)
+    init = None
+    if settings.init:
+        init = init_info(Path(settings.init), config)
+        if state is None:
+            model.load_state_dict(load_file(settings.init))
     model = model.to(device)
     parameters = [p for p in model.parameters() if p.requires_grad]
     if not parameters:
         raise ValueError(f"model {config.model.name!r} has no trainable parameters")
-    opt = settings.optimizer
-    optimizer = torch.optim.Adam(
-        parameters,
-        lr=opt.lr,
-        betas=(opt.beta1, opt.beta2),
-        eps=opt.eps,
-        weight_decay=opt.weight_decay,
-    )
+    optimizer = make_optimizer(parameters, settings.optimizer)
     ema = ModelEMA(model, settings.ema_decay) if settings.ema_decay > 0 else None
     eval_model = ema.module if ema is not None else model
     loss_fn = LOSS_FUNCTIONS[settings.loss]
+    objective, extras = make_objective(config, device)
     total_steps = settings.epochs * steps_per_epoch(train_size, settings)
     schedule = partial(learning_rate, settings, total_steps)
     stopper = EarlyStopping(settings.early_stopping)
@@ -306,6 +321,9 @@ def _run(
             ema.module.load_state_dict(state["ema"])
         epoch, step, elapsed, best = state["epoch"], state["step"], state["seconds"], state["best"]
         stopper.best, stopper.stale = state["stopper"]["best"], state["stopper"]["stale"]
+        if objective.discriminator is not None and objective.d_optimizer is not None:
+            objective.discriminator.load_state_dict(state["discriminator"])
+            objective.d_optimizer.load_state_dict(state["d_optimizer"])
 
     commit = git_commit()
     device_info = describe_device(device)
@@ -323,6 +341,8 @@ def _run(
             "versions": package_versions(VERSIONED),
             "device": device_info,
             "model": {"name": config.model.name, "parameters": count_parameters(model)},
+            "init": init,
+            **extras,
             "data": {
                 "train": {**train_set.describe(), "used": train_size},
                 "val": {**val_set.describe(), "used": val_size},
@@ -388,28 +408,31 @@ def _run(
                 model,
                 loader,
                 optimizer,
-                loss_fn,
+                objective,
                 device=device,
                 precision=settings.precision,
                 grad_accum=settings.grad_accum,
                 ema=ema,
                 step=step,
                 schedule=schedule,
+                after_step=objective.after_step,
                 log_every=settings.log_every,
-                on_log=partial(write_record, metrics, "step", epoch=epoch),
+                on_log=partial(log_step, metrics, objective, epoch=epoch),
             )
+            terms = objective.take_epoch()
             step += result.steps
             val_start = time.perf_counter()
             val = evaluate(eval_model, val_loader, loss_fn, device=device)
             val_seconds = time.perf_counter() - val_start
             if not math.isfinite(val["loss"]):
                 raise FloatingPointError(f"validation loss is {val['loss']} after epoch {epoch}")
-            improved = stopper.update(val["loss"])
+            improved = stopper.update(val["loss"]) or settings.best_metric == "none"
             record = {
                 "epoch": epoch,
                 "step": step,
                 "lr": optimizer.param_groups[0]["lr"],
                 "train_loss": result.loss,
+                "train_terms": terms,
                 "val_loss": val["loss"],
                 "val_psnr_rgb": val["psnr_rgb"],
                 "best": improved,
@@ -450,13 +473,15 @@ def _run(
                 optimizer=optimizer,
                 stopper=stopper,
                 best=best,
+                objective=objective,
             )
             log.info(
-                "epoch %d/%d: train loss %.6f, val loss %.6f, val PSNR (RGB) %.2f dB%s; "
+                "epoch %d/%d: train loss %.6f (%s), val loss %.6f, val PSNR (RGB) %.2f dB%s; "
                 "%.0f s, %s img/s",
                 epoch,
                 settings.epochs,
                 result.loss,
+                ", ".join(f"{name} {value:.4g}" for name, value in terms.items()),
                 val["loss"],
                 val["psnr_rgb"],
                 " (best)" if improved else "",
@@ -485,6 +510,79 @@ def _run(
     return run_dir
 
 
+def make_optimizer(parameters: Iterable[nn.Parameter], opt: OptimizerConfig) -> torch.optim.Adam:
+    return torch.optim.Adam(
+        parameters,
+        lr=opt.lr,
+        betas=(opt.beta1, opt.beta2),
+        eps=opt.eps,
+        weight_decay=opt.weight_decay,
+    )
+
+
+def make_objective(
+    config: ExperimentConfig, device: torch.device
+) -> tuple[Objective, dict[str, Any]]:
+    """The generator objective of ``config.train``, and what ``run.json`` records about it."""
+    settings = config.train
+    weights = settings.losses
+    extras: dict[str, Any] = {"losses": {"loss": settings.loss, **vars(weights)}}
+    perceptual = None
+    if weights.perceptual > 0:
+        path = Path(settings.perceptual.weights)
+        features = vgg19_features(path, settings.perceptual.layer)
+        perceptual = PerceptualLoss(features).to(device)
+        extras["perceptual"] = {
+            "layer": settings.perceptual.layer,
+            "weights": str(path),
+            "sha256": file_sha256(path),
+        }
+    discriminator = d_optimizer = None
+    if weights.adversarial > 0:
+        d_config = settings.discriminator
+        discriminator = VGGDiscriminator(config.data.hr_size, d_config.channels).to(device)
+        d_optimizer = make_optimizer(discriminator.parameters(), d_config.optimizer)
+        extras["discriminator"] = {
+            "name": d_config.name,
+            "parameters": count_parameters(discriminator),
+        }
+    objective = Objective(
+        LOSS_FUNCTIONS[settings.loss],
+        weights,
+        perceptual=perceptual,
+        discriminator=discriminator,
+        d_optimizer=d_optimizer,
+        g_lr=settings.optimizer.lr,
+        device=device,
+        precision=settings.precision,
+    )
+    return objective, extras
+
+
+def init_info(path: Path, config: ExperimentConfig) -> dict[str, Any]:
+    """Check that checkpoint ``path`` holds the model of ``config``; returns its provenance."""
+    info = read_metadata(path)
+    source = experiment_from_dict(info["config"])
+    if (source.model, source.scale, source.data.hr_size) != (
+        config.model,
+        config.scale,
+        config.data.hr_size,
+    ):
+        raise ValueError(f"{path} holds another model, scale or HR size than the config")
+    return {
+        "path": str(path),
+        "sha256": info["sha256"],
+        "run": info.get("run"),
+        "epoch": info.get("epoch"),
+        "weights": info.get("weights"),
+        "git_commit": info.get("git_commit"),
+    }
+
+
+def log_step(file: TextIO, objective: Objective, *, epoch: int, step: int, loss: float) -> None:
+    write_record(file, "step", epoch=epoch, step=step, loss=loss, terms=objective.take_window())
+
+
 def steps_per_epoch(train_size: int, settings: TrainConfig) -> int:
     """Optimizer steps per epoch: full batches only, leftover micro-batches discarded."""
     return (train_size // settings.batch_size) // settings.grad_accum
@@ -511,8 +609,11 @@ def save_state(
     optimizer: torch.optim.Optimizer,
     stopper: EarlyStopping,
     best: dict[str, Any] | None,
+    objective: Objective | None = None,
 ) -> None:
     """Write ``last_state.pt``, everything ``resume`` needs, under a temporary name first."""
+    discriminator = objective.discriminator if objective is not None else None
+    d_optimizer = objective.d_optimizer if objective is not None else None
     state = {
         "format": STATE_FORMAT,
         "version": STATE_VERSION,
@@ -524,6 +625,8 @@ def save_state(
         "optimizer": optimizer.state_dict(),
         "stopper": {"best": stopper.best, "stale": stopper.stale},
         "best": best,
+        "discriminator": discriminator.state_dict() if discriminator is not None else None,
+        "d_optimizer": d_optimizer.state_dict() if d_optimizer is not None else None,
     }
     path = run_dir / STATE_FILE
     partial_path = path.with_name(path.name + ".partial")

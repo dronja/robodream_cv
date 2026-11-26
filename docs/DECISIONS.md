@@ -957,4 +957,19 @@ first commit; peak ratio on light / medium):
 **Limits of the check:** it sees regular patterns and excess high-frequency power, not every
 artifact (blotches, distorted features). Visual checks stay part of every gate decision.
 
-RESULT_PLACEHOLDER
+**Result** (2026-11-26, from commit `462ff81`): the light and medium test evaluations of five
+models were run again to record the spectrum. Every other metric reproduced exactly (largest
+difference 0, same input digests). Spectral peak ratio on test light / medium and the gate
+verdict before → after:
+
+| Candidate | Reference | Spectral peak | Gate verdict |
+|---|---|---|---|
+| `srresnet_x4` (PR 3.1, ×4 reference) | `fnet_x4_realistic` | 0.22 / 0.17 | pass → pass |
+| `srresnet_id_x4` (PR 3.3) | `srresnet_x4` | 5.98 / 9.32, **fail** | fail → fail |
+| `srresnet_id_perc_x4` (PR 3.6) | `srresnet_x4` | 38.10 / 26.33, **fail** | pass → **fail** |
+| `srresnet_id_x8` (PR 3.3) | `fnet_x8_tuned` | 2.31 / 2.87, **fail** | fail → fail |
+| `srresnet_id_robust_x8` (PR 3.4, ×8 reference) | `fnet_x8_tuned` | 0.12 / 0.12 | pass → pass |
+
+The only changed verdict is the PR 3.6 model, which the user had rejected by hand (D27). Both
+references pass. Other models keep their old `metrics.json` without the spectrum until they are
+evaluated again (the gate shows "—" for such a reference).

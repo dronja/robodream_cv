@@ -973,3 +973,87 @@ verdict before → after:
 The only changed verdict is the PR 3.6 model, which the user had rejected by hand (D27). Both
 references pass. Other models keep their old `metrics.json` without the spectrum until they are
 evaluated again (the gate shows "—" for such a reference).
+
+### Robust perceptual loss at ×4 (PR 3.8)
+**Context:** the VGG19 perceptual term won back the LPIPS that the identity term costs at ×4,
+but left a fine periodic hatching (PR 3.6, D27), which the spectral check (D28) now rejects.
+
+**Decision:**
+- **Defences** on the perceptual input, as for the identity term (PR 3.4), now shared code
+  (`facehall.losses.views.RandomView`):
+  - a random similarity of the whole image per image: shift up to 0.05 of its side (6.4 px at
+    128, more than the 2 and 4 px periods of PR 3.6), rotation up to 5°, scale within ×1.1;
+    the same transform for the SR and HR of one image, drawn from the loss's own seeded
+    generator (a stream of its own, saved in `last_state.pt` for `--resume`);
+  - a Gaussian low-pass, sigma 1 HR pixel, before resampling.
+
+  Without defences the perceptual loss is computed as before. The identity loss now uses the
+  same code; it was checked to give bit-identical values and jitter streams.
+- **Recipe:** `configs/train/srresnet_id_perc_robust_x4.yaml`, the PR 3.6 recipe (L1 1.0,
+  robust identity 0.3, VGG19 conv5_4, 2 epochs from `srresnet_x4`) with the defences on the
+  perceptual input. The values are the identity term's, a default taken without a separate
+  question.
+- **Perceptual weights 0.03, 0.1 and 0.3,** set by the PR 3.6 rule. On the start model
+  (2026-11-26, 32 training batches of 16, gradient norm with respect to SR at weight 1), the
+  defended term gives 0.660, against 1.818 without the defences and 0.212 for the identity
+  term. The three weights then give about ⅓×, 1× and 3× the gradient of the identity term at
+  weight 0.3.
+- **Weight selection on the val split, rule set before the runs** (the PR 3.6 rule plus D28):
+  a weight qualifies if, on val:
+  - on light and medium, against `srresnet_x4`: LPIPS lower, ID similarity higher, PSNR-Y at
+    most 0.3 dB lower, and spectral peak ratio at most 1.0;
+  - on the WIDER `val` faces, KID at most the reference's plus two standard deviations (limit
+    99.5).
+
+  Among the qualifying weights, the highest mean ID similarity on light and medium wins. A full
+  run of the winner then goes through the gate on test. If none qualifies, the recipe is
+  reported as failing and no full run is made.
+
+**Selection** (2026-11-26, runs from commit `e2d2c6c`, three in parallel). Val, PSNR-Y and LPIPS
+change against `srresnet_x4` / ID similarity / spectral peak ratio; WIDER val KID ×10³:
+
+| Perceptual weight | light | medium | WIDER val KID | Qualifies |
+|---|---|---|---|---|
+| reference `srresnet_x4` | 27.92 dB / 0.2004 / 0.4475 / 0.22 | 26.40 dB / 0.2465 / 0.2971 / 0.18 | 95.1 ± 2.2 (limit 99.5) | — |
+| PR 3.6, 0.01 without defences | −0.29 / −0.0202 / 0.4832 / 37.0¹ | −0.26 / −0.0199 / 0.3200 / 25.7¹ | 79.4 | no: spectral peak |
+| **0.03** | −0.21 / −0.0163 / 0.4788 / 0.30 | −0.24 / −0.0206 / 0.3169 / 0.34 | 65.0 | **yes** |
+| 0.1 | −0.27 / −0.0261 / 0.4704 / 1.22 | −0.30 (−0.305) / −0.0359 / 0.3115 / 1.62 | 66.7 | no: spectral peak, PSNR-Y on medium |
+| 0.3 | −0.39 / −0.0392 / 0.4591 / 3.53 | −0.42 / −0.0523 / 0.3036 / 3.94 | 84.7 | no: PSNR-Y, spectral peak |
+
+¹ the full PR 3.6 run (D28 calibration); the sweep run was not measured with this code.
+
+- **The defences work:** at 0.03 the LPIPS gain is about that of PR 3.6 (−0.016 and −0.021
+  against −0.020 and −0.020). The spectral peak falls from 37.0 / 25.7 to 0.30 / 0.34, the range
+  of the models without a pattern.
+- **Side effects:** PSNR-Y loses less than in PR 3.6 (−0.21 against −0.29 dB on light), and the
+  real-photo KID is the lowest of the project (65.0).
+- **Larger weights bring a pattern back,** as with the identity term. In the zoomed val grids
+  (6 samples per model, 5×, not measured), 0.03 shows no hatching on the lips where PR 3.6
+  does, and 0.1 shows faint horizontal stripes on the chin.
+- ID similarity is about that of PR 3.6 (0.479 against 0.483 on light).
+
+**Result** (2026-11-26, run `srresnet_id_perc_robust_x4-20261126-121325` from commit `e20e095`,
+2 epochs, 503 s at 641 img/s):
+- **Gate (D23, D26, D28) against `srresnet_x4`: passes all 17 checks.**
+  - Light: LPIPS 0.195 → 0.180, ID 0.445 → 0.477, PSNR-Y −0.20 dB, spectral peak 0.34.
+  - Medium: LPIPS 0.241 → 0.222, ID 0.292 → 0.313, PSNR-Y −0.24 dB, spectral peak 0.43.
+  - Every subgroup gains ID; WIDER test KID ×10³ 92.3 → 61.9.
+- **Against PR 3.6:** about the same LPIPS and ID (light 0.179 / 0.477 against 0.176 / 0.481), a
+  smaller PSNR-Y loss, no pattern (peak 0.34 against 38.1) and a lower real-photo KID (61.9
+  against 77.3).
+- **Spectrum on the ungated levels** (val, all images): clean bicubic inputs 0.92 (L1 0.27, PR
+  3.6 102.4), heavy 0.65 (L1 0.09, PR 3.6 23.8). On clean inputs a weak residue of the PR 3.6
+  peaks remains at the same frequencies, about 110× weaker and below the limit. It is not
+  visible in the zoomed test grids (4 clean samples at 5×, not measured).
+- **Grids** (6 synthetic, 6 real and 4 clean test samples, not measured): no hatching; eyes and
+  lips slightly sharper than the L1 model's. In some faces the eyes have a slight bluish tint,
+  as with the identity term alone.
+- **Reference:** by D23 the model would replace `srresnet_x4`. The user decided each earlier
+  replacement (D24, D25, D27), so this one waited for an explicit decision: D29.
+
+### D29 — The PR 3.8 ×4 model becomes the ×4 reference (closes Q13)
+**Decision** (the user, 2026-11-26): `srresnet_id_perc_robust_x4-20261126-121325` replaces
+`srresnet_x4-20261125-093232` as the ×4 reference in `configs/gate.yaml`. ×8 keeps
+`srresnet_id_robust_x8-20261125-174436` (D25).
+
+**Reason:** it passes all 17 gate checks (D23, D26, D28) without a visible pattern.

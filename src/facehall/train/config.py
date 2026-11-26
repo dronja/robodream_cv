@@ -9,8 +9,8 @@ from omegaconf import MISSING, OmegaConf
 
 from facehall.config import load_config, require_choice
 from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
-from facehall.losses.identity import crop_box
 from facehall.losses.perceptual import LAYERS
+from facehall.losses.views import crop_box
 from facehall.models import MODELS, ModelConfig
 
 LOSSES = ("mse", "l1")
@@ -52,8 +52,13 @@ class LossWeights:
 
 @dataclass
 class PerceptualConfig:
+    """VGG19 features and the defences against pixel patterns (``facehall.losses.views``,
+    PR 3.8); without them the network sees the image as it is."""
+
     weights: str = ""  # VGG19 weights file (scripts/download_weights.py vgg19)
     layer: str = "conv5_4"  # facehall.losses.LAYERS; features before the activation
+    jitter: JitterConfig = field(default_factory=JitterConfig)  # per image; shift: x image side
+    blur: float = 0.0  # Gaussian sigma in HR pixels before resampling; 0 disables
 
 
 @dataclass
@@ -145,6 +150,9 @@ def validate(config: ExperimentConfig) -> None:
         require_choice(train.perceptual.layer, tuple(LAYERS), "VGG19 layer")
         if not train.perceptual.weights:
             raise ValueError("train.perceptual.weights is required with a perceptual loss")
+        jitter = train.perceptual.jitter
+        if min(jitter.shift, jitter.rotation, jitter.scale, train.perceptual.blur) < 0:
+            raise ValueError("train.perceptual jitter and blur must be non-negative")
     if weights.identity > 0:
         if not train.identity.weights:
             raise ValueError("train.identity.weights is required with an identity loss")

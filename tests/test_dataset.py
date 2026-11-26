@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from facehall.align import CELEBA_TEMPLATE, alignment_matrix, warp
 from facehall.align.template import CELEBA_TRAIN_MEAN_LANDMARKS
-from facehall.data.config import DataConfig, DegradeConfig, JitterConfig
+from facehall.data.config import DataConfig, DegradeConfig, JitterConfig, SceneConfig
 from facehall.data.dataset import AlignedFaces
 from facehall.data.degrade import Bicubic
 
@@ -164,3 +164,65 @@ def test_describe(data: DataConfig) -> None:
     assert info["augment"] is False
     assert info["degradation"]["kind"] == "bicubic"  # type: ignore[index]
     assert info["data"]["hr_size"] == 128  # type: ignore[index]
+
+
+def test_scene_without_transform_gives_the_grid_crop(data: DataConfig) -> None:
+    """An untransformed scene puts the crop on its LR grid: away from the borders, the LR crop
+    equals the plain degradation of the HR crop (bicubic, with antialias)."""
+    plain = AlignedFaces(data, DegradeConfig(), "val", 4)[0]
+    still = SceneConfig(prob=1.0, shift=0.0, rotation=0.0, scale=0.0)
+    dataset = AlignedFaces(replace(data, scene=still), DegradeConfig(), "val", 4)
+    sample = dataset[0]
+    torch.testing.assert_close(sample["hr"], plain["hr"], rtol=0, atol=0)
+    inner = (slice(None), slice(3, -3), slice(3, -3))
+    difference = (sample["lr"][inner] - plain["lr"][inner]).abs().max().item()
+    assert difference <= 1.0 / 255.0 + 1e-6
+    params = json.loads(sample["degradation"])
+    assert params["scene"] == {"rotation": 0.0, "scale": 1.0, "shift": [0.0, 0.0]}
+
+
+@pytest.mark.parametrize("scale", [4, 8])
+def test_scene_samples(data: DataConfig, scale: int) -> None:
+    scene = SceneConfig(prob=1.0, shift=0.5, rotation=10.0, scale=0.25)
+    dataset = AlignedFaces(replace(data, scene=scene), DegradeConfig(), "train", scale)
+    plain = AlignedFaces(data, DegradeConfig(), "train", scale)
+    side = dataset.describe()["scene_side"]
+    assert isinstance(side, int) and side % scale == 0 and (side - 128) % (2 * scale) == 0
+    dataset.set_epoch(1)
+    first, again = dataset[1], dataset[1]
+    torch.testing.assert_close(first["lr"], again["lr"], rtol=0, atol=0)  # reproducible
+    assert first["lr"].shape == (3, 128 // scale, 128 // scale)
+    assert first["lr"].min() >= 0.0 and first["lr"].max() <= 1.0
+    drawn = json.loads(first["degradation"])["scene"]
+    assert abs(drawn["rotation"]) <= 10.0 and 0.8 - 1e-6 <= drawn["scale"] <= 1.25 + 1e-6
+    assert max(abs(v) for v in drawn["shift"]) <= 0.5
+    # the HR target does not depend on the scene: the same jitter and flip are drawn first
+    plain.set_epoch(1)
+    torch.testing.assert_close(first["hr"], plain[1]["hr"], rtol=0, atol=0)
+    # the LR crop is close to the grid crop, but resampled
+    difference = (first["lr"] - plain[1]["lr"]).abs().mean().item()
+    assert 0.0 < difference < 0.15
+
+
+def test_scene_grayscale_turns_the_target_grey(data: DataConfig) -> None:
+    scene = SceneConfig(prob=1.0)
+    degrade = DegradeConfig(kind="pipeline", grayscale=1.0)
+    sample = AlignedFaces(replace(data, scene=scene), degrade, "val", 4)[0]
+    assert json.loads(sample["degradation"])["gray"] is True
+    for image in (sample["hr"], sample["lr"]):
+        torch.testing.assert_close(image[0], image[1], rtol=0, atol=0)
+
+
+def test_scene_probability_zero_draws_nothing(data: DataConfig) -> None:
+    off = AlignedFaces(
+        replace(data, scene=SceneConfig(prob=0.0, rotation=30.0)),
+        DegradeConfig(kind="pipeline"),
+        "val",
+        4,
+    )
+    plain = AlignedFaces(data, DegradeConfig(kind="pipeline"), "val", 4)
+    for index in range(len(plain)):
+        assert off[index]["degradation"] == plain[index]["degradation"]
+        torch.testing.assert_close(off[index]["lr"], plain[index]["lr"], rtol=0, atol=0)
+    with pytest.raises(ValueError, match="data.scene"):
+        AlignedFaces(replace(data, scene=SceneConfig(prob=1.5)), DegradeConfig(), "val", 4)

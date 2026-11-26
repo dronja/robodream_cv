@@ -1366,3 +1366,55 @@ filters implausible landmark sets.
 - **Candidate remedy:** fine-tune the references on LR crops made like the pipeline's:
   degradation at the scene's resolution, then alignment at LR resolution. Together with the
   detector-matched jitter (D31). Whether it comes before PR 4.3 is Q15.
+
+### D32 — Fine-tune on pipeline-like LR crops before PR 4.3 (closes Q15)
+**Decision** (the user, 2026-11-26): fine-tune the restoration models on LR crops made like the
+inference pipeline's before PR 4.3.
+
+**Reason:** in the pipeline, the alignment at LR resolution costs about 0.06 ID at both scales
+(PR 4.2). The CLI, the API and video will all use these models.
+
+This work becomes PR 4.3. The `facehall enhance` CLI with output marking moves to PR 4.4 and
+video to PR 4.5.
+
+### LR crops made like the pipeline's (PR 4.3)
+**Data** (`data.scene`, `facehall.data.config.SceneConfig`; defaults taken without a separate
+question, 2026-11-26):
+- **How a sample is made:**
+  - the source is warped to a larger HR scene, in which the face has a random sub-pixel
+    position (±0.5 LR px per axis), rotation (±10°) and size (0.8–1.25 times the model input,
+    log-uniform);
+  - the scene is degraded to LR with the training degradation;
+  - the LR crop is cut from it by the inverse transform with `facehall.align.resample_crop`,
+    the function the pipeline uses;
+  - the HR target is the usual HR crop.
+- **Ranges:** the scene's size range is the one of the WIDER real-world crops (D20). The
+  rotation range is an initial value.
+- **Every split:** `prob: 1.0` applies to every split of the training run, so validation sees
+  such crops too. The evaluation protocols do not set it and stay unchanged; probability 0
+  draws nothing, and the HR-embedding cache key leaves the setting out.
+- **Check:** on 100 val images, the scene LR crop differs from the grid crop by 2.6 (×4) and
+  3.8 (×8) levels on average, against 32–45 for a 2 px shift. The geometry is right; what is
+  left is the resampling.
+- **Loading:** about 2,900 (×4) and 1,900 (×8) samples/s with 8 workers, above the training
+  speed.
+
+**Runs:** two variants per scale. Both use the reference recipe (`srresnet_id_perc_robust_x4`,
+`srresnet_id_robust_x8`) from the same L1 start, 2 epochs.
+- **A** (`srresnet_scene_x{4,8}`): scene crops; nothing else changes.
+- **B** (`srresnet_scene_jitter_x{4,8}`): A plus alignment jitter matched to the face detector.
+  It uses the p95 errors of YuNet on degraded scenes (D31): ×4 shift 0.04, rotation 5°, scale
+  0.12; ×8 shift 0.08, rotation 5°, scale 0.18.
+
+**Selection rule** (set before the runs):
+- **Where:** `scripts/evaluate_pipeline.py` on 1,000 val scenes, the `detected` variant (the
+  product path), clean and degraded inputs, against the scale's reference.
+- **A variant qualifies** when, on both inputs:
+  - ID similarity is higher;
+  - PSNR-Y is lower by at most 0.3 dB;
+  - LPIPS is higher by at most 0.005.
+- **The winner:** the qualifying variant with the higher mean ID over both inputs.
+- **Then, on test:** the winner and the reference are scored end to end on the test split.
+  The winner also goes through the D23/D26/D28 gate on the protocols, which use LR crops on the
+  template grid, so a loss there is possible and is reported, not hidden.
+- **The reference:** whether the winner replaces it is the user's decision.

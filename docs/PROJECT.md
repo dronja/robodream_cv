@@ -87,9 +87,12 @@ As of 2026-11-26:
     `bd58ebc`).
   - Merged: PR 3.8 (×4 robust perceptual loss; PR #25, `9aba820`). Result: passes all 17 gate
     checks without a pattern and becomes the ×4 reference (D29, §9).
-  - In review: PR 3.9 (×8 robust perceptual loss; branch `feat/robust-perceptual-x8`). Result:
-    no weight meets the val rule: every one lowers ID similarity below the ×8 reference's, which
-    stays (§9).
+  - Merged: PR 3.9 (×8 robust perceptual loss; PR #26, `e94f82b`). Result: no weight meets the
+    val rule: every one lowers ID similarity below the ×8 reference's, which stays (§9).
+  - In review: PR 3.10 (×8 identity weight raised to compensate the perceptual term; branch
+    `feat/identity-compensation-x8`). Result: no weight meets the val rule either (§9).
+  - By its "done when" criterion, Phase 3 is met: both references passed the gate (D25, D29).
+    Whether to finish the remaining Phase 3 items first or move to Phase 4 is open (Q14).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -1185,7 +1188,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       bicubic level is not gated.
     - **Grids** (not measured): no hatching. Eyes and lips are slightly sharper than with the L1
       model. In some faces the eyes have a slight bluish tint, as with the identity term alone.
-- **Robust perceptual loss at ×8 (PR 3.9, in review).** Decision, selection rule, table and
+- **Robust perceptual loss at ×8 (PR 3.9, done).** Decision, selection rule, table and
   reasons in `DECISIONS.md` (2026-11-26, "Robust perceptual loss at ×8 (PR 3.9)").
   - **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml`, the ×8 reference recipe (L1,
     robust identity 0.1) plus the defended perceptual term of PR 3.8. It differs from the
@@ -1205,6 +1208,29 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     has one.
   - **Result:** no full run; the ×8 reference stays `srresnet_id_robust_x8-20261125-174436`
     (D25).
+- **Identity weight raised with the perceptual term at ×8 (PR 3.10, in review).** Decision,
+  selection rule, table and reasons in `DECISIONS.md` (2026-11-26, "Identity weight raised to
+  compensate the perceptual term at ×8 (PR 3.10)").
+  - **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml` with perceptual 0.014 and
+    identity 0.3 or 1.0.
+  - **Why these weights:** in the PR 3.4 ×8 sweep, the identity weight barely moved the metric
+    ID (light 0.2029 / 0.2023 / 0.2053 at 0.1 / 0.3 / 1.0). So only the high weights could
+    compensate, and a pass was judged unlikely before the runs.
+  - **Selection on val** (the PR 3.9 rule): **no weight qualifies.**
+
+    | Identity weight | ID light / medium | LPIPS Δ light | PSNR-Y Δ light | Spectral peak | WIDER val KID ×10³ |
+    |---|---|---|---|---|---|
+    | reference | 0.2018 / 0.1232 | — | — | 0.12 / 0.11 | 89.1 (limit 92.9) |
+    | 0.1 (PR 3.9) | 0.1940 / 0.1194 | −0.034 | −0.05 | 0.11 / 0.11 | 71.2 |
+    | 0.3 | 0.1965 / 0.1199 | −0.033 | −0.13 | 0.26 / 0.31 | 78.5 |
+    | 1.0 | 0.2001 / 0.1230 | −0.036 | −0.24 | 0.81 / 0.99 | 96.5 |
+
+    A tenfold identity weight recovers most of the ID deficit, but not all of it, at the cost of
+    PSNR-Y, KID and a rising spectral peak.
+  - **Result:** no full run; the ×8 reference stays (D25).
+  - **Consequence:** at ×8 the gate's ID rule does not allow the perceptual term with these
+    losses. Better ×8 identity has to come from elsewhere (the prior-guided model), or the gate
+    has to change (the user's decision).
 
 ## 10. Roadmap and progress
 
@@ -1300,6 +1326,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       reference (§9, D29)
 - [x] **PR 3.9** ×8: the same defended perceptual term on the ×8 reference recipe. No weight
       meets the val rule: each lowers ID similarity below the reference's (§9)
+- [x] **PR 3.10** ×8: identity weight raised (0.3, 1.0) to compensate. No weight meets the val
+      rule: ID stays below the reference's, and at 1.0 KID fails too (§9)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1352,6 +1380,7 @@ D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in th
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
+| Q14 | Phase 3 meets its "done when" criterion (both references passed the gate, D25, D29). Finish the remaining Phase 3 items (prior-guided model, NME, skin tone) first, or move to Phase 4 (inference pipeline) and come back to them? | before the next PR | Move to Phase 4; the prior-guided model later, as the next way to improve ×8 identity |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks

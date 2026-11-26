@@ -1118,3 +1118,40 @@ ratio against `srresnet_id_robust_x8`; WIDER val KID ×10³:
 **Result:**
 - No full run is made; the ×8 reference stays `srresnet_id_robust_x8-20261125-174436` (D25).
 - The config keeps weight 0.005, the closest to the rule, marked as not trained in full.
+
+### Identity weight raised to compensate the perceptual term at ×8 (PR 3.10)
+**Context:** at ×8 the defended perceptual term gains a lot of LPIPS and real-photo KID, but
+lowers val ID similarity by 0.004–0.012 below the reference's, so no weight met the rule
+(PR 3.9). The user asked to compensate with the identity term.
+
+**Decision:**
+- **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml` with perceptual weight 0.014 and
+  a higher identity weight, chosen on val. Of the PR 3.9 weights, 0.014 has about the highest
+  ID (mean 0.1567, against 0.1576 at 0.005) and a larger LPIPS gain. The PR 3.9 runs are
+  reproduced with `--set train.losses.identity=0.1 --set train.losses.perceptual=<weight>`.
+- **Identity weights 0.3 and 1.0.** These follow the PR 3.4 ×8 sweep (val, without the
+  perceptual term):
+
+  | Identity weight | ID light | ID medium | WIDER val KID ×10³ |
+  |---|---|---|---|
+  | 0.1 | 0.2029 | 0.1247 | 87.8 |
+  | 0.3 | 0.2023 | 0.1253 | 117.3 |
+  | 1.0 | 0.2053 | 0.1273 | 151.0 |
+
+  - So at ×8 the identity weight barely moves the metric ID. Weights between 0.1 and 0.3 are
+    not expected to help.
+  - The higher weights failed there only on KID (faint stripes). The defended perceptual term
+    lowers KID strongly (89.1 → 71.2 at 0.014), so together they may pass.
+  - On these numbers, the expected ID gain (+0.002 to +0.003 at 1.0) is smaller than the PR 3.9
+    deficit on light (0.0078 at 0.014). A pass is therefore unlikely unless the terms interact.
+  - Defaults taken without a separate question; the user asked for the compensation itself.
+- **Weight selection on the val split, rule set before the runs:** the PR 3.9 rule unchanged.
+  - Against `srresnet_id_robust_x8-20261125-174436` on light and medium: LPIPS lower, ID higher,
+    PSNR-Y at most 0.3 dB lower, spectral peak at most 1.0.
+  - WIDER `val` KID ×10³ at most 92.9.
+  - The highest mean ID wins.
+
+  Because the spectral check missed the faint ×8 stripes of PR 3.4 (D28), zoomed val grids are
+  checked too. If no weight qualifies, no full run is made.
+
+SELECTION_PLACEHOLDER

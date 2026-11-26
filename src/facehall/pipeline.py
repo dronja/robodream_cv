@@ -103,11 +103,12 @@ class VideoConfig:
     """Video (``facehall.video``, PR 4.5): face tracks and encoding."""
 
     # Face tracks (chosen on synthetic clips, PR 4.5): an alpha-beta filter of each track's
-    # landmarks and box, and the frames a missed face stays restored at its predicted place.
+    # landmarks and box; the frames an undetected face stays restored at its predicted place
+    # (0: never restore a face without a detection in the frame).
     smooth: bool = True
     alpha: float = 0.5
     beta: float = 0.1
-    hold: int = 2
+    hold: int = 0
     track_iou: float = 0.3  # box IoU that continues a track
     # Detector score at which a detection continues a track; a new track needs
     # detector.score_threshold (D33). Equal to it: no hysteresis.

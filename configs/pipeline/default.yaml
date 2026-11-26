@@ -22,7 +22,7 @@ video:                       # facehall enhance on videos (PR 4.5)
   smooth: true               # alpha-beta filter of each face track (PR 4.5, on synthetic clips)
   alpha: 0.5
   beta: 0.1
-  hold: 2                    # frames a missed face stays restored at its predicted place
+  hold: 0                    # frames an undetected face stays restored (0: never without one)
   track_threshold: 0.3       # a weaker detection continues a track (new ones need 0.8, D33)
   track_iou: 0.3
   codec: libx264             # system ffmpeg; libx264 or libx265

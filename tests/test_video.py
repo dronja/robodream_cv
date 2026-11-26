@@ -286,7 +286,9 @@ def test_video_without_audio_and_a_broken_video(tmp_path: Path, checkpoint: Path
     assert [s["codec_type"] for s in streams(out)] == ["video"]
     rec = read_record(out)
     assert rec is not None and rec["faces"]["detected"] == 0
-    assert "models" not in rec["parameters"] and rec["parameters"]["video"]["hold"] == 2
+    assert (
+        "models" not in rec["parameters"] and rec["parameters"]["video"]["track_threshold"] == 0.3
+    )
 
 
 @needs_ffmpeg

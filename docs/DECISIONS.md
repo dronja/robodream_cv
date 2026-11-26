@@ -1154,4 +1154,27 @@ lowers val ID similarity by 0.004–0.012 below the reference's, so no weight me
   Because the spectral check missed the faint ×8 stripes of PR 3.4 (D28), zoomed val grids are
   checked too. If no weight qualifies, no full run is made.
 
-SELECTION_PLACEHOLDER
+**Selection** (2026-11-26, runs from commit `7a5b9bc`, two in parallel). Val, PSNR-Y change /
+LPIPS change / ID similarity / spectral peak ratio against `srresnet_id_robust_x8`; WIDER val
+KID ×10³:
+
+| Identity weight (perceptual 0.014) | light | medium | WIDER val KID | Qualifies |
+|---|---|---|---|---|
+| reference `srresnet_id_robust_x8` | 24.33 dB / 0.2996 / 0.2018 / 0.12 | 23.00 dB / 0.3387 / 0.1232 / 0.11 | 89.1 ± 1.9 (limit 92.9) | — |
+| 0.1 (PR 3.9) | −0.05 / −0.0341 / 0.1940 / 0.11 | −0.04 / −0.0400 / 0.1194 / 0.11 | 71.2 | no: ID |
+| 0.3 | −0.13 / −0.0329 / 0.1965 / 0.26 | −0.10 / −0.0397 / 0.1199 / 0.31 | 78.5 | no: ID |
+| 1.0 | −0.24 / −0.0356 / 0.2001 / 0.81 | −0.19 / −0.0402 / 0.1230 / 0.99 | 96.5 | no: ID, KID |
+
+- **No weight qualifies, as expected before the runs.** A tenfold identity weight recovers most
+  of the ID deficit (light 0.1940 → 0.2001, medium 0.1194 → 0.1230), but not all of it.
+- **What it costs:** PSNR-Y, a pattern (spectral peak 0.81 / 0.99, just under the limit) and
+  real-photo KID (96.5, over the limit).
+- **The LPIPS gain stays** at every identity weight.
+- **Grids** (3 synthetic and 3 real val samples at 5×, not measured): no clear stripe grid. At
+  1.0, stronger magenta fringes around the eyes; 0.3 looks like 0.1.
+- **Result:** no full run; the ×8 reference stays `srresnet_id_robust_x8-20261125-174436` (D25).
+  The config keeps identity 0.3, which fails only on ID, marked as not trained in full.
+- **Consequence:** at ×8, with these losses and 2-epoch fine-tuning, the gate's ID rule does not
+  allow the perceptual term. Either the identity of the ×8 output has to improve by other means
+  (for example the prior-guided model of the plan), or the gate has to be changed, which only
+  the user can decide.

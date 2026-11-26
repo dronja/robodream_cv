@@ -1,0 +1,16 @@
+# Inference pipeline (Phase 4, PR 4.2; facehall.pipeline.PipelineConfig): face detection (D31),
+# the paste-back mask and the face-size limit. The model and its scale come from the checkpoint.
+detector:
+  weights: ""                # empty: $FACEHALL_WEIGHTS/yunet/face_detection_yunet_2026may.onnx
+  score_threshold: 0.6       # D31
+  nms_threshold: 0.3
+  top_k: 5000
+mask:                        # feathered ellipse in normalized crop coordinates; initial values
+  center_x: 0.5
+  center_y: 0.55             # between the eyes (0.47) and the mouth (0.74) of the template
+  radius_x: 0.42
+  radius_y: 0.44             # reaches 0.99 of the crop height at the chin
+  feather: 0.25              # outer quarter of the elliptic radius fades out (smoothstep)
+max_downscale: 2.0           # faces more than 2x the model input size are left to the background
+color_correction: false
+batch_size: 32

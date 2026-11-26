@@ -21,7 +21,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import numpy.typing as npt
 
@@ -30,21 +29,21 @@ from facehall.align.similarity import Points
 from facehall.align.template import CELEBA_TEMPLATE, YUNET_TEMPLATES
 from facehall.config import load_config
 from facehall.data.config import DataConfig, JitterConfig
-from facehall.data.manifest import read_manifest
 from facehall.eval.detection import (
+    Row,
     SceneDegradation,
     alignment_error,
     fit_template,
     landmark_error,
-    make_scene,
+    make_scenes,
     match,
+    sample_rows,
     summarize,
 )
 from facehall.provenance import file_sha256, git_commit, package_versions
 from facehall.weights import yunet_weights
 
 HR_EYES = 32.0  # px between the eyes in the 128 px HR crop (CELEBA_TEMPLATE)
-Row = tuple[Path, Points]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -66,38 +65,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def sample(root: Path, split: str, count: int) -> list[Row]:
-    """``count`` rows of ``split``, evenly spaced in manifest order (deterministic)."""
-    table = read_manifest(root).select(["path", "split", "landmarks"]).to_pydict()
-    rows = [
-        (root / path, np.asarray(points, dtype=np.float64).reshape(5, 2))
-        for path, part, points in zip(
-            table["path"], table["split"], table["landmarks"], strict=True
-        )
-        if part == split
-    ]
-    step = max(1, len(rows) // count)
-    return rows[::step][:count]
-
-
-def load_rgb(path: Path) -> npt.NDArray[np.uint8]:
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise FileNotFoundError(path)
-    return np.ascontiguousarray(image[:, :, ::-1], dtype=np.uint8)
-
-
 def scenes(
     rows: list[Row], eyes: float, degraded: bool, seed: int
 ) -> Iterator[tuple[npt.NDArray[np.uint8], Points]]:
-    rng = np.random.default_rng(seed)
-    settings = SceneDegradation() if degraded else None
-    for path, points in rows:
-        yield make_scene(load_rgb(path), points, eyes, degradation=settings, rng=rng)
+    return make_scenes(rows, eyes, SceneDegradation() if degraded else None, seed)
 
 
 def grid(args: argparse.Namespace, root: Path, weights: Path) -> list[dict[str, Any]]:
-    rows = sample(root, "val", args.grid_samples)
+    rows = sample_rows(root, "val", args.grid_samples)
     results = []
     for eyes in args.eyes:
         for degraded in (False, True):
@@ -126,7 +101,7 @@ def grid(args: argparse.Namespace, root: Path, weights: Path) -> list[dict[str, 
 def template(
     args: argparse.Namespace, root: Path, weights: Path, jitter: JitterConfig
 ) -> list[dict[str, Any]]:
-    train, val = sample(root, "train", args.fit), sample(root, "val", args.val)
+    train, val = sample_rows(root, "train", args.fit), sample_rows(root, "val", args.val)
     results = []
     for scale in args.scales:
         eyes = HR_EYES / scale

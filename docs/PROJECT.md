@@ -89,10 +89,14 @@ As of 2026-11-26:
     checks without a pattern and becomes the ×4 reference (D29, §9).
   - Merged: PR 3.9 (×8 robust perceptual loss; PR #26, `e94f82b`). Result: no weight meets the
     val rule: every one lowers ID similarity below the ×8 reference's, which stays (§9).
-  - In review: PR 3.10 (×8 identity weight raised to compensate the perceptual term; branch
-    `feat/identity-compensation-x8`). Result: no weight meets the val rule either (§9).
+  - Merged: PR 3.10 (×8 identity weight raised to compensate the perceptual term; PR #27,
+    `34f0a89`). Result: no weight meets the val rule either (§9).
   - By its "done when" criterion, Phase 3 is met: both references passed the gate (D25, D29).
-    Whether to finish the remaining Phase 3 items first or move to Phase 4 is open (Q14).
+    The remaining items (prior-guided model, NME, skin tone) come later (D30).
+- **Phase 4 (inference pipeline): in progress** (D30).
+  - In review: PR 4.1 (face detection with five landmarks: YuNet, D31; branch
+    `feat/face-detection`). Result: an upscale by the model scale finds 95–99% of faces of the
+    model input size, but the alignment error often exceeds the training jitter (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -137,21 +141,25 @@ robodream_cv/
 │   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner),
 │   │                          # match.py (degradation tuning against real LR crops),
 │   │                          # gate.py (quality gate, D23, D26, D28),
-│   │                          # spectrum.py (periodic-pattern check, D28)
+│   │                          # spectrum.py (periodic-pattern check, D28),
+│   │                          # detection.py (detection and alignment measures, D31)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
-│   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
+│   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py,
+│                              # detect.py (YuNet face detector, D31)
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # prepare_wider.py (WIDER FACE → real-world LR crops),
 │                              # license_report.py (license table from package metadata),
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
 │                              # preview_degradations.py, protocol_digest.py,
-│                              # match_degradations.py (PR 2.6), quality_gate.py (D23)
+│                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
+│                              # measure_detection.py (D31)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
-│                              # degradation matching, quality gate, losses, spectrum
+│                              # degradation matching, quality gate, losses, spectrum,
+│                              # face detection
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -187,7 +195,7 @@ robodream_cv/
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
-| Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2), `facenet_vggface2/20180402-114759-vggface2.pt` (identity loss, PR 3.3). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
+| Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2), `facenet_vggface2/20180402-114759-vggface2.pt` (identity loss, PR 3.3), `yunet/face_detection_yunet_2026may.onnx` (face detector, D31). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |
 
 ## 5. Legacy research code
@@ -379,6 +387,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D27 | The PR 3.6 ×4 model is not the ×4 reference despite passing the gate: its outputs carry a periodic pattern |
 | D28 | Gate spectral check: on light and medium, the peak SR / HR power ratio at ≥ 0.25 cycles/px at most 1.0 |
 | D29 | The PR 3.8 ×4 model (`srresnet_id_perc_robust_x4-20261126-121325`) is the ×4 reference; ×8 keeps `srresnet_id_robust_x8-20261125-174436` |
+| D30 | Phase 4 comes before the remaining Phase 3 items (prior-guided model, NME, skin tone) |
+| D31 | Face detector: YuNet (OpenCV Zoo, MIT) on a bicubic upscale by the model scale, score threshold 0.6, with YuNet templates per scale |
 
 ## 8. Licenses — status
 
@@ -398,6 +408,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | VGG19 weights for the perceptual loss (torchvision) | Approved and downloaded on 2026-11-25 (PR 3.2). Terms follow the ImageNet training data, *needs verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 | facenet weights for the identity loss (facenet-pytorch, VGGFace2) | Approved and downloaded on 2026-11-25 (PR 3.3) with the weight license unknown: the code of facenet-pytorch and of David Sandberg's facenet is MIT, the weights state no license, and the VGGFace2 terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3). Not to be distributed without a separate review |
 | InceptionV3 weights for FID/KID (torch-fidelity) | Approved and downloaded (D21). Apache 2.0 per the torch-fidelity source; the ImageNet terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
+| YuNet face detector (OpenCV Zoo) | Approved and downloaded on 2026-11-26 (D31). MIT per the model directory. Trained on WIDER FACE with landmark labels from InsightFace SCRFD; whether those terms bind the weights *needs verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 
 ## 9. Technical design
 
@@ -1208,7 +1219,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     has one.
   - **Result:** no full run; the ×8 reference stays `srresnet_id_robust_x8-20261125-174436`
     (D25).
-- **Identity weight raised with the perceptual term at ×8 (PR 3.10, in review).** Decision,
+- **Identity weight raised with the perceptual term at ×8 (PR 3.10, done).** Decision,
   selection rule, table and reasons in `DECISIONS.md` (2026-11-26, "Identity weight raised to
   compensate the perceptual term at ×8 (PR 3.10)").
   - **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml` with perceptual 0.014 and
@@ -1231,6 +1242,43 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Consequence:** at ×8 the gate's ID rule does not allow the perceptual term with these
     losses. Better ×8 identity has to come from elsewhere (the prior-guided model), or the gate
     has to change (the user's decision).
+
+### Phase 4
+
+- **Face detection (PR 4.1, in review).** Decision, measurements and reasons in
+  `DECISIONS.md` (D31).
+  - **Code:**
+    - `facehall.align.detect.YuNet`: OpenCV Zoo YuNet through `cv2.FaceDetectorYN`, on a
+      bicubic upscale by `upsample`; returns `Face` (box, five landmarks in input pixel-centre
+      coordinates, score), highest score first;
+    - `facehall.align.YUNET_TEMPLATES`: templates for YuNet's points at ×4 and ×8, fitted on
+      CelebA train scenes;
+    - `facehall.eval.detection`: synthetic CelebA scenes, matching, template fitting, and the
+      alignment error in the units of the training jitter;
+    - `scripts/measure_detection.py` (local results in `outputs/detection/`).
+  - **Weights:** `scripts/download_weights.py yunet` (229,738 bytes, pinned sha256). MIT;
+    approved on 2026-11-26.
+  - **Measured** on synthetic CelebA scenes (val; the YuNet templates fitted on train):
+    - **Detection needs an upscale:** at the ×8 input size (4 px between the eyes) YuNet finds
+      10% of faces at the input size and 99% / 95% (clean / degraded) after a ×8 upscale. At the
+      ×4 input size (8 px) it finds 92% at the input size and 99.7% / 99.3% after ×4. So the
+      detector runs at upsample = the model scale.
+    - **Alignment error** of the crops from the detected points, against the training jitter
+      (shift 0.03, rotation 5°, scale ×1.05):
+
+      | Scale, input | Shift p95 | Rotation p95 | Scale p95 | Within jitter |
+      |---|---|---|---|---|
+      | ×4 clean / degraded | 0.030 / 0.039 | 4.1° / 4.3° | 1.105 / 1.118 | 63% / 58% |
+      | ×8 clean / degraded | 0.043 / 0.076 | 4.4° / 5.0° | 1.136 / 1.177 | 49% / 31% |
+
+  - **Consequences:**
+    - the restoration models will often see crops outside their training jitter, mostly in
+      scale;
+    - PR 4.2 measures the cost end to end, with detected against annotated landmarks;
+    - training with jitter matched to these errors is the candidate remedy.
+  - **Limits:** CelebA scenes are optimistic (near-frontal, centred faces, flat backgrounds, a
+    light degradation). YuNet was trained on WIDER FACE, so the WIDER real-world set cannot
+    measure it.
 
 ## 10. Roadmap and progress
 
@@ -1339,14 +1387,18 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Phase 4 — inference pipeline
 
-- [ ] Face detection + 5 points. Candidates: YuNet (OpenCV Zoo), MediaPipe,
-      RetinaFace/InsightFace — weight licenses verified. Detection runs on a bicubic upscale;
-      manual bbox as a fallback
-- [ ] Align → restore → inverse warp → feathered-ellipse mask → paste-back; optional colour
-      correction and background upscale
-- [ ] `facehall enhance` for photos, folders and video (per frame; check flicker between frames)
-- [ ] Output marking: PNG text / XMP (`AI-enhanced`, model, version, parameters, input sha256);
-      optional visible watermark; consider C2PA
+- [x] **PR 4.1** `feat(align):` face detection with five landmarks: YuNet (OpenCV Zoo, MIT,
+      D31) on a bicubic upscale by the model scale; YuNet templates per scale; detection and
+      alignment measures on synthetic CelebA scenes (`scripts/measure_detection.py`)
+- [ ] **PR 4.2** Align → restore → inverse warp → feathered-ellipse mask → paste-back on the
+      background upscale; manual landmarks or box as a fallback; optional colour correction.
+      End-to-end evaluation with detected against annotated landmarks
+- [ ] **PR 4.3** `facehall enhance` for photos and folders; output marking: PNG text / XMP
+      (`AI-enhanced`, model, version, parameters, input sha256); optional visible watermark;
+      consider C2PA
+- [ ] **PR 4.4** Video (per frame; check flicker between frames)
+- [ ] *(candidate)* Re-train the references with alignment jitter matched to the detector's
+      errors (D31)
 
 **Done when** an arbitrary photo with several faces is processed end to end.
 
@@ -1376,15 +1428,19 @@ Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) b
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
 by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
-D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28, Q13 (the PR 3.8 ×4 model as reference) by D29.
+D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28, Q13 (the PR 3.8 ×4 model as reference) by D29, Q14
+(Phase 4 or the rest of Phase 3 first) by D30.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q14 | Phase 3 meets its "done when" criterion (both references passed the gate, D25, D29). Finish the remaining Phase 3 items (prior-guided model, NME, skin tone) first, or move to Phase 4 (inference pipeline) and come back to them? | before the next PR | Move to Phase 4; the prior-guided model later, as the next way to improve ×8 identity |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
 
+- The face detector's alignment error often exceeds the training jitter, mostly in scale: only
+  31–63% of detected faces fall inside it on synthetic CelebA scenes (D31), and real photos are
+  harder. Restoration quality in the pipeline may therefore be below the evaluation numbers,
+  which use annotated landmarks. PR 4.2 measures this.
 - ×8 from 16 px means ≈4 px between the eyes: the output is mostly invented, and ID similarity
   will be low. This must be stated clearly (`CLAUDE.md` §11).
 - JPEG artifacts in the HR targets (§6.4) limit perceptual quality.
@@ -1457,6 +1513,8 @@ uv run python scripts/download_weights.py buffalo_l                  # recogniti
 uv run python scripts/download_weights.py inception                  # FID/KID network (D21)
 uv run python scripts/download_weights.py vgg19                      # perceptual loss (PR 3.2)
 uv run python scripts/download_weights.py facenet_vggface2           # identity loss (PR 3.3)
+uv run python scripts/download_weights.py yunet                      # face detector (D31)
+uv run python scripts/measure_detection.py     # detection and alignment on CelebA scenes, ~12 min
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/

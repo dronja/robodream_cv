@@ -79,10 +79,26 @@ ASSETS = {
             "license stated for the weights; trained on VGGFace2, whose terms need verification"
         ),
     ),
+    "yunet": Asset(
+        name="yunet",
+        url=(
+            "https://media.githubusercontent.com/media/opencv/opencv_zoo/"
+            "26cc381e4d2594bb9f47a26eb8fd96c94a13660d/models/face_detection_yunet/"
+            "face_detection_yunet_2026may.onnx"
+        ),
+        size=229_738,
+        sha256="ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0",  # 2026-11-26
+        members=(),
+        license=(
+            "OpenCV Zoo YuNet face detector: MIT (model directory LICENSE); trained on WIDER FACE "
+            "by libfacedetection.train (BSD-3-Clause)"
+        ),
+    ),
 }
 INCEPTION_FILE = "weights-inception-2015-12-05-6726825d.pth"
 VGG19_FILE = "vgg19-dcbb9e9d.pth"
 FACENET_FILE = "20180402-114759-vggface2.pt"
+YUNET_FILE = "face_detection_yunet_2026may.onnx"
 
 
 def inception_weights(root: Path | None = None) -> Path:
@@ -99,6 +115,11 @@ def facenet_weights(root: Path | None = None) -> Path:
     """Path of the facenet weights used for the identity loss (``download_weights.py
     facenet_vggface2``)."""
     return asset_dir("facenet_vggface2", root) / FACENET_FILE
+
+
+def yunet_weights(root: Path | None = None) -> Path:
+    """Path of the YuNet face detector (``download_weights.py yunet``)."""
+    return asset_dir("yunet", root) / YUNET_FILE
 
 
 def weights_root() -> Path:

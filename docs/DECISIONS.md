@@ -973,3 +973,40 @@ verdict before → after:
 The only changed verdict is the PR 3.6 model, which the user had rejected by hand (D27). Both
 references pass. Other models keep their old `metrics.json` without the spectrum until they are
 evaluated again (the gate shows "—" for such a reference).
+
+### Robust perceptual loss at ×4 (PR 3.8)
+**Context:** the VGG19 perceptual term won back the LPIPS that the identity term costs at ×4,
+but left a fine periodic hatching (PR 3.6, D27), which the spectral check (D28) now rejects.
+
+**Decision:**
+- **Defences** on the perceptual input, as for the identity term (PR 3.4), now shared code
+  (`facehall.losses.views.RandomView`):
+  - a random similarity of the whole image per image: shift up to 0.05 of its side (6.4 px at
+    128, more than the 2 and 4 px periods of PR 3.6), rotation up to 5°, scale within ×1.1;
+    the same transform for the SR and HR of one image, drawn from the loss's own seeded
+    generator (a stream of its own, saved in `last_state.pt` for `--resume`);
+  - a Gaussian low-pass, sigma 1 HR pixel, before resampling.
+
+  Without defences the perceptual loss is computed as before. The identity loss now uses the
+  same code; it was checked to give bit-identical values and jitter streams.
+- **Recipe:** `configs/train/srresnet_id_perc_robust_x4.yaml`, the PR 3.6 recipe (L1 1.0,
+  robust identity 0.3, VGG19 conv5_4, 2 epochs from `srresnet_x4`) with the defences on the
+  perceptual input. The values are the identity term's, a default taken without a separate
+  question.
+- **Perceptual weights 0.03, 0.1 and 0.3,** set by the PR 3.6 rule. On the start model
+  (2026-11-26, 32 training batches of 16, gradient norm with respect to SR at weight 1), the
+  defended term gives 0.660, against 1.818 without the defences and 0.212 for the identity
+  term. The three weights then give about ⅓×, 1× and 3× the gradient of the identity term at
+  weight 0.3.
+- **Weight selection on the val split, rule set before the runs** (the PR 3.6 rule plus D28):
+  a weight qualifies if, on val:
+  - on light and medium, against `srresnet_x4`: LPIPS lower, ID similarity higher, PSNR-Y at
+    most 0.3 dB lower, and spectral peak ratio at most 1.0;
+  - on the WIDER `val` faces, KID at most the reference's plus two standard deviations (limit
+    99.5).
+
+  Among the qualifying weights, the highest mean ID similarity on light and medium wins. A full
+  run of the winner then goes through the gate on test. If none qualifies, the recipe is
+  reported as failing and no full run is made.
+
+SELECTION_PLACEHOLDER

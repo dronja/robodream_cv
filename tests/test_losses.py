@@ -15,6 +15,7 @@ from facehall.losses import (
     IdentityLoss,
     InceptionResnetV1,
     PerceptualLoss,
+    RandomView,
     crop_box,
     gaussian_kernel,
     load_facenet,
@@ -64,6 +65,61 @@ def test_perceptual_loss() -> None:
     grey = torch.full((1, 3, 1, 1), 0.5)
     expected = (0.5 - torch.tensor([0.485, 0.456, 0.406])) / torch.tensor([0.229, 0.224, 0.225])
     assert torch.allclose(identity.embed(grey).flatten(), expected)
+
+
+def test_random_view() -> None:
+    images = torch.rand(2, 3, 16, 16)
+    whole = RandomView(16, (0, 0, 16), 16)
+    theta = whole.transforms(2, jitter=True)  # no jitter set: the plain square
+    assert torch.equal(theta, whole.transforms(2, jitter=False))
+    assert torch.allclose(whole(images, theta), images, atol=1e-6)  # the image as it is
+    # a sub-square resampled to another size
+    view = RandomView(16, (4, 4, 8), 32)
+    expected = F.interpolate(images[:, :, 4:12, 4:12], size=32, mode="bilinear")
+    inner = (slice(None), slice(None), slice(2, -2), slice(2, -2))
+    assert torch.allclose(
+        view(images, view.transforms(2, False))[inner], expected[inner], atol=1e-5
+    )
+
+    def jittered(seed: int = 0) -> RandomView:
+        return RandomView(
+            16, (0, 0, 16), 16, shift=0.1, rotation=10, scale=0.2, seed=seed, stream=7
+        )
+
+    first = jittered().transforms(3, jitter=True)
+    assert torch.equal(jittered().transforms(3, jitter=True), first)  # the seed fixes the stream
+    assert not torch.equal(jittered(seed=1).transforms(3, jitter=True), first)
+    other = RandomView(16, (0, 0, 16), 16, shift=0.1, rotation=10, scale=0.2, stream=8)
+    assert not torch.equal(other.transforms(3, jitter=True), first)  # streams differ per loss
+    with pytest.raises(ValueError, match="non-negative"):
+        RandomView(16, (0, 0, 16), 16, rotation=-1.0)
+
+
+def test_perceptual_loss_with_a_view() -> None:
+    torch.manual_seed(0)
+    features = nn.Sequential(nn.Conv2d(3, 4, 3, padding=1), nn.Conv2d(4, 4, 3))
+    hr = torch.rand(2, 3, 16, 16)
+    sr = torch.rand(2, 3, 16, 16, requires_grad=True)
+    plain = PerceptualLoss(features)
+    # a view without defences shows the image as it is
+    same = PerceptualLoss(features, RandomView(16, (0, 0, 16), 16))
+    assert same(sr, hr).item() == pytest.approx(plain(sr, hr).item(), rel=1e-5)
+    view = RandomView(16, (0, 0, 16), 16, shift=0.05, rotation=5, scale=0.1, blur=1.0, seed=3)
+    robust = PerceptualLoss(features, view)
+    assert robust(hr, hr).item() == pytest.approx(0.0, abs=1e-6)  # SR and HR share the view
+    state = view.generator.get_state()
+    value = robust(sr, hr)
+    view.generator.set_state(state)
+    assert torch.equal(robust(sr, hr), value)  # the stream can be saved and restored (resume)
+    assert value.item() != pytest.approx(plain(sr, hr).item(), rel=1e-3)
+    torch.autograd.backward(value)
+    assert sr.grad is not None and sr.grad.abs().sum() > 0
+    assert all(p.grad is None and not p.requires_grad for p in robust.features.parameters())
+    # the low-pass removes a one-pixel checkerboard from what the network sees
+    board = (torch.arange(16)[:, None] + torch.arange(16)[None, :]) % 2
+    pattern = (0.5 + 0.2 * (board * 2 - 1)).float().expand(1, 3, 16, 16)
+    blurred = RandomView(16, (0, 0, 16), 16, blur=1.0)
+    assert blurred(pattern, blurred.transforms(1, False)).std() < 0.1 * pattern.std()
 
 
 def test_ragan_losses() -> None:

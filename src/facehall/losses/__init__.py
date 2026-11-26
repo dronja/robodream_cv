@@ -5,12 +5,14 @@ from facehall.losses.adversarial import ragan_discriminator_loss, ragan_generato
 from facehall.losses.facenet import InceptionResnetV1, load_facenet
 from facehall.losses.identity import IdentityLoss, crop_box, gaussian_kernel
 from facehall.losses.perceptual import LAYERS, PerceptualLoss, vgg19_features
+from facehall.losses.views import RandomView
 
 __all__ = [
     "LAYERS",
     "IdentityLoss",
     "InceptionResnetV1",
     "PerceptualLoss",
+    "RandomView",
     "crop_box",
     "gaussian_kernel",
     "load_facenet",

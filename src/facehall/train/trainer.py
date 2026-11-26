@@ -57,7 +57,9 @@ from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 from facehall.data.dataset import AlignedFaces, Sample
 from facehall.losses.facenet import load_facenet
 from facehall.losses.identity import IdentityLoss
+from facehall.losses.perceptual import GENERATOR_STREAM as PERCEPTUAL_STREAM
 from facehall.losses.perceptual import PerceptualLoss, vgg19_features
+from facehall.losses.views import RandomView
 from facehall.models import build_model, count_parameters
 from facehall.models.discriminators import VGGDiscriminator
 from facehall.provenance import file_sha256, git_commit, package_versions
@@ -341,6 +343,9 @@ def _run(
             objective.d_optimizer.load_state_dict(state["d_optimizer"])
         if objective.identity is not None and state.get("identity_rng") is not None:
             objective.identity.generator.set_state(state["identity_rng"])
+        view = objective.perceptual.view if objective.perceptual is not None else None
+        if view is not None and state.get("perceptual_rng") is not None:
+            view.generator.set_state(state["perceptual_rng"])
 
     commit = git_commit()
     device_info = describe_device(device)
@@ -551,11 +556,28 @@ def make_objective(
     if weights.perceptual > 0:
         path = Path(settings.perceptual.weights)
         features = vgg19_features(path, settings.perceptual.layer)
-        perceptual = PerceptualLoss(features).to(device)
+        jitter, blur = settings.perceptual.jitter, settings.perceptual.blur
+        view = None
+        if max(jitter.shift, jitter.rotation, jitter.scale, blur) > 0:  # PR 3.8 defences
+            size = config.data.hr_size
+            view = RandomView(
+                size,
+                (0, 0, size),
+                size,
+                shift=jitter.shift,
+                rotation=jitter.rotation,
+                scale=jitter.scale,
+                blur=blur,
+                seed=config.seed,
+                stream=PERCEPTUAL_STREAM,
+            )
+        perceptual = PerceptualLoss(features, view).to(device)
         extras["perceptual"] = {
             "layer": settings.perceptual.layer,
             "weights": str(path),
             "sha256": file_sha256(path),
+            "jitter": vars(jitter),
+            "blur": blur,
         }
     identity = None
     if weights.identity > 0:
@@ -660,6 +682,8 @@ def save_state(
     discriminator = objective.discriminator if objective is not None else None
     d_optimizer = objective.d_optimizer if objective is not None else None
     identity = objective.identity if objective is not None else None
+    perceptual = objective.perceptual if objective is not None else None
+    view = perceptual.view if perceptual is not None else None
     state = {
         "format": STATE_FORMAT,
         "version": STATE_VERSION,
@@ -674,6 +698,7 @@ def save_state(
         "discriminator": discriminator.state_dict() if discriminator is not None else None,
         "d_optimizer": d_optimizer.state_dict() if d_optimizer is not None else None,
         "identity_rng": identity.generator.get_state() if identity is not None else None,
+        "perceptual_rng": view.generator.get_state() if view is not None else None,
     }
     path = run_dir / STATE_FILE
     partial_path = path.with_name(path.name + ".partial")

@@ -1,0 +1,52 @@
+# Robust identity loss plus a robust perceptual term (PR 3.8) on SRResNet-v2, x4: the recipe of
+# srresnet_id_perc_x4 (PR 3.6) with the PR 3.4 defences on the perceptual input too: a random
+# shift, rotation and scale of the whole image per image (the same for SR and HR) and a Gaussian
+# low-pass, against the periodic hatching of PR 3.6. Identity weight 0.3, VGG19 conv5_4,
+# to win back the LPIPS that the identity term costs on medium inputs. Same data and
+# degradations as srresnet_x4. The perceptual weight is chosen on the val split
+# (docs/DECISIONS.md, PR 3.8). `best` is the last epoch.
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic.yaml
+  model: ../model/srresnet.yaml
+name: srresnet_id_perc_robust_x4
+scale: 4
+seed: 0
+train:
+  epochs: 2
+  init: runs/srresnet_x4-20261125-093232/best.safetensors   # local run (PR 3.1)
+  batch_size: 16
+  loss: l1
+  losses:
+    pixel: 1.0
+    identity: 0.3       # the PR 3.4 x4 weight with the highest val ID among those that kept KID
+    perceptual: 0.1     # placeholder until the val selection
+  identity:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/facenet_vggface2/20180402-114759-vggface2.pt
+    crop_side: 0.875
+    crop_center_y: 0.55
+    jitter:
+      shift: 0.05
+      rotation: 5.0
+      scale: 0.1
+    blur: 1.0
+  perceptual:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/vgg19/vgg19-dcbb9e9d.pth
+    layer: conv5_4
+    jitter:
+      shift: 0.05       # x the image side (6.4 px at 128): more than the 2 and 4 px periods of PR 3.6
+      rotation: 5.0     # degrees
+      scale: 0.1
+    blur: 1.0           # HR px, as for the identity term
+  best_metric: none
+  optimizer:
+    name: adam
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+  scheduler:
+    name: cosine
+    min_lr: 1.0e-6
+  ema_decay: 0.999
+  precision: bf16

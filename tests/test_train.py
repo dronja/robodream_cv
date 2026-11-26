@@ -248,6 +248,7 @@ TRAIN_CONFIGS = {
     "srresnet_id_robust_x4": "realistic",
     "srresnet_id_robust_x8": "realistic_x8",
     "srresnet_id_perc_x4": "realistic",
+    "srresnet_id_perc_robust_x4": "realistic",
 }
 
 
@@ -257,7 +258,8 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
     monkeypatch.delenv("FACEHALL_WEIGHTS", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
     recipe_name, rest = name.split("_x")
-    model = recipe_name.removesuffix("_gan").removesuffix("_id_robust").removesuffix("_id_perc")
+    model = recipe_name.removesuffix("_gan").removesuffix("_id_robust")
+    model = model.removesuffix("_id_perc_robust").removesuffix("_id_perc")
     model = model.removesuffix("_id")
     scale = rest.partition("_")[0]
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
@@ -280,10 +282,14 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
         assert recipe == ("l1", 1e-4, "cosine") and config.train.ema_decay == 0.999
         assert config.train.losses.pixel == 1.0 and config.train.losses.identity > 0
         assert config.train.losses.adversarial == 0
-        if recipe_name == "srresnet_id_perc":
+        if recipe_name.startswith("srresnet_id_perc"):
             assert config.train.losses.perceptual > 0
+            defended = recipe_name.endswith("_robust")  # PR 3.8
             assert config.train.perceptual == PerceptualConfig(
-                "/mnt/storage/AI/Face/weights/vgg19/vgg19-dcbb9e9d.pth", "conv5_4"
+                "/mnt/storage/AI/Face/weights/vgg19/vgg19-dcbb9e9d.pth",
+                "conv5_4",
+                JitterConfig(0.05, 5.0, 0.1) if defended else JitterConfig(),
+                1.0 if defended else 0.0,
             )
         else:
             assert config.train.losses.perceptual == 0
@@ -588,6 +594,56 @@ def test_identity_resume_continues_as_if_uninterrupted(
     assert state["identity_rng"] is not None
 
 
+@pytest.fixture
+def perceptual_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[..., Any]:
+    """Experiments with L1 and a perceptual term with the PR 3.8 defences; a tiny network
+    stands in for VGG19."""
+    weights = tmp_path / "vgg19.pth"
+    weights.write_bytes(b"stand-in")
+    monkeypatch.setattr(
+        "facehall.train.trainer.vgg19_features", lambda path, layer: tiny_features()
+    )
+
+    def make(root: Path, output: Path, **train: Any) -> ExperimentConfig:
+        settings: dict[str, Any] = {
+            "loss": "l1",
+            "losses": LossWeights(pixel=1.0, perceptual=0.1),
+            "perceptual": PerceptualConfig(
+                str(weights), "conv5_4", jitter=JitterConfig(0.05, 5.0, 0.1), blur=1.0
+            ),
+            "best_metric": "none",
+        }
+        return experiment(root, output, **{**settings, **train})
+
+    return make
+
+
+def test_robust_perceptual_run_and_resume(
+    root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    perceptual_run: Callable[..., ExperimentConfig],
+) -> None:
+    reference = train(perceptual_run(root, tmp_path / "reference", epochs=3))
+    info = json.loads((reference / "run.json").read_text())["perceptual"]
+    assert info["jitter"] == {"shift": 0.05, "rotation": 5.0, "scale": 0.1}
+    assert info["blur"] == 1.0
+    assert set(records(reference, "epoch")[-1]["train_terms"]) == {"pixel", "perceptual"}
+    with monkeypatch.context() as patch:
+        interrupt_after(patch, 2)
+        with pytest.raises(KeyboardInterrupt):
+            train(perceptual_run(root, tmp_path / "interrupted", epochs=3))
+    run = next((tmp_path / "interrupted").iterdir())
+    resume(run)
+    expected, resumed = (
+        load_file(reference / "last.safetensors"),
+        load_file(run / "last.safetensors"),
+    )
+    assert all(torch.equal(expected[k], resumed[k]) for k in expected)  # the view stream too
+    state = torch.load(run / "last_state.pt", weights_only=True)
+    assert state["perceptual_rng"] is not None and state["identity_rng"] is None
+
+
 def test_init_from_a_checkpoint(root: Path, tmp_path: Path) -> None:
     srresnet = ModelConfig(name="srresnet", channels=4, residual_blocks=1)  # no BatchNorm
     source = replace(experiment(root, tmp_path / "source", epochs=1), model=srresnet)
@@ -689,6 +745,12 @@ def test_invalid_loss_settings_are_rejected(root: Path, tmp_path: Path) -> None:
         (
             with_train(losses=LossWeights(identity=1.0), identity=IdentityConfig("w.pt", blur=-1)),
             "must be non-negative",
+        ),
+        (
+            with_train(
+                losses=LossWeights(perceptual=1.0), perceptual=PerceptualConfig("w.pth", blur=-1)
+            ),
+            "train.perceptual jitter and blur must be non-negative",
         ),
     ]
     for value, message in bad:

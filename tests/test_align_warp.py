@@ -20,6 +20,8 @@ from facehall.align.warp import (
     alignment_matrices,
     alignment_matrix,
     hflip_matrix,
+    resample_crop,
+    rescale_matrix,
     unwarp,
     valid_mask,
     warp,
@@ -190,3 +192,27 @@ def test_hflip_matrix_mirrors_crop_coordinates() -> None:
     np.testing.assert_allclose(
         transform_points(hflip_matrix(128), points), [[127.0, 3.0], [0.0, 5.0], [63.5, 0.0]]
     )
+
+
+def test_rescale_matrix_maps_pixel_centres() -> None:
+    points = transform_points(rescale_matrix(4.0), [[-0.5, -0.5], [0.0, 0.0], [31.5, 31.5]])
+    np.testing.assert_allclose(points, [[-0.5, -0.5], [1.5, 1.5], [127.5, 127.5]])
+    np.testing.assert_allclose(compose(rescale_matrix(0.25), rescale_matrix(4.0)), np.eye(2, 3))
+
+
+def test_resample_crop() -> None:
+    rng = np.random.default_rng(0)
+    image = rng.integers(0, 256, (96, 96, 3), dtype=np.uint8)
+    # at or above the image resolution: the bicubic warp
+    up = np.array([[1.5, 0.0, -10.0], [0.0, 1.5, -12.0]])
+    np.testing.assert_array_equal(resample_crop(image, up, 32), warp(image, up, 32))
+    # below it by exactly 1/3: a 3x3 box average of the image itself
+    down = rescale_matrix(1 / 3)
+    crop = resample_crop(image.astype(np.float32), down, 32)
+    expected = image.astype(np.float32).reshape(32, 3, 32, 3, 3).mean(axis=(1, 3))
+    np.testing.assert_allclose(crop, expected, atol=1e-3)
+    # just below 1: supersampled by 2, not a 33 -> 32 area resize
+    near = np.array([[0.98, 0.0, 0.0], [0.0, 0.98, 0.0]])
+    assert resample_crop(image, near, 32).shape == (32, 32, 3)
+    gray = resample_crop(image[:, :, :1], down, 32)
+    assert gray.shape == (32, 32, 1)

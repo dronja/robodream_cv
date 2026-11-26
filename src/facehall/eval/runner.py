@@ -271,12 +271,15 @@ def identity_fingerprint(dataset: AlignedFaces, config: EvalConfig) -> str:
     """sha256 of everything the HR embeddings depend on.
 
     The scale and the degradation do not change the HR target, except a degradation with
-    grayscale (``changes_target``); only then is the degradation part of the key.
+    grayscale (``changes_target``); only then is the degradation part of the key. Neither does
+    ``data.scene``, which only changes how the LR input is made, so it is left out.
     """
     described = dataset.describe()
+    data = dict(described["data"])  # type: ignore[call-overload]
+    data.pop("scene", None)
     key = {
         "version": 1,
-        "data": described["data"],
+        "data": data,
         "split": described["split"],
         "samples": described["samples"],
         "dropped": described["dropped"],

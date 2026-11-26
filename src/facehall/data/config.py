@@ -15,6 +15,24 @@ class JitterConfig:
 
 
 @dataclass
+class SceneConfig:
+    """LR crops made like those of the inference pipeline (PR 4.2, Q15).
+
+    In a photo the face does not sit on the template's pixel grid, so the pipeline cuts its LR
+    crop by a warp at LR resolution (``facehall.align.resample_crop``). With probability
+    ``prob`` a sample is made the same way: the source is warped to a larger HR "scene" in which
+    the face has a random rotation, size and sub-pixel position; the scene is degraded to LR;
+    the LR crop is cut from it by the inverse of that transform. The HR target is the usual HR
+    crop. Probability 0 draws nothing, so the samples stay exactly as without this setting.
+    """
+
+    prob: float = 0.0
+    shift: float = 0.5  # LR px, per axis: the face's sub-pixel position in the scene
+    rotation: float = 10.0  # degrees either way
+    scale: float = 0.25  # crop px per scene px in [1 / (1 + scale), 1 + scale], log-uniform
+
+
+@dataclass
 class DataConfig:
     """An aligned face dataset built from a prepared manifest (docs/DATA.md)."""
 
@@ -26,6 +44,7 @@ class DataConfig:
     exclude_blurry: list[str] = field(default_factory=list)  # splits without Blurry = 1 (D15)
     hflip: float = 0.0  # probability of a horizontal flip, augmented splits only
     jitter: JitterConfig = field(default_factory=JitterConfig)  # augmented splits only
+    scene: SceneConfig = field(default_factory=SceneConfig)  # every split, when prob > 0
 
 
 @dataclass

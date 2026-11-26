@@ -21,7 +21,6 @@ The output is a plausible reconstruction, not a recovery of the true details (``
 §11); marking the output is PR 4.3.
 """
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,7 +43,7 @@ from facehall.align.similarity import (
     translation,
 )
 from facehall.align.template import CELEBA_TEMPLATE, YUNET_TEMPLATES
-from facehall.align.warp import alignment_matrix, unwarp, warp
+from facehall.align.warp import alignment_matrix, resample_crop, unwarp
 from facehall.weights import yunet_weights
 
 Image = npt.NDArray[np.uint8]  # (H, W, 3) RGB
@@ -155,23 +154,12 @@ def to_frame(points: npt.ArrayLike, scale: int) -> Points:
 
 
 def lr_crop(image: Image, landmarks: Points, template: Points, size: int) -> tuple[Image, float]:
-    """The aligned ``size`` crop of ``image`` and its scale (crop px per input px).
-
-    A face at or below the crop scale is warped directly (bicubic). A larger one is warped to an
-    integer multiple ``k`` of the crop size, at least its own resolution, and averaged over
-    k x k blocks, so the crop is not aliased and is resampled only once more by an exact box
-    filter (a non-integer area resize, such as 33 → 32 px, would blur it).
-    """
+    """The aligned ``size`` crop of ``image`` and its scale (crop px per input px), cut by
+    ``facehall.align.resample_crop``: bicubic for a face at or below the crop scale, an integer
+    supersampling and box average for a larger one."""
     matrix = alignment_matrix(landmarks, template, size)
-    factor = scale_of(matrix)
-    if factor >= 1.0:
-        crop = warp(image, matrix, size, interpolation="bicubic", border="reflect")
-    else:
-        k = math.ceil(1.0 / factor - 1e-9)
-        side = size * k
-        full = warp(image, alignment_matrix(landmarks, template, side), side, border="reflect")
-        crop = cv2.resize(full, (size, size), interpolation=cv2.INTER_AREA)
-    return np.asarray(crop, dtype=np.uint8), factor
+    crop = resample_crop(image, matrix, size, border="reflect")
+    return np.asarray(crop, dtype=np.uint8), scale_of(matrix)
 
 
 def paste(

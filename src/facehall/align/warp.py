@@ -6,6 +6,7 @@ All matrices map source-image pixel-centre coordinates to crop pixel-centre coor
 ``u * size - 0.5``. The same template therefore gives consistent crops at every size.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,7 +14,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
-from facehall.align.similarity import Matrix, umeyama_batch
+from facehall.align.similarity import Matrix, compose, scale_of, umeyama_batch
 
 INTERPOLATIONS = {
     "nearest": cv2.INTER_NEAREST,
@@ -116,6 +117,33 @@ def warp(
         borderMode=_lookup(BORDERS, border, "border"),
     )
     return _keep_channel_axis(image, result)
+
+
+def rescale_matrix(factor: float) -> Matrix:
+    """Pixel-centre coordinates of an image to those of the same image ``factor`` times larger.
+
+    A crop of side ``size`` maps to one of side ``factor * size``: ``(p + 0.5) * factor - 0.5``.
+    """
+    offset = 0.5 * factor - 0.5
+    return np.array([[factor, 0.0, offset], [0.0, factor, offset]])
+
+
+def resample_crop(image: Image, matrix: Matrix, size: int, *, border: str = "reflect") -> Image:
+    """A ``size`` crop of ``image`` through ``matrix`` that is not aliased (PR 4.2).
+
+    At or above the image's own resolution (``scale_of(matrix) >= 1``) this is the bicubic warp.
+    Below it, the image is warped to an integer multiple ``k`` of ``size``, at least its own
+    resolution, and averaged over k x k blocks: the crop is filtered by an exact box, not by a
+    non-integer area resize (such as 33 -> 32 px), which would blur it. The inference pipeline
+    cuts its LR crops this way, and so do training samples made like them (``data.scene``).
+    """
+    factor = scale_of(matrix)
+    if factor >= 1.0:
+        return warp(image, matrix, size, interpolation="bicubic", border=border)
+    k = math.ceil(1.0 / factor - 1e-9)
+    full = warp(image, compose(rescale_matrix(k), matrix), size * k, border=border)
+    result = cv2.resize(full, (size, size), interpolation=cv2.INTER_AREA)
+    return _keep_channel_axis(full, result)
 
 
 def unwarp(

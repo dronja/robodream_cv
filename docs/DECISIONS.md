@@ -1366,3 +1366,102 @@ filters implausible landmark sets.
 - **Candidate remedy:** fine-tune the references on LR crops made like the pipeline's:
   degradation at the scene's resolution, then alignment at LR resolution. Together with the
   detector-matched jitter (D31). Whether it comes before PR 4.3 is Q15.
+
+### D32 — Fine-tune on pipeline-like LR crops before PR 4.3 (closes Q15)
+**Decision** (the user, 2026-11-26): fine-tune the restoration models on LR crops made like the
+inference pipeline's before PR 4.3.
+
+**Reason:** in the pipeline, the alignment at LR resolution costs about 0.06 ID at both scales
+(PR 4.2). The CLI, the API and video will all use these models.
+
+This work becomes PR 4.3. The `facehall enhance` CLI with output marking moves to PR 4.4 and
+video to PR 4.5.
+
+### LR crops made like the pipeline's (PR 4.3)
+**Data** (`data.scene`, `facehall.data.config.SceneConfig`; defaults taken without a separate
+question, 2026-11-26):
+- **How a sample is made:**
+  - the source is warped to a larger HR scene, in which the face has a random sub-pixel
+    position (±0.5 LR px per axis), rotation (±10°) and size (0.8–1.25 times the model input,
+    log-uniform);
+  - the scene is degraded to LR with the training degradation;
+  - the LR crop is cut from it by the inverse transform with `facehall.align.resample_crop`,
+    the function the pipeline uses;
+  - the HR target is the usual HR crop.
+- **Ranges:** the scene's size range is the one of the WIDER real-world crops (D20). The
+  rotation range is an initial value.
+- **Every split:** `prob: 1.0` applies to every split of the training run, so validation sees
+  such crops too. The evaluation protocols do not set it and stay unchanged; probability 0
+  draws nothing, and the HR-embedding cache key leaves the setting out.
+- **Check:** on 100 val images, the scene LR crop differs from the grid crop by 2.6 (×4) and
+  3.8 (×8) levels on average, against 32–45 for a 2 px shift. The geometry is right; what is
+  left is the resampling.
+- **Loading:** about 2,900 (×4) and 1,900 (×8) samples/s with 8 workers, above the training
+  speed.
+
+**Runs:** two variants per scale. Both use the reference recipe (`srresnet_id_perc_robust_x4`,
+`srresnet_id_robust_x8`) from the same L1 start, 2 epochs.
+- **A** (`srresnet_scene_x{4,8}`): scene crops; nothing else changes.
+- **B** (`srresnet_scene_jitter_x{4,8}`): A plus alignment jitter matched to the face detector.
+  It uses the p95 errors of YuNet on degraded scenes (D31): ×4 shift 0.04, rotation 5°, scale
+  0.12; ×8 shift 0.08, rotation 5°, scale 0.18.
+
+**Selection rule** (set before the runs):
+- **Where:** `scripts/evaluate_pipeline.py` on 1,000 val scenes, the `detected` variant (the
+  product path), clean and degraded inputs, against the scale's reference.
+- **A variant qualifies** when, on both inputs:
+  - ID similarity is higher;
+  - PSNR-Y is lower by at most 0.3 dB;
+  - LPIPS is higher by at most 0.005.
+- **The winner:** the qualifying variant with the higher mean ID over both inputs.
+- **Then, on test:** the winner and the reference are scored end to end on the test split.
+  The winner also goes through the D23/D26/D28 gate on the protocols, which use LR crops on the
+  template grid, so a loss there is possible and is reported, not hidden.
+- **The reference:** whether the winner replaces it is the user's decision.
+
+**Runs** on 2026-11-26 from commit `0309ebe` in a separate worktree, all four at once, 2 epochs
+each (19–23 min each in parallel): `srresnet_scene_x4-20261126-164336`,
+`srresnet_scene_jitter_x4-20261126-164416`, `srresnet_scene_x8-20261126-164356`,
+`srresnet_scene_jitter_x8-20261126-164436`.
+
+**Selection on val** (1,000 scenes per input, all models scored from `0309ebe`; local
+`outputs/pipeline_eval/val_q15/`): **no variant qualifies at either scale.**
+
+`detected` variant, ID similarity / PSNR-Y / LPIPS:
+
+| Model | ×4 clean | ×4 degraded | ×8 clean | ×8 degraded |
+|---|---|---|---|---|
+| reference | 0.6131 / 27.62 / 0.2173 | 0.3670 / 25.90 / 0.2918 | 0.2614 / 23.99 / 0.3472 | 0.1281 / 22.50 / 0.4209 |
+| A: scene crops | 0.6065 / 27.67 / 0.2145 | 0.3611 / 25.90 / 0.2898 | 0.2566 / 24.03 / 0.3485 | 0.1271 / 22.50 / 0.4213 |
+| B: scene crops + detector jitter | 0.6073 / 27.67 / 0.2149 | 0.3619 / 25.90 / 0.2903 | 0.2596 / 24.03 / 0.3452 | 0.1323 / 22.56 / 0.4182 |
+
+ID similarity of the other variants, clean / degraded scenes (`aligned`: LR crop on the template
+grid; `direct`: LR crop resampled at LR resolution):
+
+| Model | ×4 `aligned` | ×4 `direct` | ×8 `aligned` | ×8 `direct` |
+|---|---|---|---|---|
+| reference | 0.675 / 0.363 | 0.617 / 0.375 | 0.317 / 0.143 | 0.262 / 0.146 |
+| A | 0.648 / 0.351 | 0.611 / 0.370 | 0.293 / 0.136 | 0.260 / 0.145 |
+| B | 0.649 / 0.349 | 0.612 / 0.368 | 0.293 / 0.136 | 0.259 / 0.145 |
+
+**Observations:**
+- **No gain on the pipeline's crops.** On the crops resampled at LR resolution (`direct`) the
+  fine-tuned models score about the same ID as the references (−0.001 to −0.006). On grid crops
+  (`aligned`) they lose 0.024–0.027 ID. They adapted to the resampled input by losing on the
+  sharp one, not by gaining on the resampled one.
+- **What this says about the cost of the alignment at LR** (PR 4.2):
+  - after the fine-tune, the gap between grid and resampled crops is 0.037 ID at ×4, the same
+    as for plain bicubic upsampling (0.695 → 0.657);
+  - together with the interpolation check of PR 4.2, this suggests the loss is mostly
+    information that the sub-pixel resampling of an 8 or 4 px face takes away, not a mismatch
+    with training. PR 4.2's reading ("the rest is the mismatch with training") is not supported;
+  - not tested: training the L1 start from scratch on scene crops (30 epochs, about 30 min per
+    scale) instead of 2 fine-tuning epochs.
+- **Detector-matched jitter** helps a little only where the detector errs most: on ×8 degraded
+  scenes the gap between detected and annotated landmarks shrinks from 0.012 to 0.008 ID
+  (0.1323 against 0.1281). Elsewhere B equals A.
+- **PSNR-Y and LPIPS** barely move (within 0.05 dB and 0.003).
+
+**Result:** the references stay (D25, D29); no test evaluation or gate run. The `data.scene`
+option, `resample_crop` and the four configs stay in the repository as the record of this
+negative result.

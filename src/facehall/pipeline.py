@@ -157,15 +157,18 @@ def to_frame(points: npt.ArrayLike, scale: int) -> Points:
 def lr_crop(image: Image, landmarks: Points, template: Points, size: int) -> tuple[Image, float]:
     """The aligned ``size`` crop of ``image`` and its scale (crop px per input px).
 
-    A downscale goes through a crop at the input's own resolution and an area resize, so the
-    crop is not aliased; otherwise the bicubic warp is used directly.
+    A face at or below the crop scale is warped directly (bicubic). A larger one is warped to an
+    integer multiple ``k`` of the crop size, at least its own resolution, and averaged over
+    k x k blocks, so the crop is not aliased and is resampled only once more by an exact box
+    filter (a non-integer area resize, such as 33 → 32 px, would blur it).
     """
     matrix = alignment_matrix(landmarks, template, size)
     factor = scale_of(matrix)
     if factor >= 1.0:
         crop = warp(image, matrix, size, interpolation="bicubic", border="reflect")
     else:
-        side = math.ceil(size / factor)
+        k = math.ceil(1.0 / factor - 1e-9)
+        side = size * k
         full = warp(image, alignment_matrix(landmarks, template, side), side, border="reflect")
         crop = cv2.resize(full, (size, size), interpolation=cv2.INTER_AREA)
     return np.asarray(crop, dtype=np.uint8), factor

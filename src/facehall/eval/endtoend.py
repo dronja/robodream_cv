@@ -2,39 +2,43 @@
 
 A scene is an aligned CelebA image downscaled so that the face has the model's input size
 (``facehall.eval.detection.make_scene``; 8 px between the eyes at ×4, 4 px at ×8), optionally
-degraded. Each variant turns the scene into a ×scale frame:
+degraded. The variants, each a step closer to the product:
 
-- ``bicubic``: the bicubic background only;
-- ``annotated``: the pipeline with the annotated landmarks, aligned to ``CELEBA_TEMPLATE``;
-- ``detected``: the full pipeline, with YuNet (D31); a missed face stays bicubic;
-- ``direct``: the model output on the LR crop aligned by the annotated landmarks, scored as it
-  is, without paste-back. Like the protocols of ``facehall eval`` it scores the model's own HR
-  crop, but its LR crop is cut from the scene instead of made by degrading the HR crop. Against
-  ``annotated`` it shows the cost of the paste-back (the mask, the inverse warp and the
-  resampling of the scored crop); ``annotated`` against ``detected`` shows the cost of the
-  detection.
+- ``bicubic``: the bicubic ×scale upscale of the scene (the pipeline's background);
+- ``aligned``: the model on an LR crop made from the HR crop by area downscaling, then degraded
+  like the scene. The face sits on the template's pixel grid, as in training, so no resampling
+  happens at LR resolution: the upper bound for the pipeline;
+- ``direct``: the model on the LR crop that the annotated landmarks cut from the scene. On a
+  real photo the face is not on the template's grid, so this crop is resampled at LR
+  resolution; against ``aligned`` it shows the cost of that;
+- ``annotated``: the pipeline (paste-back included) with the annotated landmarks, aligned to
+  ``CELEBA_TEMPLATE``; against ``direct`` it shows the cost of the paste-back;
+- ``detected``: the full pipeline, with YuNet (D31); a missed face stays bicubic. Against
+  ``annotated`` it shows the cost of the detection.
 
-Every frame is scored on the 128 px crop that the **annotated** landmarks align to
-``CELEBA_TEMPLATE`` in it, against the dataset's HR crop of the same image: the face where it
-really is, whatever the pipeline aligned to. That crop resamples the frame once more (bicubic,
-about 1:1), the same for every variant except ``direct``.
+``aligned`` and ``direct`` are scored on the model's own HR crop. The frames (``bicubic``,
+``annotated``, ``detected``) are scored on the 128 px crop that the **annotated** landmarks align
+to ``CELEBA_TEMPLATE`` in them: the face where it really is, whatever the pipeline aligned to.
+That crop resamples the frame once more (bicubic, about 1:1). Every variant is compared with the
+dataset's HR crop of the same image.
 """
 
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 import torch
 
 from facehall.align.template import CELEBA_TEMPLATE
 from facehall.align.warp import alignment_matrix, warp
-from facehall.eval.detection import Row, SceneDegradation, load_rgb, make_scene
+from facehall.eval.detection import Row, SceneDegradation, degrade, load_rgb, make_scene
 from facehall.eval.metrics import psnr_y, ssim_y
 from facehall.pipeline import Enhancer, lr_crop, to_frame, upscale
 
-VARIANTS = ("bicubic", "annotated", "detected", "direct")
+VARIANTS = ("bicubic", "aligned", "direct", "annotated", "detected")
 Metric = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
@@ -43,6 +47,7 @@ class Sample:
     scene: npt.NDArray[np.uint8]  # LR scene, RGB
     truth: npt.NDArray[np.float64]  # (5, 2) annotated landmarks in the scene
     hr: npt.NDArray[np.uint8]  # the dataset's HR crop (hr_size, RGB)
+    lr: npt.NDArray[np.uint8]  # LR crop on the template's grid (area downscale of hr, degraded)
 
 
 def samples(
@@ -53,13 +58,18 @@ def samples(
     seed: int,
 ) -> Iterator[Sample]:
     eyes = float(CELEBA_TEMPLATE[1, 0] - CELEBA_TEMPLATE[0, 0]) * hr_size / scale
+    lr_size = hr_size // scale
     rng = np.random.default_rng(seed)
+    crop_rng = np.random.default_rng([seed, 1])  # keeps the scenes independent of the crops
     for path, points in rows:
         image = load_rgb(path)
         scene, truth = make_scene(image, points, eyes, degradation=degradation, rng=rng)
         matrix = alignment_matrix(points, CELEBA_TEMPLATE, hr_size)
         hr = np.asarray(warp(image, matrix, hr_size, border="reflect"), dtype=np.uint8)
-        yield Sample(scene, truth, hr)
+        lr = np.asarray(cv2.resize(hr, (lr_size, lr_size), interpolation=cv2.INTER_AREA), np.uint8)
+        if degradation is not None:
+            lr = degrade(lr, degradation, crop_rng)
+        yield Sample(scene, truth, hr, lr)
 
 
 def face_crop(
@@ -118,8 +128,10 @@ def evaluate(
         restored += any(f.restored for f in hit)
         pending["detected"].append(face_crop(result.image, sample.truth, scale, size))
         crop, _ = lr_crop(sample.scene, sample.truth, CELEBA_TEMPLATE, enhancer.lr_size)
-        direct = np.clip(np.rint(enhancer.restore([crop])[0]), 0, 255).astype(np.uint8)
-        pending["direct"].append(direct)
+        for variant, restored_crop in zip(
+            ("aligned", "direct"), enhancer.restore([sample.lr, crop]), strict=True
+        ):
+            pending[variant].append(np.clip(np.rint(restored_crop), 0, 255).astype(np.uint8))
         if len(references) >= batch:
             flush()
     flush()

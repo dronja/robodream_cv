@@ -15,7 +15,7 @@ from torch import nn
 
 from facehall.align import CELEBA_TEMPLATE, YUNET_TEMPLATES, Face
 from facehall.align.similarity import scale_of
-from facehall.align.warp import alignment_matrix
+from facehall.align.warp import alignment_matrix, warp
 from facehall.config import load_config
 from facehall.data.manifest import read_manifest
 from facehall.eval.detection import SceneDegradation, sample_rows
@@ -118,6 +118,11 @@ def test_lr_crop_scales() -> None:
     big = (FACE - 16 + 0.5) * 3 - 0.5 + 10  # the same face three times larger
     crop, factor = lr_crop(image, big, CELEBA_TEMPLATE, 32)
     assert crop.shape == (32, 32, 3) and factor == pytest.approx(1 / 3)
+    # slightly larger than the crop scale: a 2x supersampled warp, close to the direct warp
+    near = (FACE - 16 + 0.5) * 1.02 - 0.5 + 16
+    crop, factor = lr_crop(image, near, CELEBA_TEMPLATE, 32)
+    direct = warp(image, alignment_matrix(near, CELEBA_TEMPLATE, 32), 32)
+    assert factor < 1.0 and np.abs(crop.astype(int) - direct.astype(int)).mean() < 6.0
 
 
 def test_paste_back_leaves_the_background_outside_the_face() -> None:

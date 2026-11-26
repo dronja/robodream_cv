@@ -1049,5 +1049,11 @@ change against `srresnet_x4` / ID similarity / spectral peak ratio; WIDER val KI
   lips slightly sharper than the L1 model's. In some faces the eyes have a slight bluish tint,
   as with the identity term alone.
 - **Reference:** by D23 the model would replace `srresnet_x4`. The user decided each earlier
-  replacement (D24, D25, D27), so this one waits for an explicit decision (`docs/PROJECT.md`
-  §11, Q13); `configs/gate.yaml` is unchanged.
+  replacement (D24, D25, D27), so this one waited for an explicit decision: D29.
+
+### D29 — The PR 3.8 ×4 model becomes the ×4 reference (closes Q13)
+**Decision** (the user, 2026-11-26): `srresnet_id_perc_robust_x4-20261126-121325` replaces
+`srresnet_x4-20261125-093232` as the ×4 reference in `configs/gate.yaml`. ×8 keeps
+`srresnet_id_robust_x8-20261125-174436` (D25).
+
+**Reason:** it passes all 17 gate checks (D23, D26, D28) without a visible pattern.

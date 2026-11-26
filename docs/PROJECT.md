@@ -86,8 +86,7 @@ As of 2026-11-26:
   - Merged: PR 3.7 (spectral periodic-pattern check in evaluation and the gate, D28; PR #24,
     `bd58ebc`).
   - In review: PR 3.8 (×4 robust perceptual loss; branch `feat/robust-perceptual-x4`). Result:
-    passes all 17 gate checks without a pattern; whether it becomes the ×4 reference is open
-    (Q13, §9).
+    passes all 17 gate checks without a pattern and becomes the ×4 reference (D29, §9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -372,6 +371,7 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D26 | Gate artifact check: on the WIDER test faces, KID at most the reference's plus 2 standard deviations (one-sided) |
 | D27 | The PR 3.6 ×4 model is not the ×4 reference despite passing the gate: its outputs carry a periodic pattern |
 | D28 | Gate spectral check: on light and medium, the peak SR / HR power ratio at ≥ 0.25 cycles/px at most 1.0 |
+| D29 | The PR 3.8 ×4 model (`srresnet_id_perc_robust_x4-20261126-121325`) is the ×4 reference; ×8 keeps `srresnet_id_robust_x8-20261125-174436` |
 
 ## 8. Licenses — status
 
@@ -1171,8 +1171,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     | heavy | 24.81 / 0.285 / 0.187 | 24.56 / 0.267 / 0.199 | 24.55 / 0.261 / 0.196 [0.69] |
     | WIDER real: FID / KID ×10³ | 89.5 / 92.3 | 77.3 / 77.3 | 65.8 / 61.9 |
 
-  - **Gate (D23, D26, D28):** passes all 17 checks. Whether it becomes the ×4 reference is open
-    (Q13).
+  - **Gate (D23, D26, D28):** passes all 17 checks and becomes the ×4 reference (D29).
   - **Observations:**
     - **The defences remove the pattern:** about the LPIPS and ID of PR 3.6 with a spectral peak
       in the range of models without a pattern, and a smaller PSNR-Y loss.
@@ -1273,7 +1272,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 3.7** Spectral periodic-pattern check: `facehall.eval.spectrum`, recorded by every
       synthetic evaluation; gate limit 1.0 set on val (D28)
 - [x] **PR 3.8** ×4: the perceptual term with the PR 3.4 defences (shared `RandomView`);
-      weight 0.03, chosen on val. Passes all 17 gate checks without a pattern (§9, Q13)
+      weight 0.03, chosen on val. Passes all 17 gate checks without a pattern and becomes the ×4
+      reference (§9, D29)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1322,11 +1322,10 @@ Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) b
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
 by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
-D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28.
+D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28, Q13 (the PR 3.8 ×4 model as reference) by D29.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q13 | The PR 3.8 ×4 model (`srresnet_id_perc_robust_x4-20261126-121325`) passes all 17 gate checks (D23, D26, D28) without a visible pattern (§9). Make it the ×4 reference? | before merging PR 3.8 | Yes, as D23 says |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks

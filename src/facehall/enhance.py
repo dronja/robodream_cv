@@ -255,7 +255,7 @@ def run_enhance(
     enhancer = Enhancer.from_checkpoint(path, config, select_device(device))
     if scale is not None and enhancer.scale != scale:
         raise ValueError(f"{path} is a x{enhancer.scale} model, not x{scale}")
-    report(f"model {enhancer.info['name']} (x{enhancer.scale}), {len(jobs)} image(s)")
+    report(f"model {enhancer.info['name']} (x{enhancer.scale}), {len(jobs)} input(s)")
     failures = enhance_files(
         enhancer,
         jobs,
@@ -267,5 +267,5 @@ def run_enhance(
     )
     report(marking.NOTICE)
     if failures:
-        report(f"{len(failures)} of {len(jobs)} image(s) failed")
+        report(f"{len(failures)} of {len(jobs)} input(s) failed")
     return 1 if failures else 0

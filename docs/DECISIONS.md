@@ -810,3 +810,33 @@ standard deviations of the reference's KID.
 **Limits of the check:** KID sees any shift of the output statistics, not artifacts as such. A
 model whose outputs are faithful but look less like CelebA could fail it. Visual checks of the
 grids stay part of every gate decision.
+
+### Robust identity loss with a perceptual term at ×4 (PR 3.6)
+**Context:** at ×4 the robust identity loss (PR 3.4) raises ID similarity on val without the
+grid artifact, but at the weights that keep the real-photo KID (0.1, 0.3) it loses about 0.006
+LPIPS on medium, so no weight passed the selection.
+
+**Decision:**
+- **Recipe:** `configs/train/srresnet_id_perc_x4.yaml`, the PR 3.4 ×4 recipe (L1 1.0, robust
+  identity, 2 epochs from `srresnet_x4`, Adam 1e-4 with cosine decay, EMA 0.999) plus the VGG19
+  perceptual loss of PR 3.2.
+- **Identity weight 0.3:** the PR 3.4 ×4 weight with the highest val ID among those that kept
+  the KID; it failed only LPIPS on medium.
+- **Perceptual layer conv5_4** (ESRGAN, already used in PR 3.2). A default taken without a
+  separate question; conv3_4 is the next candidate if this fails.
+- **Perceptual weights 0.01, 0.03 and 0.1,** set from the gradients on the start model
+  (2026-11-26; 32 training batches of 16, norms of the gradient with respect to SR, at weight
+  1): L1 1.13e-3, identity 0.212, perceptual conv5_4 1.82 (conv3_4 0.66). So the perceptual
+  gradient is about ⅓×, 1× and 3× the gradient of the identity term at weight 0.3.
+- **Weight selection on the val split, rule set before the runs** (the PR 3.4 rule with the
+  D23 checks in full): a weight qualifies if, on val:
+  - on light and medium, against the ×4 reference `srresnet_x4`: LPIPS lower, ID similarity
+    higher, PSNR-Y at most 0.3 dB lower;
+  - on the WIDER `val` faces, KID at most the reference's plus two standard deviations (95.1 ±
+    2.2, limit 99.5; D26).
+
+  Among the qualifying weights, the highest mean ID similarity on light and medium wins. A full
+  run of the winner then goes through the gate on test. If none qualifies, the recipe is
+  reported as failing and no full run is made.
+
+SELECTION_PLACEHOLDER

@@ -73,9 +73,12 @@ As of 2026-11-25:
   - Merged: PR 3.2 (ESRGAN recipe: perceptual and adversarial losses; PR #19, `4363fe5`).
     Result: much better LPIPS and FID, but ID similarity halves at both scales, so it fails the
     gate (§9).
-  - In review: PR 3.3 (identity loss on facenet embeddings; branch `feat/identity-loss`).
-    Result: ID similarity rises a lot and ×8 passes the gate, but the outputs carry a periodic
-    grid artifact; whether the ×8 model becomes the reference is open (Q8, §9).
+  - Merged: PR 3.3 (identity loss on facenet embeddings; PR #20, `67f47d7`). Result: ID
+    similarity rises a lot, but the outputs carry a periodic grid artifact; the ×8 model is not
+    the reference (D24, §9).
+  - In review: PR 3.4 (identity loss robust to pixel patterns; branch
+    `feat/robust-identity-loss`). Result: ×8 passes the gate without the artifact and becomes
+    the ×8 reference (D25); ×4 has no identity weight that meets the val rule (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -92,7 +95,7 @@ robodream_cv/
 │                              # degrade/levels/{light,medium,heavy}.yaml,
 │                              # degrade/search/realistic.yaml (PR 2.6 search space),
 │                              # model/{bicubic,fnet,cnet,srresnet}.yaml,
-│                              # train/{fnet,cnet,srresnet,srresnet_gan,srresnet_id}_x{4,8}.yaml,
+│                              # train/{fnet,cnet,srresnet,srresnet_gan,srresnet_id,srresnet_id_robust}_x{4,8}.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
@@ -110,7 +113,7 @@ robodream_cv/
 │   ├── models/                # bicubic.py, fnet.py, cnet.py, layers.py (Keras defaults),
 │   │                          # srresnet.py (SRResNet-v2, Phase 3), discriminators.py (PR 3.2)
 │   ├── losses/                # perceptual.py (VGG19), adversarial.py (relativistic GAN), PR 3.2;
-│   │                          # facenet.py (Inception-ResNet-v1 port), identity.py, PR 3.3
+│   │                          # facenet.py (Inception-ResNet-v1 port), identity.py, PR 3.3–3.4
 │   ├── train/                 # config.py (ExperimentConfig), trainer.py, checkpoint.py, ema.py,
 │   │                          # objective.py (generator loss terms, discriminator step)
 │   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
@@ -352,6 +355,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | — | Degradation tuning against real faces: tuned ×8 mix `realistic_x8.yaml`, ×4 unchanged (`DECISIONS.md`, PR 2.6) |
 | D22 | Phase 3 trains ×8 on `realistic_x8.yaml` and ×4 on `realistic.yaml` |
 | D23 | Quality gate: on light and medium, lower LPIPS and higher ID sim than the reference, PSNR-Y −0.3 dB at most, subgroup ID sim −0.01 at most (`configs/gate.yaml`) |
+| D24 | The PR 3.3 ×8 identity model is not the ×8 reference despite passing the gate: its outputs carry a grid artifact |
+| D25 | The PR 3.4 ×8 model (`srresnet_id_robust_x8-20261125-174436`) is the ×8 reference; ×4 keeps `srresnet_x4-20261125-093232` |
 
 ## 8. Licenses — status
 
@@ -949,7 +954,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - the recipe is not used as is. The next step is the identity loss; the adversarial
         term should return only under an identity constraint and with a smaller weight
         (a proposal, not decided).
-- **Identity loss (PR 3.3, in review).** Decision, crop and weight selection, and reasons in
+- **Identity loss (PR 3.3, done).** Decision, crop and weight selection, and reasons in
   `DECISIONS.md` (2026-11-25, "Identity loss on facenet embeddings (PR 3.3)").
   - **Code:**
     - `facehall.losses.facenet`: facenet's Inception-ResNet-v1, re-implemented with the
@@ -987,7 +992,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       by 0.064 on light and 0.048 on medium, in every subgroup; PSNR-Y drops by 0.27 dB.
     - ×8 passes all 14 checks against `fnet_x8_tuned`: ID similarity 0.174 → 0.206 on light,
       LPIPS 0.346 → 0.289.
-    - The ×8 model is **not** made the reference yet (Q8): see the artifact below.
+    - The ×8 model is **not** made the reference (D24): see the artifact below.
   - **Observations:**
     - **Identity metric:** the largest ID gains of the project so far. At ×4 on clean inputs,
       ID sim 0.706 almost reaches plain bicubic upsampling (0.711).
@@ -998,10 +1003,57 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **Real photos:** FID and KID get clearly worse at both scales, which fits the artifact.
       LPIPS and PSNR-Y on the synthetic levels barely react to it.
     - **Consequences:**
-      - the gate needs a check that sees such artifacts (Q8);
-      - next step (a proposal): make the identity term robust, e.g. a random shift and scale of
-        the recognition crop, the same for SR and HR, so that a fixed pixel pattern no longer
-        pays off, and a low-pass of the input; then repeat the val selection.
+      - the gate needs a check that sees such artifacts;
+      - next step: make the identity term robust (PR 3.4, below).
+- **Robust identity loss (PR 3.4, in review).** Decision, selection rule and reasons in
+  `DECISIONS.md` (2026-11-25, D24 and "Identity loss robust to pixel patterns (PR 3.4)").
+  - **Code** (`facehall.losses.identity`):
+    - a random shift (0.05 of the square side), rotation (5°) and scale (×1.1) of the
+      recognition square per image, the same for SR and HR, from the loss's own seeded
+      generator, whose state is saved for `--resume`;
+    - a Gaussian low-pass (sigma 1 HR px) before resampling;
+    - the square is sampled with `affine_grid` / `grid_sample`; without jitter, the input
+      equals the PR 3.3 resize inside the square;
+    - settings `train.identity.jitter` and `train.identity.blur`.
+  - **Identification is kept:** on 600 CelebA val identities, the ROC AUC of same against
+    different pairs is 0.9837 with both defences, against 0.9842 without.
+  - **Recipe:** `configs/train/srresnet_id_robust_x{4,8}.yaml`, the PR 3.3 recipe with the
+    defences.
+  - **Weight selection on val** (rule set before the runs): the D23 rules against the scale's
+    reference on light and medium, plus an artifact check: the WIDER `val` KID at most the L1
+    start's plus two standard deviations. The KID check rejects both PR 3.3 models.
+
+    | Weight | ×4 | ×8 |
+    |---|---|---|
+    | 0.1 | fails: LPIPS on light and medium | **qualifies** (WIDER val KID ×10³ 87.8, limit 96.9) |
+    | 0.3 | fails: LPIPS on medium (+0.0057) | fails: KID 117.3 |
+    | 1.0 | fails: KID 102.3 (limit 99.5) | fails: KID 151.0 |
+
+    So ×8 uses 0.1, and ×4 gets no full run.
+  - **Run** on 2026-11-25 from commit `fb2c38c`: `srresnet_id_robust_x8-20261125-174436`,
+    2 epochs, 400 s, 811 img/s.
+  - **Evaluation:** every input digest matched. Tables: [`RESULTS.md`](RESULTS.md). ×8, PSNR-Y /
+    LPIPS / ID sim:
+
+    | Protocol | `fnet_x8_tuned` (reference) | SRResNet-v2 (L1) | + identity (PR 3.3) | + robust identity |
+    |---|---|---|---|---|
+    | bicubic | 25.07 / 0.315 / 0.240 | 25.48 / 0.255 / 0.274 | 25.32 / 0.259 / 0.324 | 25.37 / 0.262 / 0.312 |
+    | light | 24.29 / 0.346 / 0.174 | 24.51 / 0.288 / 0.170 | 24.35 / 0.289 / 0.206 | 24.39 / 0.294 / 0.197 |
+    | medium | 22.99 / 0.399 / 0.110 | 23.14 / 0.331 / 0.104 | 23.03 / 0.327 / 0.124 | 23.05 / 0.333 / 0.119 |
+    | heavy | 21.37 / 0.468 / 0.069 | 21.56 / 0.386 / 0.066 | 21.48 / 0.375 / 0.076 | 21.48 / 0.381 / 0.073 |
+    | WIDER real: FID / KID ×10³ | 108.6 / 103.6 | 100.8 / 98.8 | 144.9 / 141.4 | 105.0 / 98.4 |
+
+  - **Gate (D23):** passes all 14 checks against `fnet_x8_tuned` and becomes the ×8 reference
+    (D25).
+  - **Observations:**
+    - **Artifact gone:** no stripe grid in 8 synthetic and 8 real test samples (zoomed, not
+      measured); real-photo KID equals the L1 start's.
+    - **Most of the ID gain stays:** light ID 0.197 against 0.206 with the artifact and 0.170
+      without the identity term. The difference suggests that part of the PR 3.3 gain came
+      from the pattern.
+    - **×4:** the identity term raises ID on val by about 0.04 on light and 0.03 on medium
+      without the artifact, but costs about 0.006 LPIPS on medium, which the gate does not
+      allow. A small perceptual term may recover it (a proposal, not tested).
 
 ## 10. Roadmap and progress
 
@@ -1082,7 +1134,10 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       halves (§9)
 - [x] **PR 3.3** Identity loss: facenet (Inception-ResNet-v1, VGGFace2) embeddings, another
       model than the ID-similarity metric; weight chosen on val. ×8 passes the gate and ×4
-      fails it on one LPIPS check, but both show a periodic grid artifact (§9, Q8)
+      fails it on one LPIPS check, but both show a periodic grid artifact (§9, D24)
+- [x] **PR 3.4** Robust identity loss: jitter and low-pass of the recognition input; artifact
+      check (WIDER val KID) in the val selection. ×8 passes the gate without the artifact and
+      becomes the ×8 reference (D25); ×4 has no qualifying weight (§9)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1129,11 +1184,12 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
-weights) by D21, Q7 (×8 training mix for Phase 3) by D22.
+weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
+by D24, Q9 (the PR 3.4 ×8 model as reference) by D25.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q8 | The PR 3.3 ×8 identity model passes the gate (D23) but shows a periodic grid artifact that the gate does not see. Make it the ×8 reference? | before the next ×8 gate run | No: keep `fnet_x8_tuned`; fix the artifact first, and consider a real-world check (FID/KID must not get much worse) or a visual sign-off in the gate |
+| Q10 | Add an artifact check to the gate, like the WIDER val KID rule of the PR 3.4 selection (on the test faces: KID at most the reference's plus two standard deviations)? | before the next gate run | Yes |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -1196,6 +1252,7 @@ uv run facehall train --config configs/train/fnet_x8_tuned.yaml     # tuned x8 m
 uv run facehall train --config configs/train/srresnet_x4.yaml       # SRResNet-v2 (PR 3.1), ~27 min
 uv run facehall train --config configs/train/srresnet_gan_x4.yaml   # ESRGAN recipe (PR 3.2), ~30 min
 uv run facehall train --config configs/train/srresnet_id_x4.yaml    # identity loss (PR 3.3), ~7 min
+uv run facehall train --config configs/train/srresnet_id_robust_x8.yaml   # robust identity (PR 3.4), ~7 min
 uv run facehall train --resume runs/<id>                            # continue an interrupted run
 uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23)
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)

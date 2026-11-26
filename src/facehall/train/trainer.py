@@ -339,6 +339,8 @@ def _run(
         if objective.discriminator is not None and objective.d_optimizer is not None:
             objective.discriminator.load_state_dict(state["discriminator"])
             objective.d_optimizer.load_state_dict(state["d_optimizer"])
+        if objective.identity is not None and state.get("identity_rng") is not None:
+            objective.identity.generator.set_state(state["identity_rng"])
 
     commit = git_commit()
     device_info = describe_device(device)
@@ -558,11 +560,17 @@ def make_objective(
     identity = None
     if weights.identity > 0:
         path = Path(settings.identity.weights)
+        jitter = settings.identity.jitter
         identity = IdentityLoss(
             load_facenet(path),
             config.data.hr_size,
             side=settings.identity.crop_side,
             center_y=settings.identity.crop_center_y,
+            shift=jitter.shift,
+            rotation=jitter.rotation,
+            scale=jitter.scale,
+            blur=settings.identity.blur,
+            seed=config.seed,
         ).to(device)
         top, left, side = identity.box
         extras["identity"] = {
@@ -570,6 +578,8 @@ def make_objective(
             "weights": str(path),
             "sha256": file_sha256(path),
             "crop": {"top": top, "left": left, "side": side},
+            "jitter": vars(jitter),
+            "blur": settings.identity.blur,
         }
     discriminator = d_optimizer = None
     if weights.adversarial > 0:
@@ -649,6 +659,7 @@ def save_state(
     """Write ``last_state.pt``, everything ``resume`` needs, under a temporary name first."""
     discriminator = objective.discriminator if objective is not None else None
     d_optimizer = objective.d_optimizer if objective is not None else None
+    identity = objective.identity if objective is not None else None
     state = {
         "format": STATE_FORMAT,
         "version": STATE_VERSION,
@@ -662,6 +673,7 @@ def save_state(
         "best": best,
         "discriminator": discriminator.state_dict() if discriminator is not None else None,
         "d_optimizer": d_optimizer.state_dict() if d_optimizer is not None else None,
+        "identity_rng": identity.generator.get_state() if identity is not None else None,
     }
     path = run_dir / STATE_FILE
     partial_path = path.with_name(path.name + ".partial")

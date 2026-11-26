@@ -245,6 +245,8 @@ TRAIN_CONFIGS = {
     "srresnet_gan_x8": "realistic_x8",
     "srresnet_id_x4": "realistic",
     "srresnet_id_x8": "realistic_x8",
+    "srresnet_id_robust_x4": "realistic",
+    "srresnet_id_robust_x8": "realistic_x8",
 }
 
 
@@ -254,7 +256,7 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
     monkeypatch.delenv("FACEHALL_WEIGHTS", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
     recipe_name, rest = name.split("_x")
-    model = recipe_name.removesuffix("_gan").removesuffix("_id")
+    model = recipe_name.removesuffix("_gan").removesuffix("_id_robust").removesuffix("_id")
     scale = rest.partition("_")[0]
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
     expected = load_config(CONFIGS.parent / "degrade" / f"{degrade}.yaml", DegradeConfig)
@@ -272,14 +274,17 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
         assert config.train.best_metric == "none"
         assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
         assert (config.train.epochs, config.train.early_stopping) == (8, 0)
-    elif recipe_name == "srresnet_id":  # identity loss (PR 3.3)
+    elif recipe_name in ("srresnet_id", "srresnet_id_robust"):  # identity loss (PR 3.3, 3.4)
         assert recipe == ("l1", 1e-4, "cosine") and config.train.ema_decay == 0.999
         assert config.train.losses.pixel == 1.0 and config.train.losses.identity > 0
         assert config.train.losses.perceptual == config.train.losses.adversarial == 0
+        robust = recipe_name == "srresnet_id_robust"
         assert config.train.identity == IdentityConfig(
             "/mnt/storage/AI/Face/weights/facenet_vggface2/20180402-114759-vggface2.pt",
             0.875,
             0.55,
+            JitterConfig(0.05, 5.0, 0.1) if robust else JitterConfig(),
+            1.0 if robust else 0.0,
         )
         assert config.train.best_metric == "none"
         assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
@@ -493,7 +498,11 @@ class TinyRecognition(nn.Module):
         return F.normalize(self.bn(self.conv(x)).mean(dim=(2, 3)), dim=1)
 
 
-def test_identity_training_run(root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def identity_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Callable[..., tuple[ExperimentConfig, list[TinyRecognition]]]:
+    """Experiments with an identity term; a tiny network stands in for facenet."""
     weights = tmp_path / "facenet.pt"
     weights.write_bytes(b"stand-in")
     networks: list[TinyRecognition] = []
@@ -503,20 +512,30 @@ def test_identity_training_run(root: Path, tmp_path: Path, monkeypatch: pytest.M
         return networks[-1]
 
     monkeypatch.setattr("facehall.train.trainer.load_facenet", fake_facenet)
-    config = experiment(
-        root,
-        tmp_path / "runs",
-        epochs=2,
-        loss="l1",
-        losses=LossWeights(pixel=1.0, identity=0.5),
-        identity=IdentityConfig(str(weights)),
-        best_metric="none",
-    )
+
+    def make(root: Path, output: Path, **train: Any) -> tuple[ExperimentConfig, list[Any]]:
+        settings: dict[str, Any] = {
+            "loss": "l1",
+            "losses": LossWeights(pixel=1.0, identity=0.5),
+            "identity": IdentityConfig(str(weights), jitter=JitterConfig(0.1, 10, 0.2), blur=1.0),
+            "best_metric": "none",
+        }
+        return experiment(root, output, **{**settings, **train}), networks
+
+    return make
+
+
+def test_identity_training_run(
+    root: Path, tmp_path: Path, identity_run: Callable[..., tuple[ExperimentConfig, list[Any]]]
+) -> None:
+    config, networks = identity_run(root, tmp_path / "runs", epochs=2)
     run = train(config)
     info = json.loads((run / "run.json").read_text())
     assert info["losses"]["identity"] == 0.5
     assert info["identity"]["crop"] == {"top": 4, "left": 2, "side": 28}  # 32 px HR crops
-    assert info["identity"]["sha256"] == file_sha256(weights)
+    assert info["identity"]["jitter"] == {"shift": 0.1, "rotation": 10, "scale": 0.2}
+    assert info["identity"]["blur"] == 1.0
+    assert info["identity"]["sha256"] == file_sha256(Path(config.train.identity.weights))
     epochs = records(run, "epoch")
     terms = epochs[-1]["train_terms"]
     assert set(terms) == {"pixel", "identity"}
@@ -533,6 +552,31 @@ def test_identity_training_run(root: Path, tmp_path: Path, monkeypatch: pytest.M
             reference.state_dict().values(), networks[0].state_dict().values(), strict=True
         )
     )
+
+
+def test_identity_resume_continues_as_if_uninterrupted(
+    root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_run: Callable[..., tuple[ExperimentConfig, list[Any]]],
+) -> None:
+    def config(output: str) -> ExperimentConfig:
+        return identity_run(root, tmp_path / output, epochs=3)[0]
+
+    reference = train(config("reference"))
+    with monkeypatch.context() as patch:
+        interrupt_after(patch, 2)
+        with pytest.raises(KeyboardInterrupt):
+            train(config("interrupted"))
+    run = next((tmp_path / "interrupted").iterdir())
+    resume(run)
+    expected, resumed = (
+        load_file(reference / "last.safetensors"),
+        load_file(run / "last.safetensors"),
+    )
+    assert all(torch.equal(expected[k], resumed[k]) for k in expected)  # the jitter stream too
+    state = torch.load(run / "last_state.pt", weights_only=True)
+    assert state["identity_rng"] is not None
 
 
 def test_init_from_a_checkpoint(root: Path, tmp_path: Path) -> None:
@@ -632,6 +676,10 @@ def test_invalid_loss_settings_are_rejected(root: Path, tmp_path: Path) -> None:
                 losses=LossWeights(identity=1.0), identity=IdentityConfig("w.pt", crop_side=1.2)
             ),
             "leaves the image",
+        ),
+        (
+            with_train(losses=LossWeights(identity=1.0), identity=IdentityConfig("w.pt", blur=-1)),
+            "must be non-negative",
         ),
     ]
     for value, message in bad:

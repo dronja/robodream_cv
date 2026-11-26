@@ -267,6 +267,30 @@ def test_video_without_audio_and_a_broken_video(tmp_path: Path, checkpoint: Path
     assert "models" not in rec["parameters"] and rec["parameters"]["video"]["hold"] == 0
 
 
+@needs_ffmpeg
+def test_rotated_video_is_written_upright(tmp_path: Path, checkpoint: Path) -> None:
+    from facehall.video import enhance_video
+
+    plain, rotated = tmp_path / "plain.mp4", tmp_path / "rotated.mp4"
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    subprocess.run(
+        command
+        + ["-f", "lavfi", "-i", "testsrc=size=48x32:rate=10:duration=0.2"]
+        + ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(plain)],
+        check=True,
+    )
+    subprocess.run(
+        command + ["-display_rotation", "90", "-i", str(plain), "-c", "copy", str(rotated)],
+        check=True,
+    )
+    enhancer = Enhancer.from_checkpoint(checkpoint, PipelineConfig())
+    enhancer._detector = StubDetector([])
+    out = tmp_path / "out.mp4"
+    enhance_video(enhancer, rotated, out, parameters={}, report=lambda _: None)
+    (video,) = streams(out)
+    assert (int(video["width"]), int(video["height"])) == (128, 192)
+
+
 # --- the flicker measure -----------------------------------------------------------------
 
 
@@ -288,6 +312,7 @@ def test_motion_and_flicker() -> None:
     assert motion("static_degraded", 5) == (0.0, 0.0)
     assert motion("drift_clean", 2) == pytest.approx((0.74, 0.26))
     assert motion("sway_degraded", 4) == pytest.approx((2.0, 0.0))
+    assert motion("fast_degraded", 2) == pytest.approx((3.0, 1.0))
     weights = np.ones((4, 4), np.float32)
     still = [np.full((4, 4, 3), 100, np.uint8)] * 3
     assert flicker(still, weights) == 0.0

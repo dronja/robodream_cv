@@ -9,7 +9,9 @@ the model's input size, as in ``facehall.eval.detection.make_scene``. Conditions
   sub-pixel phase changes from frame to frame;
 - ``sway_degraded``: the face sways sideways, ``SWAY`` LR px of amplitude over a period of
   ``SWAY_PERIOD`` frames (up to 0.79 LR px per frame), so its speed keeps changing; this shows
-  the lag of a smoothing filter.
+  the lag of a smoothing filter;
+- ``fast_degraded``: the face moves by ``FAST`` LR px per frame, like a small face crossing the
+  frame; a filter without a velocity lags behind it in proportion to the speed.
 
 Every frame is rendered from the source image: the source is padded by its own size with its
 mean colour, shifted (bicubic) at the source resolution and downscaled (area). So frames differ
@@ -52,13 +54,16 @@ from facehall.video import FaceTracker
 Image = npt.NDArray[np.uint8]
 DRIFT = (0.37, 0.13)  # LR px per frame: the sub-pixel phase keeps changing
 SWAY, SWAY_PERIOD = 2.0, 16  # LR px amplitude, frames
-CONDITIONS = ("static_degraded", "drift_clean", "drift_degraded", "sway_degraded")
+FAST = (1.5, 0.5)  # LR px per frame
+CONDITIONS = ("static_degraded", "drift_clean", "drift_degraded", "sway_degraded", "fast_degraded")
 
 
 def motion(condition: str, t: int) -> tuple[float, float]:
     """The face's offset in frame ``t``, LR px."""
     if condition.startswith("drift"):
         return DRIFT[0] * t, DRIFT[1] * t
+    if condition.startswith("fast"):
+        return FAST[0] * t, FAST[1] * t
     if condition.startswith("sway"):
         return SWAY * float(np.sin(2.0 * np.pi * t / SWAY_PERIOD)), 0.0
     return 0.0, 0.0

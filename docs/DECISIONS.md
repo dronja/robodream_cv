@@ -1178,3 +1178,82 @@ KID ×10³:
   allow the perceptual term. Either the identity of the ×8 output has to improve by other means
   (for example the prior-guided model of the plan), or the gate has to be changed, which only
   the user can decide.
+
+### D30 — Move to Phase 4 before the remaining Phase 3 items (closes Q14)
+**Decision** (the user, 2026-11-26): the next work is Phase 4, the inference pipeline. The
+remaining Phase 3 items (prior-guided model, NME metric, skin-tone subgroup) stay in the
+roadmap for later.
+
+**Reason:** Phase 3 meets its "done when" criterion, because both references passed the gate
+(D25, D29). The last two ×8 steps (PR 3.9, PR 3.10) did not pass the val rule, and the
+prior-guided model is the next way to improve ×8 identity.
+
+### D31 — Face detector: YuNet, on a bicubic upscale by the model scale
+**Decision** (the user chose the detector on 2026-11-26; the settings are defaults taken without
+a separate question):
+- **Detector:** OpenCV Zoo YuNet, `face_detection_yunet_2026may.onnx`. It is MIT-licensed
+  (`docs/THIRD_PARTY_LICENSES.md` §3) and runs through `cv2.FaceDetectorYN` of the existing
+  OpenCV dependency. The user chose it over InsightFace SCRFD-10GF from `buffalo_l` (stronger on
+  small faces, non-commercial) and over both together. The README calls `2026may` the default
+  for OpenCV 5.x. On 200 CelebA val images (a one-off check), `2023mar` gives the same
+  detections and landmarks.
+- **Landmark order:** YuNet's order (right eye of the person first) is `LANDMARK_NAMES` in
+  image terms. Checked against the CelebA annotations.
+- **Detection on a bicubic upscale by the model scale** (`YuNet(upsample=…)`). The face then has
+  about the 32 px between the eyes of the HR template. In the pipeline this is the
+  background-upscaled frame.
+- **Score threshold 0.6**, NMS 0.3.
+- **Templates per scale for YuNet's points** (`YUNET_TEMPLATES`): fitted on CelebA **train**
+  scenes, so that aligning detected points gives the training crops up to the per-image error.
+
+**Measurements** (2026-11-26, `scripts/measure_detection.py` from commit `f45cafa`, local
+`outputs/detection/results.json`):
+- **Scenes:** aligned CelebA images downscaled to a given distance between the eyes (area
+  interpolation), padded by their own size with their mean colour.
+- **Degraded variant:** Gaussian blur σ 0.5 px, noise σ 3 levels and JPEG quality 70, after
+  the downscale.
+- **"Detected"** means the highest-scoring face lies within 0.5 interocular distances (NME) of
+  the annotation.
+
+Detection rate, clean / degraded, 300 val scenes per cell:
+
+| Eyes (px) | ×1 | ×2 | ×4 | ×8 | ×16 |
+|---|---|---|---|---|---|
+| 4 (×8 input) | 0.100 / 0.097 | 0.937 / 0.827 | 0.983 / 0.910 | **0.990 / 0.950** | 0.973 / 0.610 |
+| 6 | 0.643 / 0.643 | 0.987 / 0.973 | 0.993 / 0.987 | 0.993 / 0.973 | 0.970 / 0.867 |
+| 8 (×4 input) | 0.920 / 0.930 | 0.987 / 0.987 | **0.997 / 0.993** | 0.993 / 0.977 | 0.990 / 0.927 |
+| 12 | 0.987 / 0.990 | 0.997 / 0.997 | 1.000 / 0.997 | 0.993 / 0.987 | 0.973 / 0.873 |
+
+Landmark NME at the chosen upscale: 4 px ×8 0.124 / 0.177; 8 px ×4 0.097 / 0.112. At ×16 the
+degraded faces get worse again.
+
+Alignment error on 800 val scenes. The crop from the detected points is compared with the crop
+from the annotated points, as the shift of the crop centre (fraction of the side), rotation and
+scale. "Within jitter" is the fraction inside the training jitter on all three axes (shift
+0.03, rotation 5°, scale ×1.05):
+
+| Scale, input | Template | Detected | Points (HR px) | Shift p50 / p95 | Rotation p50 / p95 | Scale p50 / p95 | Within jitter |
+|---|---|---|---|---|---|---|---|
+| ×4 clean | CelebA | 0.998 | 3.46 | 0.014 / 0.032 | 1.36° / 4.14° | 1.036 / 1.112 | 0.617 |
+| ×4 clean | YuNet | 0.998 | 3.40 | 0.013 / 0.030 | 1.36° / 4.13° | 1.033 / 1.105 | 0.629 |
+| ×4 degraded | CelebA | 0.998 | 3.90 | 0.016 / 0.043 | 1.36° / 4.25° | 1.045 / 1.141 | 0.480 |
+| ×4 degraded | YuNet | 0.998 | 3.76 | 0.015 / 0.039 | 1.35° / 4.30° | 1.035 / 1.118 | 0.578 |
+| ×8 clean | CelebA | 0.995 | 4.26 | 0.019 / 0.047 | 1.35° / 4.31° | 1.049 / 1.159 | 0.411 |
+| ×8 clean | YuNet | 0.995 | 4.09 | 0.018 / 0.043 | 1.37° / 4.39° | 1.042 / 1.136 | 0.491 |
+| ×8 degraded | CelebA | 0.943 | 5.84 | 0.030 / 0.084 | 1.45° / 4.94° | 1.076 / 1.227 | 0.194 |
+| ×8 degraded | YuNet | 0.943 | 5.36 | 0.026 / 0.076 | 1.46° / 5.02° | 1.052 / 1.177 | 0.313 |
+
+**Reasons and consequences:**
+- **Upscale:** without one, YuNet misses most faces of the ×8 input size (10% found). An
+  upscale by the model scale finds 95–99%. Larger upscales lose degraded faces again.
+- **Templates:** the fitted templates reduce the error on every axis, most in scale, but the
+  per-image error dominates.
+- **Alignment error versus training jitter:** it often exceeds the training jitter, mostly in
+  scale. Only 31% (×8, degraded) to 63% (×4, clean) of faces fall inside it.
+- **What follows:** the restoration models will often see crops outside their training jitter.
+  The cost is measured end to end in PR 4.2. Training with jitter matched to these errors is
+  the candidate remedy.
+- **The measurement is optimistic:** CelebA faces are near-frontal and centred, the backgrounds
+  are flat, and the degradation is light.
+- **No real-photo measurement:** YuNet was trained on WIDER FACE, so the WIDER real-world set
+  (training photos) cannot measure it.

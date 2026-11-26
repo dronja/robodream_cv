@@ -43,27 +43,28 @@ CELEBA_TEMPLATE: Points = np.array(
 
 
 # YuNet's landmarks (facehall.align.detect) follow another annotation convention than CelebA's.
-# Templates for them, fitted by scripts/measure_detection.py on 1,500 CelebA train scenes per
-# scale (faces with 32 / scale px between the eyes, detected on a bicubic ×scale upscale) and
-# mirror-averaged (D31). Aligning YuNet points to the template of the scale gives the crops of
-# CELEBA_TEMPLATE up to the per-image error.
+# Templates for them, fitted by scripts/measure_detection.py (commit f45cafa, 2026-11-26) on
+# 1,500 CelebA train scenes per scale (faces with 32 / scale px between the eyes, detected on a
+# bicubic ×scale upscale; 1,495 and 1,489 detected) and mirror-averaged (D31). Aligning YuNet
+# points to the template of the scale gives the crops of CELEBA_TEMPLATE up to the per-image
+# error.
 YUNET_TEMPLATES: dict[int, Points] = {
     4: np.array(
         [
-            [0.37713, 0.47975],
-            [0.62287, 0.47975],
+            [0.37713, 0.4798],
+            [0.62287, 0.4798],
             [0.5, 0.62562],
-            [0.39684, 0.7385],
-            [0.60316, 0.7385],
+            [0.39685, 0.73847],
+            [0.60315, 0.73847],
         ]
     ),
     8: np.array(
         [
-            [0.38144, 0.48254],
-            [0.61856, 0.48254],
-            [0.5, 0.62587],
-            [0.40403, 0.74245],
-            [0.59597, 0.74245],
+            [0.38138, 0.48258],
+            [0.61862, 0.48258],
+            [0.5, 0.62594],
+            [0.40397, 0.74255],
+            [0.59603, 0.74255],
         ]
     ),
 }

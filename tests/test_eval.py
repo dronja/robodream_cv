@@ -162,6 +162,8 @@ def test_protocol_run(root: Path, tmp_path: Path) -> None:
     assert summary["level"] == "tiny_x4"  # no level set: the protocol name
     assert table["degradation"] == ["{}"] * TEST_SAMPLES
     assert summary["inputs_sha256"] == input_digest(config)
+    assert summary["spectrum"]["images"] == TEST_SAMPLES
+    assert summary["spectrum"]["peak_ratio"] > 0 and summary["metric_setup"]["spectrum"]
 
 
 NOISY = DegradeConfig(

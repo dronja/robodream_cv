@@ -80,9 +80,11 @@ As of 2026-11-26:
     passes the gate without the artifact and becomes the ×8 reference (D25); ×4 has no identity
     weight that meets the val rule (§9).
   - Merged: PR 3.5 (artifact check in the quality gate, D26; PR #22, `ee7b576`).
-  - In review: PR 3.6 (×4 robust identity plus a perceptual term; branch
-    `feat/identity-perceptual-x4`). Result: passes the gate, but carries a fine periodic
-    pattern that KID does not see; whether it becomes the ×4 reference is open (Q11, §9).
+  - Merged: PR 3.6 (×4 robust identity plus a perceptual term; PR #23, `f3c347a`). Result:
+    passes the gate, but carries a fine periodic pattern that KID does not see; not the ×4
+    reference (D27, §9).
+  - In review: PR 3.7 (spectral periodic-pattern check in evaluation and the gate, D28; branch
+    `feat/gate-spectral-check`).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -124,7 +126,8 @@ robodream_cv/
 │   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
 │   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner),
 │   │                          # match.py (degradation tuning against real LR crops),
-│   │                          # gate.py (quality gate, D23, D26)
+│   │                          # gate.py (quality gate, D23, D26, D28),
+│   │                          # spectrum.py (periodic-pattern check, D28)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
@@ -138,7 +141,7 @@ robodream_cv/
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
-│                              # degradation matching, quality gate, losses
+│                              # degradation matching, quality gate, losses, spectrum
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -363,6 +366,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D24 | The PR 3.3 ×8 identity model is not the ×8 reference despite passing the gate: its outputs carry a grid artifact |
 | D25 | The PR 3.4 ×8 model (`srresnet_id_robust_x8-20261125-174436`) is the ×8 reference; ×4 keeps `srresnet_x4-20261125-093232` |
 | D26 | Gate artifact check: on the WIDER test faces, KID at most the reference's plus 2 standard deviations (one-sided) |
+| D27 | The PR 3.6 ×4 model is not the ×4 reference despite passing the gate: its outputs carry a periodic pattern |
+| D28 | Gate spectral check: on light and medium, the peak SR / HR power ratio at ≥ 0.25 cycles/px at most 1.0 |
 
 ## 8. Licenses — status
 
@@ -1071,7 +1076,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Earlier pairs, re-checked:** every gate verdict stays the same except the PR 3.3 ×8 model
     (KID 141.4 against the limit 106.8), which now fails automatically instead of by hand (D24).
     The PR 3.3 ×4 model fails the KID check too (124.6 against 96.5).
-- **Robust identity plus perceptual at ×4 (PR 3.6, in review).** Decision, selection rule and
+- **Robust identity plus perceptual at ×4 (PR 3.6, done).** Decision, selection rule and
   reasons in `DECISIONS.md` (2026-11-26, "Robust identity loss with a perceptual term at ×4
   (PR 3.6)").
   - **Recipe:** `configs/train/srresnet_id_perc_x4.yaml`, the PR 3.4 ×4 recipe (L1, robust
@@ -1106,11 +1111,33 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **Clean models:** both current references are clean by this measure (0.17 at ×4, 0.11 at
       ×8).
     - **KID does not see it:** KID falls (92.3 → 77.3), so D26 passes the model.
-  - **Open:**
-    - whether the model becomes the ×4 reference (Q11);
-    - a spectral check in the gate (Q12);
-    - next step: the PR 3.4 defences (jitter and low-pass of the network input) for the
-      perceptual term too (a proposal, not tested).
+  - **Reference:** not made the ×4 reference (D27); the spectral check followed in PR 3.7.
+  - **Next step** (a proposal, not tested): the PR 3.4 defences (jitter and low-pass of the
+    network input) for the perceptual term too.
+- **Spectral check in evaluation and the gate (PR 3.7, in review).** Decision, measure, val
+  calibration and reasons in `DECISIONS.md` (D28).
+  - **Measure** (`facehall.eval.spectrum`): the SR / HR power-spectrum ratio over all images of
+    a protocol (luma, Hann window); the peak ratio is its maximum at ≥ 0.25 cycles/px. Every
+    synthetic evaluation now records it in `metrics.json` (`spectrum`, with five band ratios).
+  - **Gate:** `spectral_peak: 1.0` in `configs/gate.yaml`, on each gated protocol. An absolute
+    limit: in no frequency bin may SR carry more power than the real faces.
+  - **Val calibration** (every val image, light and medium):
+    - models without a visible pattern stay at or below 0.49 (bicubic, FNet, L1, robust
+      identity);
+    - models with a known pattern are at 2.3 or above: PR 3.3, PR 3.6 and ESRGAN;
+    - the PR 3.4 ×8 val model with weight 0.3 (faint stripes, rejected by KID) stays at 0.21–0.29,
+      so the KID check (D26) is still needed.
+  - **Test** (light and medium of five models evaluated again; every other metric reproduced
+    exactly). Spectral peak on light / medium:
+    - the references: `srresnet_x4` 0.22 / 0.17, `srresnet_id_robust_x8` 0.12 / 0.12;
+    - PR 3.3: ×4 5.98 / 9.32, ×8 2.31 / 2.87;
+    - PR 3.6: 38.10 / 26.33.
+
+    The only changed gate verdict is the PR 3.6 model (pass → fail), which the user had rejected
+    by hand (D27).
+  - **Not covered:** the check sees regular patterns and excess high-frequency power, not every
+    artifact. Visual checks stay part of every gate decision. Older evaluations lack the
+    spectrum until they are run again.
 
 ## 10. Roadmap and progress
 
@@ -1198,7 +1225,9 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 3.5** Artifact check in the quality gate: real-photo KID at most the reference's plus
       2 standard deviations (D26)
 - [x] **PR 3.6** ×4: robust identity plus a VGG19 perceptual term (weight 0.01, chosen on
-      val). Passes the gate, but carries a fine periodic pattern that KID does not see (§9, Q11)
+      val). Passes the gate, but carries a fine periodic pattern that KID does not see (§9, D27)
+- [x] **PR 3.7** Spectral periodic-pattern check: `facehall.eval.spectrum`, recorded by every
+      synthetic evaluation; gate limit 1.0 set on val (D28)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1247,12 +1276,10 @@ Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) b
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
 by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
-D26.
+D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q11 | The PR 3.6 ×4 model (`srresnet_id_perc_x4-20261126-094522`) passes the gate (D23, D26) but carries a fine periodic pattern from the perceptual term (spectral peak ratio 26.9; §9). Make it the ×4 reference? | before merging PR 3.6 | No, as with D24: keep `srresnet_x4`; first make the perceptual term robust like the identity term |
-| Q12 | Add a spectral check to the gate: on light and medium, the peak SR / HR power ratio at ≥ 0.25 cycles/px at most 1 (clean models 0.08–0.33, pattern models 2.3–27 on val)? | before the next gate run | Yes; implement the measure in `facehall.eval` and set the limit on val |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -1318,8 +1345,9 @@ uv run facehall train --config configs/train/srresnet_id_x4.yaml    # identity l
 uv run facehall train --config configs/train/srresnet_id_robust_x8.yaml   # robust identity (PR 3.4), ~7 min
 uv run facehall train --config configs/train/srresnet_id_perc_x4.yaml     # + perceptual (PR 3.6), ~9 min
 uv run facehall train --resume runs/<id>                            # continue an interrupted run
-uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23, D26);
+uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23, D26, D28);
                                                # needs the light, medium and wider_real evals
+                                               # (light and medium from PR 3.7 on: spectrum)
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
 uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
 FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine

@@ -8,6 +8,7 @@ subgroup_id_drop: 0.01      # ID similarity the candidate may lose in any subgro
 subgroups: [male, not_male, young, not_young]
 realworld: wider_real       # artifact check (D26): real-photo KID at most the reference's
 kid_stds: 2.0               # plus this many of its standard deviations
+spectral_peak: 1.0          # periodic-pattern check (D28): largest SR/HR power ratio at high frequencies
 references:                 # current reference per scale: a model that passes replaces it
   4: srresnet_x4-20261125-093232-best      # PR 3.1; before: fnet_x4_realistic-20261124-153302-best
   8: srresnet_id_robust_x8-20261125-174436-best   # PR 3.4 (D25); before: fnet_x8_tuned-20261125-090336-best

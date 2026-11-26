@@ -6,19 +6,23 @@ synthetic protocols in ``configs/gate.yaml``, from their ``metrics.json`` files
 
 - have a lower LPIPS and a higher ID similarity than the reference (all images);
 - lose at most ``psnr_drop`` dB of PSNR-Y;
-- lose at most ``subgroup_id_drop`` of ID similarity in every subgroup of ``subgroups``.
+- lose at most ``subgroup_id_drop`` of ID similarity in every subgroup of ``subgroups``;
+- have a spectral peak ratio of at most ``spectral_peak`` (D28): the largest SR / HR power ratio
+  at high frequencies (``facehall.eval.spectrum``), a check for periodic pixel patterns. The
+  limit is absolute: models without a pattern stay below 1, whatever the reference.
 
 Artifact check (D26): on the real-world protocol ``realworld`` (no reference images), the
 candidate's KID against real HR faces may exceed the reference's by at most ``kid_stds``
 standard deviations of the reference's KID. The check is one-sided: a lower KID is not a gain,
 because KID also rewards invented faces (``docs/DECISIONS.md``, PR 2.5). It catches outputs
 that move away from real photos, such as the stripe pattern of PR 3.3, which the synthetic
-metrics barely see.
+metrics barely see. It missed the finer pattern of PR 3.6, which the spectral check catches.
 
 Both models must have been scored on the same inputs (``inputs_sha256``).
 """
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +40,7 @@ class GateConfig:
     references: dict[int, str] = field(default_factory=dict)  # scale -> reference label
     realworld: str = ""  # real-world protocol without "_x<scale>"; empty: no artifact check
     kid_stds: float = 2.0  # KID margin in standard deviations of the reference's KID
+    spectral_peak: float = 0.0  # largest allowed spectral peak ratio (D28); 0: no check
 
 
 @dataclass(frozen=True)
@@ -67,8 +72,8 @@ def check(
     reference = reference or config.references.get(scale)
     if not reference:
         raise ValueError(f"no reference model for x{scale} in the gate config")
-    if config.kid_stds < 0:
-        raise ValueError("kid_stds must not be negative")
+    if config.kid_stds < 0 or config.spectral_peak < 0:
+        raise ValueError("kid_stds and spectral_peak must not be negative")
 
     def pair(base: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
         protocol = f"{base}_x{scale}"
@@ -125,6 +130,16 @@ def protocol_checks(
         limit = f">= reference - {config.subgroup_id_drop}"
         passed = ids[0] >= ids[1] - config.subgroup_id_drop
         checks.append(Check(protocol, f"identity: {group}", *ids, limit, passed))
+    if config.spectral_peak > 0:
+        if "spectrum" not in new:
+            raise ValueError(
+                f"{protocol}: the candidate's metrics.json has no spectrum; evaluate it again"
+            )
+        peak = float(new["spectrum"]["peak_ratio"])
+        reference = float(old["spectrum"]["peak_ratio"]) if "spectrum" in old else math.nan
+        limit = f"<= {config.spectral_peak:g}"
+        passed = peak <= config.spectral_peak
+        checks.append(Check(protocol, "spectral peak", peak, reference, limit, passed))
     return checks
 
 
@@ -138,8 +153,8 @@ def render(checks: list[Check], candidate: str, reference: str) -> str:
     ]
     for c in checks:
         result = "pass" if c.passed else "**fail**"
+        reference = "—" if math.isnan(c.reference) else f"{c.reference:.4f}"
         lines.append(
-            f"| {c.protocol} | {c.name} | {c.candidate:.4f} | {c.reference:.4f} | {c.limit} "
-            f"| {result} |"
+            f"| {c.protocol} | {c.name} | {c.candidate:.4f} | {reference} | {c.limit} | {result} |"
         )
     return "\n".join(lines) + "\n"

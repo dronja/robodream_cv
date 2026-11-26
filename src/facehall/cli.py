@@ -63,6 +63,72 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="override a protocol value (repeatable)",
     )
 
+    enhance = commands.add_parser(
+        "enhance",
+        help="restore the faces of photos",
+        description="Restore the faces of photos or folders of photos with a restoration model "
+        "and write marked outputs (AI-enhanced metadata). The restored faces are a plausible "
+        "reconstruction, not a recovery of the real details: do not use them to identify a "
+        "person or as evidence.",
+    )
+    enhance.add_argument("inputs", type=Path, nargs="+", metavar="INPUT", help="image or folder")
+    enhance.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="output image (one input image) or folder (mirrors the inputs)",
+    )
+    model = enhance.add_mutually_exclusive_group()
+    model.add_argument(
+        "--scale", type=int, choices=(4, 8), help="model scale from the pipeline config (4)"
+    )
+    model.add_argument("--ckpt", type=Path, help="restoration checkpoint (.safetensors)")
+    enhance.add_argument(
+        "--pipeline",
+        type=Path,
+        default=Path("configs/pipeline/default.yaml"),
+        help="pipeline config (YAML; default: %(default)s)",
+    )
+    enhance.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a pipeline value, e.g. --set color_correction=true (repeatable)",
+    )
+    faces = enhance.add_mutually_exclusive_group()
+    faces.add_argument(
+        "--landmarks",
+        action="append",
+        default=[],
+        metavar="X1,Y1,...,X5,Y5",
+        help="five landmarks of a face instead of detection (eye centres, nose tip, mouth "
+        "corners; image pixels; one input image; repeatable)",
+    )
+    faces.add_argument(
+        "--box",
+        action="append",
+        default=[],
+        metavar="LEFT,TOP,WIDTH,HEIGHT",
+        help="a face box for a face the detector misses: tight, like a detector's (cheek to "
+        "cheek, forehead to chin, about 2.2 eye distances wide; image pixels; one input image; "
+        "repeatable)",
+    )
+    enhance.add_argument(
+        "--watermark", action="store_true", help="add a visible 'AI-enhanced' mark"
+    )
+    enhance.add_argument(
+        "--format",
+        choices=("png", "jpg", "webp"),
+        default="png",
+        help="output format in an output folder (default: %(default)s)",
+    )
+    enhance.add_argument("--quality", type=int, default=95, help="JPEG and WebP quality")
+    enhance.add_argument("--overwrite", action="store_true", help="replace existing outputs")
+    enhance.add_argument("--device", default="auto", help="auto, cpu or cuda (default: auto)")
+
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -86,4 +152,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         overrides = [*args.overrides, *([f"split={args.split}"] if args.split else [])]
         print(run_eval(args.config, overrides, checkpoint=args.ckpt, baseline=args.model))
+    elif args.command == "enhance":
+        from facehall.enhance import run_enhance
+
+        try:
+            return run_enhance(
+                args.inputs,
+                args.output,
+                pipeline=args.pipeline,
+                overrides=args.overrides,
+                checkpoint=args.ckpt,
+                scale=args.scale,
+                landmarks=args.landmarks,
+                boxes=args.box,
+                visible_mark=args.watermark,
+                suffix="." + args.format,
+                quality=args.quality,
+                overwrite=args.overwrite,
+                device=args.device,
+            )
+        except (OSError, ValueError) as error:
+            parser.exit(2, f"facehall enhance: error: {error}\n")
     return 0

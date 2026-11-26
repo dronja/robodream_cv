@@ -34,7 +34,14 @@ import torch
 
 from facehall.align.template import CELEBA_TEMPLATE
 from facehall.align.warp import alignment_matrix, warp
-from facehall.eval.detection import Row, SceneDegradation, degrade, load_rgb, make_scene
+from facehall.eval.detection import (
+    Row,
+    SceneDegradation,
+    degrade,
+    landmark_error,
+    load_rgb,
+    make_scene,
+)
 from facehall.eval.metrics import psnr_y, ssim_y
 from facehall.pipeline import Enhancer, lr_crop, to_frame, upscale
 
@@ -91,7 +98,8 @@ def evaluate(
     *,
     batch: int = 64,
 ) -> dict[str, Any]:
-    """Mean metrics per variant, and how often the detector found the face (``detected``)."""
+    """Mean metrics per variant; how often the detector found the face (landmark NME below
+    0.5, as in D31) and how often that face was restored."""
     scorers: dict[str, Metric] = {"psnr_y": psnr_y, "ssim_y": ssim_y, **(metrics or {})}
     values: dict[str, dict[str, list[float]]] = {v: {k: [] for k in scorers} for v in VARIANTS}
     pending: dict[str, list[npt.NDArray[np.uint8]]] = {v: [] for v in VARIANTS}
@@ -119,11 +127,8 @@ def evaluate(
         annotated = enhancer.enhance(sample.scene, [sample.truth]).image
         pending["annotated"].append(face_crop(annotated, sample.truth, scale, size))
         result = enhancer.enhance(sample.scene)
-        hit = [
-            f
-            for f in result.faces
-            if np.abs(f.landmarks - sample.truth).max() < _near(sample.truth)
-        ]
+        # the D31 rule: a detection is the face when its landmark NME is below 0.5
+        hit = [f for f in result.faces if landmark_error(f.landmarks, sample.truth) < 0.5]
         found += bool(hit)
         restored += any(f.restored for f in hit)
         pending["detected"].append(face_crop(result.image, sample.truth, scale, size))
@@ -146,8 +151,3 @@ def evaluate(
             for variant, table in values.items()
         },
     }
-
-
-def _near(truth: npt.NDArray[np.float64]) -> float:
-    """A detection belongs to the face if every landmark is within half the eye distance."""
-    return 0.5 * float(np.linalg.norm(truth[0] - truth[1]))

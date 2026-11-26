@@ -94,9 +94,13 @@ As of 2026-11-26:
   - By its "done when" criterion, Phase 3 is met: both references passed the gate (D25, D29).
     The remaining items (prior-guided model, NME, skin tone) come later (D30).
 - **Phase 4 (inference pipeline): in progress** (D30).
-  - In review: PR 4.1 (face detection with five landmarks: YuNet, D31; branch
-    `feat/face-detection`). Result: an upscale by the model scale finds 95–99% of faces of the
-    model input size, but the alignment error often exceeds the training jitter (§9).
+  - Merged: PR 4.1 (face detection with five landmarks: YuNet, D31; PR #28, `558fdd1`).
+    Result: an upscale by the model scale finds 95–99% of faces of the model input size, but
+    the alignment error often exceeds the training jitter (§9).
+  - In review: PR 4.2 (align, restore, paste back; end-to-end evaluation; branch
+    `feat/paste-back`). Result: the pipeline works end to end and beats a bicubic upscale in
+    PSNR, SSIM and LPIPS. It loses about 0.06 ID to the alignment at LR resolution, which the
+    protocols do not see, and stays below bicubic in ID except at ×8 on degraded faces (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -119,7 +123,8 @@ robodream_cv/
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
-│                              # eval/wider_real_x{4,8}.yaml (real-world, no reference)
+│                              # eval/wider_real_x{4,8}.yaml (real-world, no reference),
+│                              # pipeline/default.yaml (inference pipeline, PR 4.2)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
@@ -142,7 +147,9 @@ robodream_cv/
 │   │                          # match.py (degradation tuning against real LR crops),
 │   │                          # gate.py (quality gate, D23, D26, D28),
 │   │                          # spectrum.py (periodic-pattern check, D28),
-│   │                          # detection.py (detection and alignment measures, D31)
+│   │                          # detection.py (detection and alignment measures, D31),
+│   │                          # endtoend.py (pipeline on synthetic scenes, PR 4.2)
+│   ├── pipeline.py            # end-to-end inference: detect, align, restore, paste back (PR 4.2)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py,
 │                              # detect.py (YuNet face detector, D31)
@@ -152,14 +159,14 @@ robodream_cv/
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
 │                              # preview_degradations.py, protocol_digest.py,
 │                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
-│                              # measure_detection.py (D31)
+│                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
 │                              # degradation matching, quality gate, losses, spectrum,
-│                              # face detection
+│                              # face detection, inference pipeline
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -1279,6 +1286,49 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Limits:** CelebA scenes are optimistic (near-frontal, centred faces, flat backgrounds, a
     light degradation). YuNet was trained on WIDER FACE, so the WIDER real-world set cannot
     measure it.
+- **Inference pipeline (PR 4.2, in review).** Defaults, the full table and reasons in
+  `DECISIONS.md` (2026-11-26, "Inference pipeline and its end-to-end evaluation (PR 4.2)").
+  - **Code:**
+    - `facehall.pipeline.Enhancer` (`from_checkpoint`, `enhance(image, landmarks=None)`):
+      - the bicubic background ×scale;
+      - faces from YuNet (D31) or given landmarks (CelebA convention);
+      - an aligned LR crop per face, supersampled by an integer factor for larger faces;
+      - batched restoration;
+      - a feathered ellipse, inverse warp and blend in a window around each face;
+      - optional colour correction.
+      Faces more than 2× the model input stay bicubic. Each face is reported (`FaceResult`:
+      landmarks, source, score, crop scale, restored or why not);
+    - `configs/pipeline/default.yaml` (`PipelineConfig`);
+    - `facehall.eval.endtoend` and `scripts/evaluate_pipeline.py`: five variants on synthetic
+      CelebA scenes (bicubic, aligned, direct, annotated, detected).
+  - **Run** on 2026-11-26 from commit `6320817`: 1,000 val scenes per scale and input, about
+    8 min per model. ID similarity / LPIPS on clean and degraded scenes:
+
+    | Variant | ×4 clean | ×4 degraded | ×8 clean | ×8 degraded |
+    |---|---|---|---|---|
+    | bicubic background | 0.712 / 0.326 | 0.438 / 0.505 | 0.340 / 0.544 | 0.129 / 0.684 |
+    | model, LR crop on the template grid (`aligned`) | 0.675 / 0.144 | 0.363 / 0.220 | 0.317 / 0.268 | 0.143 / 0.333 |
+    | model, LR crop resampled at LR (`direct`) | 0.617 / 0.163 | 0.375 / 0.221 | 0.262 / 0.284 | 0.146 / 0.331 |
+    | pipeline, annotated landmarks | 0.618 / 0.217 | 0.371 / 0.289 | 0.263 / 0.343 | 0.140 / 0.397 |
+    | pipeline, detected landmarks | 0.613 / 0.217 | 0.367 / 0.292 | 0.261 / 0.347 | 0.128 / 0.421 |
+
+    The face was detected in 99.6 / 99.0% (×4) and 98.7 / 92.5% (×8) of the scenes, and restored
+    in 99.0 / 98.5% and 98.2 / 92.3%. The face-size limit left out detections whose landmarks
+    were implausible.
+  - **Observations:**
+    - **Alignment at LR resolution** is the largest cost: −0.058 ID at ×4 and −0.055 at ×8 on
+      clean scenes. The interpolation does not matter. The models were trained on LR crops on
+      the template's grid, which a real photo never gives.
+    - **Paste-back and detection** cost little identity. The paste-back raises LPIPS by
+      0.05–0.07, because hair and background stay bicubic.
+    - **Against a bicubic upscale:**
+      - better PSNR, SSIM and LPIPS at both scales;
+      - lower ID except at ×8 on degraded faces;
+      - the ×4 reference is already below bicubic in ID on clean and light protocols.
+    - **Colour correction** has no effect (off by default).
+    - **Grids** (local): no seams. At ×8, faces get younger and some look like another person.
+  - **Consequence:** the protocol numbers overstate the pipeline in ID. Candidate remedy:
+    fine-tune on pipeline-like LR crops (Q15).
 
 ## 10. Roadmap and progress
 
@@ -1390,15 +1440,17 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 4.1** `feat(align):` face detection with five landmarks: YuNet (OpenCV Zoo, MIT,
       D31) on a bicubic upscale by the model scale; YuNet templates per scale; detection and
       alignment measures on synthetic CelebA scenes (`scripts/measure_detection.py`)
-- [ ] **PR 4.2** Align → restore → inverse warp → feathered-ellipse mask → paste-back on the
-      background upscale; manual landmarks or box as a fallback; optional colour correction.
-      End-to-end evaluation with detected against annotated landmarks
-- [ ] **PR 4.3** `facehall enhance` for photos and folders; output marking: PNG text / XMP
-      (`AI-enhanced`, model, version, parameters, input sha256); optional visible watermark;
-      consider C2PA
+- [x] **PR 4.2** `feat(pipeline):` detect or take given landmarks → aligned LR crop → restore →
+      feathered-ellipse mask → inverse warp → paste-back on the bicubic background; optional
+      colour correction. End-to-end evaluation on synthetic CelebA scenes: aligned, LR-aligned,
+      pasted, detected (`scripts/evaluate_pipeline.py`)
+- [ ] **PR 4.3** `facehall enhance` for photos and folders; a face box as a fallback (given
+      landmarks work since PR 4.2); output marking: PNG text / XMP (`AI-enhanced`, model,
+      version, parameters, input sha256); optional visible watermark; consider C2PA
 - [ ] **PR 4.4** Video (per frame; check flicker between frames)
-- [ ] *(candidate)* Re-train the references with alignment jitter matched to the detector's
-      errors (D31)
+- [ ] *(candidate, Q15)* Fine-tune the references on LR crops made like the pipeline's
+      (degradation at the scene's resolution, alignment at LR resolution, PR 4.2) and with
+      alignment jitter matched to the detector's errors (D31)
 
 **Done when** an arbitrary photo with several faces is processed end to end.
 
@@ -1433,14 +1485,19 @@ D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in th
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
+| Q15 | The pipeline loses about 0.06 ID to the alignment at LR resolution (PR 4.2). Fine-tune the references on pipeline-like LR crops before PR 4.3 (`facehall enhance`, output marking), or after it? | before PR 4.3 | Before: after a change to the data pipeline it is a fine-tune (the reference recipes take 7–9 min per scale), and every later step (CLI, API, video) uses these models |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
 
 - The face detector's alignment error often exceeds the training jitter, mostly in scale: only
   31–63% of detected faces fall inside it on synthetic CelebA scenes (D31), and real photos are
-  harder. Restoration quality in the pipeline may therefore be below the evaluation numbers,
-  which use annotated landmarks. PR 4.2 measures this.
+  harder. On those scenes it costs little ID (PR 4.2: −0.002 to −0.012 against annotated
+  landmarks); real photos may cost more.
+- The evaluation protocols cut the LR crop on the template's pixel grid, which no real photo
+  gives. In the pipeline the alignment at LR resolution costs about 0.06 ID at both scales
+  (PR 4.2), so the `RESULTS.md` numbers overstate the product in ID. On clean and lightly
+  degraded faces, the pipeline's ID is below a plain bicubic upscale.
 - ×8 from 16 px means ≈4 px between the eyes: the output is mostly invented, and ID similarity
   will be low. This must be stated clearly (`CLAUDE.md` §11).
 - JPEG artifacts in the HR targets (§6.4) limit perceptual quality.
@@ -1515,6 +1572,8 @@ uv run python scripts/download_weights.py vgg19                      # perceptua
 uv run python scripts/download_weights.py facenet_vggface2           # identity loss (PR 3.3)
 uv run python scripts/download_weights.py yunet                      # face detector (D31)
 uv run python scripts/measure_detection.py     # detection and alignment on CelebA scenes, ~12 min
+uv run python scripts/evaluate_pipeline.py --ckpt runs/<id>/best.safetensors
+                                               # pipeline end to end on CelebA scenes, ~8 min
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/

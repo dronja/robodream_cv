@@ -18,8 +18,9 @@ and the degradation is one fixed light mix. YuNet was trained on WIDER FACE, so 
 real-world set cannot measure it either (D31).
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -30,6 +31,7 @@ from facehall.align.similarity import Points, angle_of, compose, invert, scale_o
 from facehall.align.template import CELEBA_TEMPLATE, symmetrize
 from facehall.align.warp import alignment_matrix
 from facehall.data.config import JitterConfig
+from facehall.data.manifest import read_manifest
 
 CROP = 128  # HR crop side; errors in pixels are HR pixels
 
@@ -59,6 +61,30 @@ class AlignmentError:
         )
 
 
+Row = tuple[Path, Points]  # image path and its five annotated landmarks
+
+
+def sample_rows(root: Path, split: str, count: int) -> list[Row]:
+    """``count`` rows of ``split``, evenly spaced in manifest order (deterministic)."""
+    table = read_manifest(root).select(["path", "split", "landmarks"]).to_pydict()
+    rows = [
+        (root / path, np.asarray(points, dtype=np.float64).reshape(5, 2))
+        for path, part, points in zip(
+            table["path"], table["split"], table["landmarks"], strict=True
+        )
+        if part == split
+    ]
+    step = max(1, len(rows) // count)
+    return rows[::step][:count]
+
+
+def load_rgb(path: Path) -> npt.NDArray[np.uint8]:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(path)
+    return np.ascontiguousarray(image[:, :, ::-1], dtype=np.uint8)
+
+
 def interocular(landmarks: npt.ArrayLike) -> float:
     points = np.asarray(landmarks, dtype=np.float64)
     return float(np.linalg.norm(points[0] - points[1]))
@@ -86,6 +112,15 @@ def make_scene(
     scale = np.array([size[0] / width, size[1] / height])
     points: Points = (truth + 0.5) * scale - 0.5 + np.array([pad_x, pad_y])
     return np.asarray(scene, dtype=np.uint8), points
+
+
+def make_scenes(
+    rows: Sequence[Row], eyes: float, degradation: SceneDegradation | None, seed: int
+) -> Iterator[tuple[npt.NDArray[np.uint8], Points]]:
+    """``make_scene`` for every row, with one seeded generator for the degradation."""
+    rng = np.random.default_rng(seed)
+    for path, points in rows:
+        yield make_scene(load_rgb(path), points, eyes, degradation=degradation, rng=rng)
 
 
 def degrade(

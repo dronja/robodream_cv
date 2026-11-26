@@ -247,6 +247,7 @@ TRAIN_CONFIGS = {
     "srresnet_id_x8": "realistic_x8",
     "srresnet_id_robust_x4": "realistic",
     "srresnet_id_robust_x8": "realistic_x8",
+    "srresnet_id_perc_x4": "realistic",
 }
 
 
@@ -256,7 +257,8 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
     monkeypatch.delenv("FACEHALL_WEIGHTS", raising=False)
     config = load_experiment(CONFIGS / f"{name}.yaml")
     recipe_name, rest = name.split("_x")
-    model = recipe_name.removesuffix("_gan").removesuffix("_id_robust").removesuffix("_id")
+    model = recipe_name.removesuffix("_gan").removesuffix("_id_robust").removesuffix("_id_perc")
+    model = model.removesuffix("_id")
     scale = rest.partition("_")[0]
     assert (config.name, config.model.name, config.scale) == (name, model, int(scale))
     expected = load_config(CONFIGS.parent / "degrade" / f"{degrade}.yaml", DegradeConfig)
@@ -274,11 +276,18 @@ def test_repository_train_configs(name: str, degrade: str, monkeypatch: pytest.M
         assert config.train.best_metric == "none"
         assert config.train.init.startswith(f"runs/srresnet_x{scale}-")
         assert (config.train.epochs, config.train.early_stopping) == (8, 0)
-    elif recipe_name in ("srresnet_id", "srresnet_id_robust"):  # identity loss (PR 3.3, 3.4)
+    elif recipe_name.startswith("srresnet_id"):  # identity loss (PR 3.3, 3.4, 3.6)
         assert recipe == ("l1", 1e-4, "cosine") and config.train.ema_decay == 0.999
         assert config.train.losses.pixel == 1.0 and config.train.losses.identity > 0
-        assert config.train.losses.perceptual == config.train.losses.adversarial == 0
-        robust = recipe_name == "srresnet_id_robust"
+        assert config.train.losses.adversarial == 0
+        if recipe_name == "srresnet_id_perc":
+            assert config.train.losses.perceptual > 0
+            assert config.train.perceptual == PerceptualConfig(
+                "/mnt/storage/AI/Face/weights/vgg19/vgg19-dcbb9e9d.pth", "conv5_4"
+            )
+        else:
+            assert config.train.losses.perceptual == 0
+        robust = recipe_name != "srresnet_id"
         assert config.train.identity == IdentityConfig(
             "/mnt/storage/AI/Face/weights/facenet_vggface2/20180402-114759-vggface2.pt",
             0.875,

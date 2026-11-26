@@ -79,8 +79,10 @@ As of 2026-11-26:
   - Merged: PR 3.4 (identity loss robust to pixel patterns; PR #21, `87c7d27`). Result: ×8
     passes the gate without the artifact and becomes the ×8 reference (D25); ×4 has no identity
     weight that meets the val rule (§9).
-  - In review: PR 3.5 (artifact check in the quality gate, D26; branch
-    `feat/gate-artifact-check`).
+  - Merged: PR 3.5 (artifact check in the quality gate, D26; PR #22, `ee7b576`).
+  - In review: PR 3.6 (×4 robust identity plus a perceptual term; branch
+    `feat/identity-perceptual-x4`). Result: passes the gate, but carries a fine periodic
+    pattern that KID does not see; whether it becomes the ×4 reference is open (Q11, §9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -98,6 +100,7 @@ robodream_cv/
 │                              # degrade/search/realistic.yaml (PR 2.6 search space),
 │                              # model/{bicubic,fnet,cnet,srresnet}.yaml,
 │                              # train/{fnet,cnet,srresnet,srresnet_gan,srresnet_id,srresnet_id_robust}_x{4,8}.yaml,
+│                              # train/srresnet_id_perc_x4.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
@@ -1057,7 +1060,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **×4:** the identity term raises ID on val by about 0.04 on light and 0.03 on medium
       without the artifact, but costs about 0.006 LPIPS on medium, which the gate does not
       allow. A small perceptual term may recover it (a proposal, not tested).
-- **Artifact check in the gate (PR 3.5, in review).** Decision, defaults and reasons in
+- **Artifact check in the gate (PR 3.5, done).** Decision, defaults and reasons in
   `DECISIONS.md` (D26).
   - **Rule:** on `wider_real_x{scale}` (`test`), the candidate's KID may exceed the
     reference's by at most 2 standard deviations of the reference's KID. One-sided: a lower KID
@@ -1068,6 +1071,46 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Earlier pairs, re-checked:** every gate verdict stays the same except the PR 3.3 ×8 model
     (KID 141.4 against the limit 106.8), which now fails automatically instead of by hand (D24).
     The PR 3.3 ×4 model fails the KID check too (124.6 against 96.5).
+- **Robust identity plus perceptual at ×4 (PR 3.6, in review).** Decision, selection rule and
+  reasons in `DECISIONS.md` (2026-11-26, "Robust identity loss with a perceptual term at ×4
+  (PR 3.6)").
+  - **Recipe:** `configs/train/srresnet_id_perc_x4.yaml`, the PR 3.4 ×4 recipe (L1, robust
+    identity 0.3) plus the VGG19 conv5_4 perceptual loss. No code change: the objective already
+    combines the terms.
+  - **Perceptual weights 0.01, 0.03 and 0.1,** set from the gradients on the start model: about
+    ⅓×, 1× and 3× the gradient of the identity term.
+  - **Selection on val** (rule set before the runs: the D23 checks against `srresnet_x4` on
+    light and medium, plus the D26 KID rule on WIDER `val`): only 0.01 qualifies. 0.03 and 0.1
+    lose more than 0.3 dB PSNR-Y. Every weight wins back far more LPIPS than the identity term
+    costs (−0.020 at 0.01).
+  - **Speed:** 649 img/s alone (batch 16, bf16), 498 s per 2-epoch run.
+  - **Run** on 2026-11-26 from commit `5cc7e53`: `srresnet_id_perc_x4-20261126-094522`.
+  - **Evaluation:** every input digest matched. Tables: [`RESULTS.md`](RESULTS.md). ×4, PSNR-Y /
+    LPIPS / ID sim:
+
+    | Protocol | `srresnet_x4` (reference) | + identity (PR 3.3) | + robust identity + perceptual |
+    |---|---|---|---|
+    | bicubic | 29.36 / 0.156 / 0.660 | 29.13 / 0.153 / 0.706 | 29.03 / 0.137 / 0.685 |
+    | light | 28.03 / 0.195 / 0.445 | 27.76 / 0.195 / 0.509 | 27.74 / 0.176 / 0.481 |
+    | medium | 26.49 / 0.241 / 0.292 | 26.22 / 0.244 / 0.340 | 26.23 / 0.222 / 0.316 |
+    | heavy | 24.81 / 0.285 / 0.187 | 24.57 / 0.293 / 0.214 | 24.56 / 0.267 / 0.199 |
+    | WIDER real: FID / KID ×10³ | 89.5 / 92.3 | 118.3 / 124.6 | 77.3 / 77.3 |
+
+  - **Gate (D23, D26):** passes all 15 checks. PSNR-Y on light is 0.01 dB above the limit.
+  - **A new periodic pattern:**
+    - **Seen:** a fine hatching on lips and skin, at 3–5× zoom (val and test grids, not
+      measured). It is much less visible than the PR 3.3 stripes.
+    - **Measured:** by the peak of the SR / HR power ratio at high frequencies (method in
+      `DECISIONS.md`). On val medium the peak is 26.9, against 0.17 for the L1 model and 9.3 for
+      the PR 3.3 grid. The peaks sit at periods of 2 and 4 px, which fits VGG19's pooling.
+    - **Clean models:** both current references are clean by this measure (0.17 at ×4, 0.11 at
+      ×8).
+    - **KID does not see it:** KID falls (92.3 → 77.3), so D26 passes the model.
+  - **Open:**
+    - whether the model becomes the ×4 reference (Q11);
+    - a spectral check in the gate (Q12);
+    - next step: the PR 3.4 defences (jitter and low-pass of the network input) for the
+      perceptual term too (a proposal, not tested).
 
 ## 10. Roadmap and progress
 
@@ -1154,6 +1197,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       becomes the ×8 reference (D25); ×4 has no qualifying weight (§9)
 - [x] **PR 3.5** Artifact check in the quality gate: real-photo KID at most the reference's plus
       2 standard deviations (D26)
+- [x] **PR 3.6** ×4: robust identity plus a VGG19 perceptual term (weight 0.01, chosen on
+      val). Passes the gate, but carries a fine periodic pattern that KID does not see (§9, Q11)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1206,6 +1251,8 @@ D26.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
+| Q11 | The PR 3.6 ×4 model (`srresnet_id_perc_x4-20261126-094522`) passes the gate (D23, D26) but carries a fine periodic pattern from the perceptual term (spectral peak ratio 26.9; §9). Make it the ×4 reference? | before merging PR 3.6 | No, as with D24: keep `srresnet_x4`; first make the perceptual term robust like the identity term |
+| Q12 | Add a spectral check to the gate: on light and medium, the peak SR / HR power ratio at ≥ 0.25 cycles/px at most 1 (clean models 0.08–0.33, pattern models 2.3–27 on val)? | before the next gate run | Yes; implement the measure in `facehall.eval` and set the limit on val |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -1269,6 +1316,7 @@ uv run facehall train --config configs/train/srresnet_x4.yaml       # SRResNet-v
 uv run facehall train --config configs/train/srresnet_gan_x4.yaml   # ESRGAN recipe (PR 3.2), ~30 min
 uv run facehall train --config configs/train/srresnet_id_x4.yaml    # identity loss (PR 3.3), ~7 min
 uv run facehall train --config configs/train/srresnet_id_robust_x8.yaml   # robust identity (PR 3.4), ~7 min
+uv run facehall train --config configs/train/srresnet_id_perc_x4.yaml     # + perceptual (PR 3.6), ~9 min
 uv run facehall train --resume runs/<id>                            # continue an interrupted run
 uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23, D26);
                                                # needs the light, medium and wider_real evals

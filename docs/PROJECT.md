@@ -1,7 +1,7 @@
 # facehall — project overview
 
 > **Single source of truth** for facts, current state, environment, data and the work plan.
-> Last updated: **2026-11-25**.
+> Last updated: **2026-11-26**.
 >
 > - Rules of work and product requirements: [`CLAUDE.md`](../CLAUDE.md) (it imports this file).
 > - Decisions with dates and reasons: [`DECISIONS.md`](DECISIONS.md).
@@ -40,7 +40,7 @@
 
 ## 2. Status snapshot
 
-As of 2026-11-25:
+As of 2026-11-26:
 
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
@@ -76,9 +76,11 @@ As of 2026-11-25:
   - Merged: PR 3.3 (identity loss on facenet embeddings; PR #20, `67f47d7`). Result: ID
     similarity rises a lot, but the outputs carry a periodic grid artifact; the ×8 model is not
     the reference (D24, §9).
-  - In review: PR 3.4 (identity loss robust to pixel patterns; branch
-    `feat/robust-identity-loss`). Result: ×8 passes the gate without the artifact and becomes
-    the ×8 reference (D25); ×4 has no identity weight that meets the val rule (§9).
+  - Merged: PR 3.4 (identity loss robust to pixel patterns; PR #21, `87c7d27`). Result: ×8
+    passes the gate without the artifact and becomes the ×8 reference (D25); ×4 has no identity
+    weight that meets the val rule (§9).
+  - In review: PR 3.5 (artifact check in the quality gate, D26; branch
+    `feat/gate-artifact-check`).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -119,7 +121,7 @@ robodream_cv/
 │   ├── eval/                  # metrics.py, config.py (EvalConfig), runner.py, report.py, cli.py,
 │   │                          # noref.py (LR-PSNR, FID, KID), realworld.py (no-reference runner),
 │   │                          # match.py (degradation tuning against real LR crops),
-│   │                          # gate.py (quality gate, D23)
+│   │                          # gate.py (quality gate, D23, D26)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
@@ -357,6 +359,7 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D23 | Quality gate: on light and medium, lower LPIPS and higher ID sim than the reference, PSNR-Y −0.3 dB at most, subgroup ID sim −0.01 at most (`configs/gate.yaml`) |
 | D24 | The PR 3.3 ×8 identity model is not the ×8 reference despite passing the gate: its outputs carry a grid artifact |
 | D25 | The PR 3.4 ×8 model (`srresnet_id_robust_x8-20261125-174436`) is the ×8 reference; ×4 keeps `srresnet_x4-20261125-093232` |
+| D26 | Gate artifact check: on the WIDER test faces, KID at most the reference's plus 2 standard deviations (one-sided) |
 
 ## 8. Licenses — status
 
@@ -1005,7 +1008,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **Consequences:**
       - the gate needs a check that sees such artifacts;
       - next step: make the identity term robust (PR 3.4, below).
-- **Robust identity loss (PR 3.4, in review).** Decision, selection rule and reasons in
+- **Robust identity loss (PR 3.4, done).** Decision, selection rule and reasons in
   `DECISIONS.md` (2026-11-25, D24 and "Identity loss robust to pixel patterns (PR 3.4)").
   - **Code** (`facehall.losses.identity`):
     - a random shift (0.05 of the square side), rotation (5°) and scale (×1.1) of the
@@ -1054,6 +1057,17 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **×4:** the identity term raises ID on val by about 0.04 on light and 0.03 on medium
       without the artifact, but costs about 0.006 LPIPS on medium, which the gate does not
       allow. A small perceptual term may recover it (a proposal, not tested).
+- **Artifact check in the gate (PR 3.5, in review).** Decision, defaults and reasons in
+  `DECISIONS.md` (D26).
+  - **Rule:** on `wider_real_x{scale}` (`test`), the candidate's KID may exceed the
+    reference's by at most 2 standard deviations of the reference's KID. One-sided: a lower KID
+    is no gain, because KID also rewards invented faces (PR 2.5).
+  - **Code:** `realworld` and `kid_stds` in `configs/gate.yaml`; `facehall.eval.gate.
+    artifact_check`. The gate now needs the real-world evaluation of the candidate.
+  - **Current limits** (KID ×10³): ×4 96.46, ×8 102.05.
+  - **Earlier pairs, re-checked:** every gate verdict stays the same except the PR 3.3 ×8 model
+    (KID 141.4 against the limit 106.8), which now fails automatically instead of by hand (D24).
+    The PR 3.3 ×4 model fails the KID check too (124.6 against 96.5).
 
 ## 10. Roadmap and progress
 
@@ -1138,6 +1152,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 3.4** Robust identity loss: jitter and low-pass of the recognition input; artifact
       check (WIDER val KID) in the val selection. ×8 passes the gate without the artifact and
       becomes the ×8 reference (D25); ×4 has no qualifying weight (§9)
+- [x] **PR 3.5** Artifact check in the quality gate: real-photo KID at most the reference's plus
+      2 standard deviations (D26)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss
@@ -1185,11 +1201,11 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
 with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
-by D24, Q9 (the PR 3.4 ×8 model as reference) by D25.
+by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
+D26.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q10 | Add an artifact check to the gate, like the WIDER val KID rule of the PR 3.4 selection (on the test faces: KID at most the reference's plus two standard deviations)? | before the next gate run | Yes |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -1254,7 +1270,8 @@ uv run facehall train --config configs/train/srresnet_gan_x4.yaml   # ESRGAN rec
 uv run facehall train --config configs/train/srresnet_id_x4.yaml    # identity loss (PR 3.3), ~7 min
 uv run facehall train --config configs/train/srresnet_id_robust_x8.yaml   # robust identity (PR 3.4), ~7 min
 uv run facehall train --resume runs/<id>                            # continue an interrupted run
-uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23)
+uv run python scripts/quality_gate.py --scale 4 --candidate <label> # quality gate (D23, D26);
+                                               # needs the light, medium and wider_real evals
 uv run facehall train --config configs/train/fnet_x4.yaml           # full run (confirm first)
 uv run facehall train --config configs/train/fnet_x4.yaml --set train.batch_size=32 --set seed=1
 FACEHALL_DATA=/other/root uv run facehall train --config ...        # data root on another machine

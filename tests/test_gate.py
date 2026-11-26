@@ -41,6 +41,13 @@ def write(
         path.write_text(json.dumps({"inputs_sha256": "abc", "subsets": subsets}))
 
 
+def write_real(root: Path, label: str, *, kid: float, std: float, digest: str = "real") -> None:
+    path = root / "real_x4" / "test" / label / "metrics.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subsets = {"all": {"kid": {"mean": kid, "std": std}, "fid": 100.0}}
+    path.write_text(json.dumps({"inputs_sha256": digest, "subsets": subsets}))
+
+
 def failed(checks: list[Any]) -> set[str]:
     return {c.name for c in checks if not c.passed}
 
@@ -62,6 +69,40 @@ def test_gate(tmp_path: Path) -> None:
     assert failed(check(config(), tmp_path, 4, "same_id")) == {"identity"}
 
 
+def test_gate_artifact_check(tmp_path: Path) -> None:
+    gate = config()
+    gate.realworld = "real"
+    write(tmp_path, "ref", psnr=25.0, lpips=0.30, ids=0.40)
+    for label in ("close", "lower", "far"):
+        write(tmp_path, label, psnr=25.0, lpips=0.25, ids=0.45)
+    write_real(tmp_path, "ref", kid=0.095, std=0.002)
+    write_real(tmp_path, "close", kid=0.0989, std=0.010)  # limit: 0.095 + 2 * 0.002
+    write_real(tmp_path, "lower", kid=0.050, std=0.002)
+    write_real(tmp_path, "far", kid=0.0991, std=0.002)
+
+    checks = check(gate, tmp_path, 4, "close")
+    assert len(checks) == 2 * (3 + len(GROUPS)) + 1 and not failed(checks)
+    kid = checks[-1]
+    assert (kid.protocol, kid.name) == ("real_x4", "kid ×10³")
+    assert kid.candidate == pytest.approx(98.9) and kid.reference == pytest.approx(95.0)
+    assert kid.limit == "<= reference + 2 std (99.00)"
+    assert not failed(check(gate, tmp_path, 4, "lower"))  # one-sided: lower KID is no gain
+    assert failed(check(gate, tmp_path, 4, "far")) == {"kid ×10³"}
+    gate.kid_stds = 0.0
+    assert failed(check(gate, tmp_path, 4, "close")) == {"kid ×10³"}
+
+    gate.kid_stds = -1.0
+    with pytest.raises(ValueError, match="must not be negative"):
+        check(gate, tmp_path, 4, "close")
+    gate.kid_stds = 2.0
+    write_real(tmp_path, "far", kid=0.090, std=0.002, digest="other")
+    with pytest.raises(ValueError, match="other inputs"):
+        check(gate, tmp_path, 4, "far")
+    write(tmp_path, "unscored", psnr=25.0, lpips=0.25, ids=0.45)
+    with pytest.raises(FileNotFoundError, match="evaluate unscored on real_x4"):
+        check(gate, tmp_path, 4, "unscored")
+
+
 def test_gate_errors(tmp_path: Path) -> None:
     write(tmp_path, "ref", psnr=25.0, lpips=0.30, ids=0.40)
     with pytest.raises(FileNotFoundError, match="evaluate missing"):
@@ -81,7 +122,8 @@ def test_repository_gate_config() -> None:
     assert gate.protocols == ["celeba128_light", "celeba128_medium"]
     assert (gate.psnr_drop, gate.subgroup_id_drop) == (0.3, 0.01)
     assert set(gate.references) == {4, 8}
-    for protocol in gate.protocols:
+    assert (gate.realworld, gate.kid_stds) == ("wider_real", 2.0)
+    for protocol in [*gate.protocols, gate.realworld]:
         for scale in gate.references:
             assert (CONFIGS / "eval" / f"{protocol}_x{scale}.yaml").is_file()
 

@@ -8,8 +8,14 @@ synthetic protocols in ``configs/gate.yaml``, from their ``metrics.json`` files
 - lose at most ``psnr_drop`` dB of PSNR-Y;
 - lose at most ``subgroup_id_drop`` of ID similarity in every subgroup of ``subgroups``.
 
-Both models must have been scored on the same inputs (``inputs_sha256``). The real-world set is
-not gated: its FID and KID reward invented faces (``docs/DECISIONS.md``, PR 2.5).
+Artifact check (D26): on the real-world protocol ``realworld`` (no reference images), the
+candidate's KID against real HR faces may exceed the reference's by at most ``kid_stds``
+standard deviations of the reference's KID. The check is one-sided: a lower KID is not a gain,
+because KID also rewards invented faces (``docs/DECISIONS.md``, PR 2.5). It catches outputs
+that move away from real photos, such as the stripe pattern of PR 3.3, which the synthetic
+metrics barely see.
+
+Both models must have been scored on the same inputs (``inputs_sha256``).
 """
 
 import json
@@ -28,6 +34,8 @@ class GateConfig:
     subgroup_id_drop: float = MISSING
     subgroups: list[str] = field(default_factory=list)  # metrics.json subset names
     references: dict[int, str] = field(default_factory=dict)  # scale -> reference label
+    realworld: str = ""  # real-world protocol without "_x<scale>"; empty: no artifact check
+    kid_stds: float = 2.0  # KID margin in standard deviations of the reference's KID
 
 
 @dataclass(frozen=True)
@@ -59,15 +67,39 @@ def check(
     reference = reference or config.references.get(scale)
     if not reference:
         raise ValueError(f"no reference model for x{scale} in the gate config")
-    checks = []
-    for base in config.protocols:
+    if config.kid_stds < 0:
+        raise ValueError("kid_stds must not be negative")
+
+    def pair(base: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
         protocol = f"{base}_x{scale}"
         new = load_metrics(root, protocol, config.split, candidate)
         old = load_metrics(root, protocol, config.split, reference)
         if new.get("inputs_sha256") != old.get("inputs_sha256"):
             raise ValueError(f"{protocol}: {candidate} and {reference} were scored on other inputs")
-        checks += protocol_checks(config, protocol, new, old)
+        return protocol, new, old
+
+    checks = []
+    for base in config.protocols:
+        checks += protocol_checks(config, *pair(base))
+    if config.realworld:
+        checks.append(artifact_check(config, *pair(config.realworld)))
     return checks
+
+
+def artifact_check(
+    config: GateConfig, protocol: str, new: dict[str, Any], old: dict[str, Any]
+) -> Check:
+    """KID ×10³ (all faces) at most the reference's plus ``kid_stds`` of its standard deviations."""
+    kid, ref = new["subsets"]["all"]["kid"], old["subsets"]["all"]["kid"]
+    limit = 1e3 * (ref["mean"] + config.kid_stds * ref["std"])
+    return Check(
+        protocol,
+        "kid ×10³",
+        1e3 * kid["mean"],
+        1e3 * ref["mean"],
+        f"<= reference + {config.kid_stds:g} std ({limit:.2f})",
+        1e3 * kid["mean"] <= limit,
+    )
 
 
 def protocol_checks(

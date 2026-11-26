@@ -13,6 +13,7 @@ person first). YuNet's points follow its own annotation convention, not CelebA's
 ``YUNET_TEMPLATES``, not with ``CELEBA_TEMPLATE``.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,3 +93,14 @@ class YuNet:
                 )
             )
         return faces
+
+
+def box_landmarks(box: Sequence[float], normalized: npt.ArrayLike) -> Points:
+    """Five landmarks for a face box ``(left, top, width, height)`` (input pixels, box edges),
+    from ``normalized`` landmark positions in the box (``YUNET_BOX_LANDMARKS``). A fallback
+    for a face the detector does not find: the face's rotation and proportions are unknown."""
+    left, top, width, height = (float(v) for v in box)
+    if width <= 0 or height <= 0:
+        raise ValueError(f"face box must have a positive size, got {tuple(box)}")
+    points: Points = np.array([left, top]) + np.asarray(normalized) * np.array([width, height])
+    return points - 0.5

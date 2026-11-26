@@ -24,15 +24,16 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from facehall.align.detect import YuNet
+from facehall.align.detect import YuNet, box_landmarks
 from facehall.align.similarity import Points
-from facehall.align.template import CELEBA_TEMPLATE, YUNET_TEMPLATES
+from facehall.align.template import CELEBA_TEMPLATE, YUNET_BOX_LANDMARKS, YUNET_TEMPLATES
 from facehall.config import load_config
 from facehall.data.config import DataConfig, JitterConfig
 from facehall.eval.detection import (
     Row,
     SceneDegradation,
     alignment_error,
+    fit_box_landmarks,
     fit_template,
     landmark_error,
     make_scenes,
@@ -51,7 +52,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--data", type=Path, default=Path("configs/data/celeba_128.yaml"))
     parser.add_argument("--weights", type=Path, default=None, help="default: $FACEHALL_WEIGHTS")
     parser.add_argument(
-        "--parts", nargs="+", choices=("grid", "template"), default=["grid", "template"]
+        "--parts", nargs="+", choices=("grid", "template", "box"), default=["grid", "template"]
     )
     parser.add_argument("--grid-samples", type=int, default=300, help="val scenes per grid cell")
     parser.add_argument("--eyes", type=float, nargs="+", default=[4, 6, 8, 12])
@@ -146,6 +147,53 @@ def template(
     return results
 
 
+def box(
+    args: argparse.Namespace, root: Path, weights: Path, jitter: JitterConfig
+) -> list[dict[str, Any]]:
+    """Landmarks from a face box (the fallback for a face the detector misses): fitted on train
+    scenes from YuNet's own boxes; on val, the alignment error of landmarks from the detected
+    box against that of the detected landmarks."""
+    train, val = sample_rows(root, "train", args.fit), sample_rows(root, "val", args.val)
+    results = []
+    for scale in args.scales:
+        eyes = HR_EYES / scale
+        detector = YuNet(weights, upsample=scale, score_threshold=args.score)
+        faces = []
+        for scene, truth in scenes(train, eyes, False, args.seed):
+            face = match(detector.detect(scene), truth)
+            if face is not None:
+                faces.append(face)
+        fitted = fit_box_landmarks(faces)
+        record: dict[str, Any] = {
+            "scale": scale,
+            "fit_detected": len(faces),
+            "box_landmarks": np.round(fitted, 5).tolist(),
+            "box_landmarks_in_code": YUNET_BOX_LANDMARKS.tolist(),
+            "val": {},
+        }
+        template = YUNET_TEMPLATES[scale]
+        for degraded in (False, True):
+            found = []
+            for scene, truth in scenes(val, eyes, degraded, args.seed + 1):
+                face = match(detector.detect(scene), truth)
+                if face is not None:
+                    found.append((face, truth))
+            key = "degraded" if degraded else "clean"
+            record["val"][key] = {
+                "detected": len(found) / len(val),
+                "landmarks": summarize(
+                    [alignment_error(f.landmarks, t, template) for f, t in found], jitter
+                ),
+                "box": summarize(
+                    [alignment_error(box_landmarks(f.box, fitted), t, template) for f, t in found],
+                    jitter,
+                ),
+            }
+            logging.info("box x%d %s: %s", scale, key, record["val"][key])
+        results.append(record)
+    return results
+
+
 def render(results: dict[str, Any]) -> str:
     lines = []
     if "grid" in results:
@@ -181,6 +229,24 @@ def render(results: dict[str, Any]) -> str:
                         f"{s['scale_p50']:.3f} / {s['scale_p95']:.3f} | {s['within_jitter']:.3f} |"
                     )
             lines.append(f"\n×{r['scale']} fitted template: {r['template']}")
+    if "box" in results:
+        lines += [
+            "",
+            "| Scale | Input | Landmarks from | Shift p50 / p95 | Rotation p50 / p95 | "
+            "Scale p50 / p95 | Within jitter |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for r in results["box"]:
+            for key, v in r["val"].items():
+                for name in ("landmarks", "box"):
+                    s = v[name]
+                    lines.append(
+                        f"| ×{r['scale']} | {key} | {name} | "
+                        f"{s['shift_p50']:.3f} / {s['shift_p95']:.3f} | "
+                        f"{s['rotation_p50']:.2f} / {s['rotation_p95']:.2f} | "
+                        f"{s['scale_p50']:.3f} / {s['scale_p95']:.3f} | {s['within_jitter']:.3f} |"
+                    )
+            lines.append(f"\n×{r['scale']} box landmarks: {r['box_landmarks']}")
     return "\n".join(lines) + "\n"
 
 
@@ -203,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         results["grid"] = grid(args, root, weights)
     if "template" in args.parts:
         results["template"] = template(args, root, weights, data.jitter)
+    if "box" in args.parts:
+        results["box"] = box(args, root, weights, data.jitter)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     text = render(results)

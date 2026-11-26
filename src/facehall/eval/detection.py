@@ -166,6 +166,17 @@ def fit_template(pairs: Sequence[tuple[npt.ArrayLike, npt.ArrayLike]]) -> Points
     return symmetrize(np.mean(normalized, axis=0))
 
 
+def fit_box_landmarks(faces: Sequence[Face]) -> Points:
+    """Mean landmarks of detected faces in box-normalized coordinates (``box_landmarks``):
+    (0, 0) is the box's top-left corner, (1, 1) its bottom-right corner; mirror-averaged."""
+    if not faces:
+        raise ValueError("no faces to fit box landmarks on")
+    normalized = [
+        (np.asarray(f.landmarks) + 0.5 - np.array(f.box[:2])) / np.array(f.box[2:]) for f in faces
+    ]
+    return symmetrize(np.mean(normalized, axis=0))
+
+
 def alignment_error(
     detected: npt.ArrayLike, truth: npt.ArrayLike, template: npt.ArrayLike
 ) -> AlignmentError:

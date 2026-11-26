@@ -70,6 +70,14 @@ YUNET_TEMPLATES: dict[int, Points] = {
 }
 
 
+# Mean YuNet landmarks in its face box, normalized to the box ((0, 0) its top-left corner, (1, 1)
+# its bottom-right corner): the fallback for a face given as a box (facehall.align.box_landmarks).
+# Placeholder until fitted by scripts/measure_detection.py --parts box.
+YUNET_BOX_LANDMARKS: Points = np.array(
+    [[0.3, 0.4], [0.7, 0.4], [0.5, 0.6], [0.35, 0.75], [0.65, 0.75]]
+)
+
+
 def template_from_landmarks(landmarks: npt.ArrayLike) -> Points:
     """Normalized template from one set of 5 landmarks (typically a dataset mean).
 

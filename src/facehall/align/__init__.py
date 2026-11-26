@@ -1,6 +1,6 @@
 """Face alignment: detection, canonical templates, similarity transforms, warp and inverse warp."""
 
-from facehall.align.detect import Face, YuNet
+from facehall.align.detect import Face, YuNet, box_landmarks
 from facehall.align.similarity import (
     angle_of,
     compose,
@@ -13,6 +13,7 @@ from facehall.align.similarity import (
 from facehall.align.template import (
     CELEBA_TEMPLATE,
     LANDMARK_NAMES,
+    YUNET_BOX_LANDMARKS,
     YUNET_TEMPLATES,
     mirror,
     symmetrize,
@@ -37,6 +38,7 @@ __all__ = [
     "INTERPOLATIONS",
     "CELEBA_TEMPLATE",
     "LANDMARK_NAMES",
+    "YUNET_BOX_LANDMARKS",
     "YUNET_TEMPLATES",
     "Face",
     "Jitter",
@@ -44,6 +46,7 @@ __all__ = [
     "alignment_matrices",
     "alignment_matrix",
     "angle_of",
+    "box_landmarks",
     "compose",
     "hflip_matrix",
     "invert",

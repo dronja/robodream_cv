@@ -1257,3 +1257,112 @@ scale. "Within jitter" is the fraction inside the training jitter on all three a
   are flat, and the degradation is light.
 - **No real-photo measurement:** YuNet was trained on WIDER FACE, so the WIDER real-world set
   (training photos) cannot measure it.
+
+### Inference pipeline and its end-to-end evaluation (PR 4.2)
+**Decision** (defaults taken without a separate question, 2026-11-26): `facehall.pipeline`
+follows `CLAUDE.md` §6.
+- **Steps:**
+  - the background is the bicubic upscale of the photo by the model scale;
+  - faces come from YuNet (D31) or from landmarks given by the caller;
+  - each face gets an aligned LR crop of the model input size, and the crops are restored in
+    batches;
+  - each restored crop is blended into the background through a feathered ellipse, by the
+    inverse warp, in a window around the face. Faces are pasted in detection order.
+- **Templates:** detected points align to `YUNET_TEMPLATES[scale]` (D31), given points to
+  `CELEBA_TEMPLATE`, because given landmarks follow the CelebA convention.
+- **LR crop:** a face at or below the crop scale is warped directly (bicubic). A larger face is
+  warped to an integer multiple k of the crop size and averaged over k × k blocks.
+  - The first version used `ceil(size / scale)` px and a non-integer area resize, so a face just
+    above the crop scale went through a 33 → 32 px resize that blurred it. Found and fixed in
+    this PR (`11c5f09`).
+- **Face-size limit** `max_downscale: 2.0`: a face more than twice the model input size is left
+  to the background. Its own pixels hold detail that the model would have to invent from the
+  downscaled crop. Initial value, not measured.
+- **Mask:** an ellipse centred at (0.5, 0.55) of the crop, radii 0.42 × 0.44, with a smoothstep
+  fade over the outer quarter of the radius.
+  - It covers the forehead to the chin; hair, ears and background stay bicubic.
+  - Initial values, not tuned: checked visually on 6 scenes per scale (no seams).
+- **Colour correction** (mean shift of the restored face to the bicubic LR upscale, inside the
+  mask): optional, off by default. It has no measurable effect (below).
+- **Not in this PR:**
+  - the face-box fallback moves to PR 4.3, where the CLI takes user input. A box gives no
+    landmarks, so it needs the detector restricted to the box or mean landmarks in it;
+  - a background model (optional in `CLAUDE.md` §6).
+
+**End-to-end evaluation** (`scripts/evaluate_pipeline.py` from commit `6320817`, in a separate
+worktree; 1,000 CelebA val scenes per scale and input; local `outputs/pipeline_eval/`):
+- **Scenes:** built as in D31, with 32 / scale px between the eyes. Degraded scenes add Gaussian
+  blur σ 0.5 px, noise σ 3 levels and JPEG quality 70.
+- **Variants** (`facehall.eval.endtoend`), each one step closer to the product:
+  - `bicubic`: the background alone;
+  - `aligned`: the model on an LR crop on the template's pixel grid, the area downscale of the HR
+    crop, as in training;
+  - `direct`: the model on the LR crop that the annotated landmarks cut from the scene. That
+    crop is resampled at LR resolution;
+  - `annotated`: the full pipeline with the annotated landmarks;
+  - `detected`: the full pipeline with YuNet.
+- **Scoring:** against the dataset's HR crop. The frames are scored on the crop that the
+  annotated landmarks align in them.
+
+PSNR-Y / SSIM-Y / LPIPS / ID similarity:
+
+| Variant | ×4 clean | ×4 degraded | ×8 clean | ×8 degraded |
+|---|---|---|---|---|
+| bicubic | 27.14 / 0.796 / 0.326 / 0.712 | 25.11 / 0.699 / 0.505 / 0.438 | 23.47 / 0.638 / 0.544 / 0.340 | 21.87 / 0.572 / 0.684 / 0.129 |
+| aligned | 28.80 / 0.842 / 0.144 / 0.675 | 26.65 / 0.760 / 0.220 / 0.363 | 25.09 / 0.716 / 0.268 / 0.317 | 23.40 / 0.651 / 0.333 / 0.143 |
+| direct | 27.79 / 0.817 / 0.163 / 0.617 | 26.38 / 0.758 / 0.221 / 0.375 | 24.12 / 0.689 / 0.284 / 0.262 | 22.98 / 0.645 / 0.331 / 0.146 |
+| annotated | 27.64 / 0.814 / 0.217 / 0.618 | 25.93 / 0.740 / 0.289 / 0.371 | 24.00 / 0.675 / 0.343 / 0.263 | 22.66 / 0.620 / 0.397 / 0.140 |
+| detected | 27.62 / 0.813 / 0.217 / 0.613 | 25.90 / 0.739 / 0.292 / 0.367 | 23.99 / 0.674 / 0.347 / 0.261 | 22.50 / 0.610 / 0.421 / 0.128 |
+
+Models: ×4 `srresnet_id_perc_robust_x4-20261126-121325`, ×8
+`srresnet_id_robust_x8-20261125-174436` (the references). The face was detected (landmark NME
+below 0.5, the D31 rule) in 0.996 / 0.990 of the ×4 scenes and 0.987 / 0.925 of the ×8 scenes
+(clean / degraded). D31 found 0.943 on ×8 degraded scenes: that was another sample of 800 val
+rows.
+
+Restored: 0.990 / 0.985 (×4) and 0.982 / 0.923 (×8). The other detected faces had landmarks
+that implied a face 2.1–3.0 times the model input, so the face-size limit left them to the
+background. In the six ×4 clean cases the mouth points sat far below the eyes. So the limit also
+filters implausible landmark sets.
+
+**Observations:**
+- **Aligning at LR resolution is the largest cost.** On clean scenes `aligned` → `direct`
+  loses 0.058 ID at ×4 (0.675 → 0.617) and 0.055 at ×8, and about 1 dB PSNR-Y.
+  - **Not the interpolation:** a one-off check on 250 val scenes compared bicubic, Lanczos and
+    bilinear LR warps and a ×4 supersampled warp. They differ by at most 0.011 ID.
+  - **Not avoidable by skipping the resampling:** an integer-shift crop without resampling
+    helps on clean scenes (+0.016 ID at ×4, +0.029 at ×8) but loses on degraded ones (−0.026,
+    −0.009).
+  - **Part of the information is lost:** plain bicubic upsampling of the aligned LR crop loses
+    too (×4 clean 0.695 → 0.657). The rest of the loss is the mismatch with training: every
+    real photo needs a subpixel resampling of an 8 or 4 px face, and the models never saw one.
+- **On degraded scenes `aligned` and `direct` are not comparable:** the degradation lands on
+  another grid (the crop against the scene), and the LR warp smooths noise and JPEG blocks;
+  `direct` is even slightly higher in ID.
+- **The paste-back costs almost no identity:** ID within 0.006 of `direct`. It costs 0.12–0.45 dB
+  PSNR-Y and 0.05–0.07 LPIPS, because the mask leaves hair and background to the bicubic
+  background, and PSNR and LPIPS score the whole crop.
+- **Detection costs little where it finds the face:** ID −0.002 to −0.005 on clean scenes and
+  ×4 degraded ones. On ×8 degraded scenes it costs −0.012 ID and +0.024 LPIPS: 7.5% of the faces
+  are missed and stay bicubic.
+- **Against plain bicubic upscaling of the photo:**
+  - the pipeline is better in PSNR-Y, SSIM-Y and LPIPS at both scales (×4 clean LPIPS
+    0.326 → 0.217);
+  - in ID it is lower everywhere except ×8 degraded with annotated landmarks: ×4 0.712 → 0.613
+    clean and 0.438 → 0.367 degraded, ×8 clean 0.340 → 0.261;
+  - the `bicubic` variant upsamples the scene on its own grid, so it avoids the LR resampling;
+  - in the gate protocols the ×4 reference is already below bicubic in ID on clean and light
+    inputs (0.682 / 0.477 against 0.711 / 0.547). The pipeline widens that gap.
+- **Colour correction:** every metric within 0.0004 of the run without it (×4, commit
+  `11c5f09`). The model keeps the mean colour already.
+- **Grids** (6 scenes per scale, local, not measured):
+  - no visible seams;
+  - the restored face is visibly sharper than the bicubic hair around it;
+  - at ×8, faces get younger and some look like another person, as in PR 2.5.
+
+**Consequences:**
+- The protocol numbers (`RESULTS.md`) overstate the pipeline on real photos, mostly in ID,
+  because the protocols cut the LR crop on the template's grid.
+- **Candidate remedy:** fine-tune the references on LR crops made like the pipeline's:
+  degradation at the scene's resolution, then alignment at LR resolution. Together with the
+  detector-matched jitter (D31). Whether it comes before PR 4.3 is Q15.

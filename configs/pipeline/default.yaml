@@ -1,16 +1,25 @@
-# Inference pipeline (Phase 4, PR 4.2; facehall.pipeline.PipelineConfig): face detection (D31),
-# the paste-back mask and the face-size limit. The model and its scale come from the checkpoint.
+# Inference pipeline (Phase 4, PR 4.2 and 4.4; facehall.pipeline.PipelineConfig): face detection
+# (D31), the paste-back mask, the face-size limit and the restoration models of
+# `facehall enhance --scale`. With --ckpt, the model and its scale come from the checkpoint.
 detector:
   weights: ""                # empty: $FACEHALL_WEIGHTS/yunet/face_detection_yunet_2026may.onnx
   score_threshold: 0.6       # D31
+  box_score_threshold: 0.3   # inside a face box given by the user (--box)
   nms_threshold: 0.3
   top_k: 5000
+  max_pixels: 16000000       # upscaled detector input per tile; OpenCV crashed at 49 MP
+  tile_overlap: 128          # input pixels shared by neighbouring tiles
 mask:                        # feathered ellipse in normalized crop coordinates; initial values
   center_x: 0.5
   center_y: 0.55             # between the eyes (0.47) and the mouth (0.74) of the template
   radius_x: 0.42
   radius_y: 0.44             # reaches 0.99 of the crop height at the chin
   feather: 0.25              # outer quarter of the elliptic radius fades out (smoothstep)
+models:                      # the references (configs/gate.yaml); FACEHALL_RUNS: their folder
+  x4: ${oc.env:FACEHALL_RUNS,runs}/srresnet_id_perc_robust_x4-20261126-121325/best.safetensors  # D29
+  x8: ${oc.env:FACEHALL_RUNS,runs}/srresnet_id_robust_x8-20261125-174436/best.safetensors  # D25
 max_downscale: 2.0           # faces more than 2x the model input size are left to the background
+max_upscale: 2.0             # so are faces more than 2x smaller (mostly false detections)
+max_output_pixels: 200000000 # larger outputs are refused (3 bytes per pixel)
 color_correction: false
 batch_size: 32

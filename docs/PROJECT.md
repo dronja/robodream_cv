@@ -102,10 +102,13 @@ As of 2026-11-26:
     PSNR, SSIM and LPIPS. It loses about 0.06 ID to the alignment at LR resolution, which the
     protocols do not see, and stays below bicubic in ID except at ×8 on degraded faces (§9).
   - Decided: fine-tune on pipeline-like LR crops before the CLI (D32).
-  - In review: PR 4.3 (LR crops made like the pipeline's, `data.scene`; branch
-    `feat/pipeline-crops`). Result: no fine-tuned variant beats the references end to end on
-    val; the references stay. The LR-alignment cost is mostly information lost in the
-    resampling, not a mismatch with training (§9).
+  - Merged: PR 4.3 (LR crops made like the pipeline's, `data.scene`; PR #30, `09a1b89`).
+    Result: no fine-tuned variant beats the references end to end on val; the references stay.
+    The LR-alignment cost is mostly information lost in the resampling, not a mismatch with
+    training (§9).
+  - In review: PR 4.4 (`facehall enhance` for photos and folders, face boxes, tiled detection,
+    output marking; branch `feat/enhance-cli`). An arbitrary photo with several faces is now
+    processed end to end from the command line, with marked outputs (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -130,12 +133,13 @@ robodream_cv/
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
 │                              # eval/wider_real_x{4,8}.yaml (real-world, no reference),
-│                              # pipeline/default.yaml (inference pipeline, PR 4.2)
+│                              # pipeline/default.yaml (inference pipeline and the reference
+│                              # models of `facehall enhance`, PR 4.2, 4.4)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train
-│                              # [--resume], eval)
+│                              # [--resume], eval, enhance)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
@@ -156,10 +160,13 @@ robodream_cv/
 │   │                          # detection.py (detection and alignment measures, D31),
 │   │                          # endtoend.py (pipeline on synthetic scenes, PR 4.2)
 │   ├── pipeline.py            # end-to-end inference: detect, align, restore, paste back (PR 4.2)
+│   ├── enhance.py             # `facehall enhance`: files and folders, outputs (PR 4.4)
+│   ├── marking.py             # output marks: PNG text, XMP, EXIF, visible mark (PR 4.4)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py,
 │                              # warp.py (warp, inverse warp, resample_crop),
-│                              # detect.py (YuNet face detector, D31)
+│                              # detect.py (YuNet face detector, D31; tiles and
+│                              # box landmarks, PR 4.4)
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # prepare_wider.py (WIDER FACE → real-world LR crops),
 │                              # license_report.py (license table from package metadata),
@@ -1337,7 +1344,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **Grids** (local): no seams. At ×8, faces get younger and some look like another person.
   - **Consequence:** the protocol numbers overstate the pipeline in ID. Fine-tuning on
     pipeline-like LR crops was tried in PR 4.3 and does not help.
-- **LR crops made like the pipeline's (PR 4.3, in review).** Decision, data, selection rule,
+- **LR crops made like the pipeline's (PR 4.3, done).** Decision, data, selection rule,
   tables and reasons in `DECISIONS.md` (D32, "LR crops made like the pipeline's (PR 4.3)").
   - **Code:**
     - `facehall.align.resample_crop`: the pipeline's LR crop, now shared;
@@ -1366,6 +1373,37 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - detector-matched jitter helps only on ×8 degraded scenes (+0.004 ID).
   - **Result:** the references stay (D25, D29). Not tested: training the L1 start from scratch
     on scene crops.
+- **`facehall enhance` and output marking (PR 4.4, in review).** Interface, measurements and
+  reasons in `DECISIONS.md` ("`facehall enhance` and output marking (PR 4.4)").
+  - **Command:** `facehall enhance INPUT… -o OUTPUT [--scale 4|8 | --ckpt CKPT]`
+    (`facehall.enhance`):
+    - inputs are files or folders; the output is a file or a folder that mirrors them;
+    - PNG by default (JPEG, WebP);
+    - no overwriting without `--overwrite`;
+    - a failed image does not stop the others;
+    - `--landmarks` or `--box` for the faces of one image; `--watermark`.
+  - **Models:** `--scale` takes the references from `configs/pipeline/default.yaml` (`models`,
+    under `${FACEHALL_RUNS:-runs}`).
+  - **Face boxes** (`Enhancer.enhance(boxes=…)`): YuNet at threshold 0.3 inside the box,
+    otherwise landmarks from the box (`YUNET_BOX_LANDMARKS`, fitted like `YUNET_TEMPLATES`).
+    - From YuNet's own box, 20–35% of the crops fall within the training jitter, against
+      31–63% from its landmarks: the box places the face's centre less well.
+    - The 0.3 threshold finds at most 3 points more faces than 0.6.
+  - **Tiled detection:** OpenCV's YuNet crashed on 49 MP and larger inputs. Images whose
+    upscale exceeds 16 MP are now detected in overlapping tiles, which found the same faces
+    as the whole image.
+    - A 1920 × 1080 frame at ×8 takes 8.1 s end to end, including the 133 MP PNG, with 3.3 GB
+      peak memory.
+  - **Marks** (`facehall.marking`), in every output:
+    - PNG text (`AI-enhanced`, `Description`, `Software`, the JSON record);
+    - XMP with the IPTC digital source type `compositeWithTrainedAlgorithmicMedia`;
+    - EXIF.
+
+    The record holds the model and its sha256, the parameters, the input sha256 and the
+    restored regions. It holds no file names, landmarks or image content. C2PA is not written
+    (local use, D13).
+  - **Paste-back** blends in uint8 frames, a window per face. Single-face outputs are
+    unchanged; overlapping faces may differ by 1 level.
 
 ## 10. Roadmap and progress
 
@@ -1484,9 +1522,11 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 4.3** `feat(data):` LR crops made like the pipeline's (`data.scene`, D32); the
       references fine-tuned on them, without and with detector-matched jitter (D31). No variant
       meets the val rule; the references stay (§9)
-- [ ] **PR 4.4** `facehall enhance` for photos and folders; a face box as a fallback (given
-      landmarks work since PR 4.2); output marking: PNG text / XMP (`AI-enhanced`, model,
-      version, parameters, input sha256); optional visible watermark; consider C2PA
+- [x] **PR 4.4** `facehall enhance` for photos and folders; a face box as a fallback (YuNet
+      inside the box, else fitted box landmarks); tiled detection for large images; output
+      marking: PNG text, XMP with the IPTC digital source type, EXIF (`AI-enhanced`, model,
+      version, parameters, input sha256); optional visible watermark; C2PA considered and
+      deferred (§9)
 - [ ] **PR 4.5** Video (per frame; check flicker between frames)
 
 **Done when** an arbitrary photo with several faces is processed end to end.
@@ -1561,6 +1601,12 @@ by D32.
   realistic-trained model invents whole faces from near-featureless inputs.
 - FID and KID on the real-world set use CelebA as the reference, so they reward CelebA-like,
   invented faces as much as faithful ones (PR 2.5). They must not be the only real-world gate.
+- A face box (`--box`) without a detection inside it makes the model draw a face wherever the
+  box is, even on background. The box landmarks assume YuNet's tight boxes: a looser hand-drawn
+  box gives a face too large for the model, which the face-size limit then leaves alone (PR 4.4).
+- `facehall enhance` reads the reference checkpoints from the local `runs/` folder (or
+  `FACEHALL_RUNS`). The weights are not published (D7, D13), so on another machine the command
+  needs `--ckpt` or a copy of the runs.
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -1570,6 +1616,9 @@ by D32.
 - *Needs verification:* whether rows inside each split follow the official file order
   (`docs/DATA.md` §4.4). This is needed before joining annotations keyed by file name (D10).
 - The legacy weights are still in HEAD (D7).
+- *Needs verification:* the XMP namespace URI of the `Iptc4xmpExt` prefix
+  (`http://iptc.org/std/Iptc4xmpExt/2008-02-29/`) was not read verbatim from the IPTC
+  specification. The digital source type term was (PR 4.4).
 
 ## 12. Commands
 
@@ -1616,6 +1665,10 @@ uv run facehall train --config configs/train/srresnet_scene_x4.yaml   # pipeline
                                                # (PR 4.3, D32), ~10 min
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
+uv run facehall enhance photo.jpg -o out.png --scale 4   # restore the faces; marked output
+uv run facehall enhance photos/ -o enhanced/ --scale 8 --watermark   # a folder, visible mark
+uv run facehall enhance photo.jpg -o out.png --box 120,80,18,22   # a face the detector misses
+uv run python scripts/measure_detection.py --parts box   # box landmarks and their error (PR 4.4)
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/
 bash scripts/reproduce_phase1.sh               # Phase 1 end to end (full training: confirm first)
 uv run python scripts/preview_degradations.py --degrade configs/degrade/realistic.yaml --scale 4
@@ -1631,7 +1684,6 @@ uv run python scripts/match_degradations.py --spec configs/degrade/search/realis
 Planned (target interface):
 
 ```bash
-uv run facehall enhance photo.jpg -o out.png --scale 4
 uv run facehall export onnx --ckpt runs/<id>/best.safetensors --out models/x4.onnx
 uv run facehall serve --port 8000
 ```

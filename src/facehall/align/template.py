@@ -70,12 +70,31 @@ YUNET_TEMPLATES: dict[int, Points] = {
 }
 
 
-# Mean YuNet landmarks in its face box, normalized to the box ((0, 0) its top-left corner, (1, 1)
-# its bottom-right corner): the fallback for a face given as a box (facehall.align.box_landmarks).
-# Placeholder until fitted by scripts/measure_detection.py --parts box.
-YUNET_BOX_LANDMARKS: Points = np.array(
-    [[0.3, 0.4], [0.7, 0.4], [0.5, 0.6], [0.35, 0.75], [0.65, 0.75]]
-)
+# Mean YuNet landmarks in YuNet's face box, normalized to the box ((0, 0) its top-left corner,
+# (1, 1) its bottom-right corner): the fallback for a face given as a box
+# (facehall.align.box_landmarks). Fitted by scripts/measure_detection.py --parts box (commit
+# 903919e, 2026-11-26) on the same 1,500 CelebA train scenes per scale as YUNET_TEMPLATES, and
+# mirror-averaged. Align them to YUNET_TEMPLATES[scale].
+YUNET_BOX_LANDMARKS: dict[int, Points] = {
+    4: np.array(
+        [
+            [0.27613, 0.38895],
+            [0.72387, 0.38895],
+            [0.5, 0.58671],
+            [0.31203, 0.74081],
+            [0.68797, 0.74081],
+        ]
+    ),
+    8: np.array(
+        [
+            [0.28445, 0.38931],
+            [0.71555, 0.38931],
+            [0.5, 0.58617],
+            [0.32539, 0.74739],
+            [0.67461, 0.74739],
+        ]
+    ),
+}
 
 
 def template_from_landmarks(landmarks: npt.ArrayLike) -> Points:

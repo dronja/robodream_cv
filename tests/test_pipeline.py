@@ -4,6 +4,7 @@ Models and the detector are stand-ins: no weights, no dataset.
 """
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from facehall.align import CELEBA_TEMPLATE, YUNET_TEMPLATES, Face
+from facehall.align import CELEBA_TEMPLATE, YUNET_BOX_LANDMARKS, YUNET_TEMPLATES, Face
+from facehall.align.detect import box_landmarks
 from facehall.align.similarity import scale_of
 from facehall.align.warp import alignment_matrix, warp
 from facehall.config import load_config
@@ -23,6 +25,7 @@ from facehall.eval.endtoend import VARIANTS, evaluate, samples
 from facehall.pipeline import (
     Enhancer,
     MaskConfig,
+    ModelsConfig,
     PipelineConfig,
     ellipse_mask,
     given_points,
@@ -82,12 +85,28 @@ def enhancer(model: nn.Module, **kwargs: object) -> Enhancer:
     return Enhancer(model, 4, config, detector=StubDetector([]))
 
 
-def test_default_config_file_matches_the_schema_defaults() -> None:
-    assert load_config("configs/pipeline/default.yaml", PipelineConfig) == PipelineConfig()
+def test_default_config_file_matches_the_schema_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FACEHALL_RUNS", "/runs")
+    config = load_config("configs/pipeline/default.yaml", PipelineConfig)
+    assert replace(config, models=ModelsConfig()) == PipelineConfig()
+    # the models are the gate references (configs/gate.yaml)
+    gate = Path("configs/gate.yaml").read_text()
+    for scale in (4, 8):
+        path = Path(config.models.checkpoint(scale))
+        assert path.parent.parent == Path("/runs") and path.name == "best.safetensors"
+        assert f"{path.parent.name}-best" in gate
+    with pytest.raises(ValueError, match="scale 2"):
+        config.models.checkpoint(2)
 
 
 def test_config_validation() -> None:
-    for kwargs in ({"max_downscale": 0.5}, {"batch_size": 0}, {"mask": MaskConfig(feather=0.0)}):
+    for kwargs in (
+        {"max_downscale": 0.5},
+        {"max_upscale": 0.9},
+        {"batch_size": 0},
+        {"max_output_pixels": 0},
+        {"mask": MaskConfig(feather=0.0)},
+    ):
         with pytest.raises(ValueError):
             PipelineConfig(**kwargs)
 
@@ -150,11 +169,22 @@ def test_too_large_faces_are_left_to_the_background() -> None:
     image = photo(128)
     big = (FACE - 16 + 0.5) * 3 - 0.5 + 10
     result = enhancer(Constant(4, 1.0), max_downscale=2.0).enhance(image, [big])
-    assert result.faces[0].restored is False and "times the model input" in str(
+    assert result.faces[0].restored is False and "too large for the model" in str(
         result.faces[0].reason
     )
     assert result.faces[0].lr_scale == pytest.approx(1 / 3)
     np.testing.assert_array_equal(result.image, upscale(image, 4))
+
+
+def test_too_small_faces_are_left_to_the_background() -> None:
+    image = photo()
+    small = (FACE - 32 + 0.5) / 2.5 - 0.5 + 32  # the face 2.5 times smaller, same centre
+    result = enhancer(Constant(4, 1.0)).enhance(image, [small, FACE])
+    tiny, normal = result.faces
+    assert tiny.restored is False and "too small for the model" in str(tiny.reason)
+    assert tiny.lr_scale == pytest.approx(2.5) and normal.restored
+    lenient = enhancer(Constant(4, 1.0), max_upscale=3.0).enhance(image, [small])
+    assert lenient.faces[0].restored
 
 
 def test_detected_faces_use_the_yunet_template() -> None:
@@ -169,6 +199,55 @@ def test_detected_faces_use_the_yunet_template() -> None:
     yunet = alignment_matrix(FACE, YUNET_TEMPLATES[4], 32)
     assert face.lr_scale == pytest.approx(scale_of(yunet)) != pytest.approx(scale_of(detected))
     assert face.to_dict()["source"] == "detected"
+
+
+def test_restored_faces_report_their_region_and_outside_faces_are_skipped() -> None:
+    image = photo()
+    outside = FACE + 400.0  # far right of and below the 64 x 64 image
+    result = enhancer(Constant(4, 1.0)).enhance(image, [FACE, outside])
+    inside, away = result.faces
+    assert inside.restored and inside.region is not None
+    x, y, w, h = inside.region
+    assert 0 <= x < x + w <= 256 and 0 <= y < y + h <= 256
+    assert away.restored is False and "outside" in str(away.reason) and away.region is None
+    assert inside.to_dict()["region"] == list(inside.region)
+
+
+def test_face_boxes_use_a_detection_inside_or_the_box_landmarks() -> None:
+    image = photo()
+    box = (14.0, 14.0, 36.0, 40.0)
+    inside = Face((15.0, 16.0, 34.0, 38.0), FACE, 0.4)
+    elsewhere = Face((50.0, 50.0, 20.0, 20.0), FACE + 30, 0.9)  # centre outside the box
+    tiny = Face((30.0, 30.0, 4.0, 4.0), FACE, 0.95)  # centre inside, far too small
+    boxes = StubDetector([tiny, elsewhere, inside])
+    model = Enhancer(
+        Constant(4, 1.0), 4, PipelineConfig(), detector=StubDetector([]), box_detector=boxes
+    )
+    face = model.enhance(image, boxes=[box]).faces[0]
+    assert face.source == "box-detected" and face.score == pytest.approx(0.4)
+    np.testing.assert_allclose(face.landmarks, FACE)
+    assert boxes.calls == 1
+
+    model = Enhancer(
+        Constant(4, 1.0),
+        4,
+        PipelineConfig(),
+        detector=StubDetector([]),
+        box_detector=StubDetector([elsewhere]),
+    )
+    face = model.enhance(image, boxes=[box]).faces[0]
+    assert face.source == "box" and face.score is None and face.restored
+    np.testing.assert_allclose(face.landmarks, box_landmarks(box, YUNET_BOX_LANDMARKS[4]))
+
+
+def test_enhance_input_checks() -> None:
+    model = enhancer(Bicubic(4), max_output_pixels=256 * 256 - 1)
+    with pytest.raises(ValueError, match="MP"):
+        model.enhance(photo())  # 64 x 64 at x4 is 256 x 256
+    with pytest.raises(ValueError, match="not both"):
+        enhancer(Bicubic(4)).enhance(photo(), landmarks=[FACE], boxes=[(0, 0, 10, 10)])
+    with pytest.raises(ValueError, match="positive size"):
+        enhancer(Bicubic(4)).enhance(photo(), boxes=[(0, 0, 0, 10)])
 
 
 def test_detection_needs_a_template_for_the_scale() -> None:

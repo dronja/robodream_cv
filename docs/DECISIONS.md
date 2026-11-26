@@ -1465,3 +1465,103 @@ grid; `direct`: LR crop resampled at LR resolution):
 **Result:** the references stay (D25, D29); no test evaluation or gate run. The `data.scene`
 option, `resample_crop` and the four configs stay in the repository as the record of this
 negative result.
+
+### `facehall enhance` and output marking (PR 4.4)
+**Decision** (defaults taken without a separate question, 2026-11-26; the user confirmed the new
+`enhance` subcommand of the public CLI): `facehall enhance` restores the faces of photos and
+folders with `facehall.pipeline.Enhancer` and writes marked outputs (`CLAUDE.md` §11).
+- **Interface:** `facehall enhance INPUT… -o OUTPUT [--scale 4|8 | --ckpt CKPT]`, as planned in
+  `docs/PROJECT.md` §12.
+  - **Inputs:** image files or folders, searched recursively.
+  - **Output:** one file for one input image; otherwise a folder that mirrors the inputs.
+  - **Format:** PNG by default; `--format jpg|webp` with `--quality`.
+  - **Safety:** an existing output is kept unless `--overwrite`; an output never replaces an
+    input; two inputs may not map to one output.
+  - **Errors:** an image that fails is reported, and the others go on; the exit code is 1.
+  - **Messages:** only file names and face counts are printed, never image content. The notice
+    follows every run.
+- **Models:** `--scale` takes the checkpoint from `models.x4` / `models.x8` in
+  `configs/pipeline/default.yaml`.
+  - These are the gate references (D25, D29), under `${FACEHALL_RUNS:-runs}`, so their run
+    folder can move.
+  - `--ckpt` takes any checkpoint, and its scale comes from the checkpoint.
+- **Face boxes** (`--box`, the fallback planned in PR 4.2) for faces the detector misses:
+  - **Inside a box:** the highest-scoring YuNet face at threshold 0.3 (instead of 0.6) whose
+    centre lies in the box and whose size is within 3× of the box's. The size factor is an
+    initial value for hand-drawn boxes, not tuned.
+  - **Measured on the threshold** (300 CelebA val scenes per cell, commit `903919e`): 0.3
+    instead of 0.6 finds at most 3 points more faces, with the same NME. Detected clean /
+    degraded:
+    - 4 px between the eyes, ×8 upscale: 0.990 / 0.950 → 0.993 / 0.960;
+    - 8 px, ×4 upscale: 0.997 / 0.993 → 1.000 / 0.993.
+  - **Without a detection:** the landmarks come from the box itself, as YuNet's mean landmarks
+    in its own box (`YUNET_BOX_LANDMARKS`). They are fitted on the 1,500 train scenes per scale
+    of `YUNET_TEMPLATES` (1,495 and 1,489 detected) and mirror-averaged.
+  - **Cost** on 800 val scenes (`scripts/measure_detection.py --parts box`, commit `903919e`),
+    detected landmarks against landmarks from the detected box:
+
+    | Scale, input | Shift p95 | Rotation p95 | Scale p95 | Within jitter |
+    |---|---|---|---|---|
+    | ×4 clean | 0.030 / 0.100 | 4.1° / 1.5° | 1.105 / 1.103 | 63% / 35% |
+    | ×4 degraded | 0.039 / 0.098 | 4.3° / 1.5° | 1.118 / 1.121 | 58% / 29% |
+    | ×8 clean | 0.043 / 0.099 | 4.4° / 1.5° | 1.136 / 1.131 | 49% / 27% |
+    | ×8 degraded | 0.076 / 0.094 | 5.0° / 1.5° | 1.177 / 1.181 | 31% / 20% |
+
+    - A box fixes the face's size about as well as the landmarks, but its centre less well.
+      The face's own rotation is unknown, so the small rotation error only reflects the
+      upright CelebA faces.
+    - These numbers hold for YuNet's tight boxes. A hand-drawn box twice as large gives a face
+      twice the size, which the face-size limit then leaves to the background; the help text
+      describes the box YuNet draws.
+  - **The risk:** a box on a place without a face makes the model draw one there. The user
+    asked for it, and the output is marked.
+- **Tiled detection:** OpenCV's YuNet crashed (segfault) on a 1920 × 1080 image upscaled ×8
+  (133 MP input), and on a 1100 × 700 one at ×8 (49 MP); it ran at 33 MP.
+  - So a larger image is detected in overlapping tiles whose upscale has at most 16 MP:
+    `detector.max_pixels`; `tile_overlap` 128 input px, more than any face the pipeline restores.
+  - The detections are merged by non-maximum suppression (IoU 0.3).
+  - **Check:** on canvases of CelebA val scenes, tiles of 300 px (×4) and 200 px (×8) found the
+    same faces as the whole image (17 of 17 and 30 of 30).
+  - **Time and memory:** a 1920 × 1080 frame with 34 faces at ×8 takes 8.1 s end to end on the
+    RTX 6000 Ada, including the 133 MP PNG, with 3.3 GB peak memory; 33 faces are restored.
+- **Output size limit** `max_output_pixels: 200_000_000` (600 MB of RGB); a larger output is
+  refused.
+- **Paste-back in uint8:** the background stays uint8, and only a window around each face is
+  blended in float and rounded. Same output as before for single faces. On 320 frames of the
+  PR 4.2 protocol it differed in one frame, with two overlapping detections, by 1 level.
+- **Marks** (`facehall.marking`):
+  - **PNG text chunks:** `AI-enhanced` = `true`, `Description` = the notice, `Software`, and
+    `facehall` = the record as JSON.
+  - **XMP** (PNG iTXt `XML:com.adobe.xmp`; JPEG and WebP through Pillow):
+    - `Iptc4xmpExt:DigitalSourceType` =
+      `http://cv.iptc.org/newscodes/digitalsourcetype/compositeWithTrainedAlgorithmicMedia`;
+    - `dc:description` = the notice, `xmp:CreatorTool`;
+    - `facehall:AIEnhanced`, `Model`, `ModelSHA256`, `InputSHA256` and `Record` (the JSON
+      record), in the namespace `https://github.com/dronja/robodream_cv/xmp/1.0/`.
+  - **EXIF** in every format: `ImageDescription` = the notice and `Software`.
+  - **The record:**
+    - the notice, the package version and the UTC time;
+    - the model: run, checkpoint, weights sha256, architecture, scale;
+    - the pipeline settings without local paths;
+    - the input sha256, its size and where the faces came from;
+    - the output size;
+    - per face: source, score, restored or why not, and the changed region.
+
+    It holds no file names, landmarks or image content.
+  - **Visible mark** (`--watermark`): "AI-enhanced" on a dark band in the bottom-right corner.
+    Optional and off by default, as `CLAUDE.md` §11 allows.
+- **The IPTC term:** chosen from the IPTC Digital Source Type vocabulary (cv.iptc.org, read on
+  2026-11-26).
+  - Verbatim: `compositeWithTrainedAlgorithmicMedia`, "Edited using Generative AI":
+    "Augmentation, correction or enhancement using a Generative AI model, such as with
+    inpainting or outpainting operations".
+  - The alternatives do not fit:
+    - `algorithmicallyEnhanced` is "without changing the main content of the media", and the
+      restored faces are new content;
+    - `trainedAlgorithmicMedia` is for wholly generated media.
+  - No IPTC page names super-resolution, so the choice is ours.
+  - *Needs verification:* the `Iptc4xmpExt` namespace URI was not read verbatim from the IPTC
+    specification; it is the commonly used one.
+- **C2PA: not now.** A C2PA manifest has to be signed. A self-signed local certificate is not
+  trusted by validators, and the product stays local (D13). It also needs a new dependency.
+  Revisit with Phase 6, if outputs are ever published.

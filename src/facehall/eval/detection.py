@@ -21,12 +21,13 @@ real-world set cannot measure it either (D31).
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
 import numpy.typing as npt
 
-from facehall.align.detect import Face
+from facehall.align.detect import Face, box_iou
 from facehall.align.similarity import Points, angle_of, compose, invert, scale_of, transform_points
 from facehall.align.template import CELEBA_TEMPLATE, symmetrize
 from facehall.align.warp import alignment_matrix
@@ -214,3 +215,74 @@ def summarize(errors: Sequence[AlignmentError], jitter: JitterConfig) -> dict[st
     out["points_mean"] = float(table["points"].mean())
     out["within_jitter"] = float(np.mean([e.within(jitter) for e in errors]))
     return out
+
+
+# Real photos (PR 4.4): how many detections of a size the pipeline restores are faces.
+
+BOX_EYE_SPREAD = 0.448  # eye distance / box width of YuNet's boxes (YUNET_BOX_LANDMARKS)
+
+
+@dataclass(frozen=True)
+class Detection:
+    """A detection on a real photo, scored against the photo's annotated face boxes."""
+
+    score: float
+    lr_scale: float  # LR crop px per photo px, as in the pipeline
+    true: bool  # overlaps an annotated face box (IoU at least ``iou``)
+
+
+def score_detections(
+    faces: Sequence[Face],
+    truth: Sequence[Sequence[float]],
+    template: npt.ArrayLike,
+    lr_size: int,
+    *,
+    iou: float = 0.3,
+) -> tuple[list[Detection], list[float | None]]:
+    """The detections scored against the annotated boxes ``truth`` (left, top, width, height),
+    and for each annotated box the best score of a detection that overlaps it (None if none)."""
+    detections = []
+    found: list[float | None] = [None] * len(truth)
+    for face in faces:
+        factor = scale_of(alignment_matrix(face.landmarks, template, lr_size))
+        overlaps = [box_iou(face.box, box) >= iou for box in truth]
+        detections.append(Detection(face.score, factor, any(overlaps)))
+        for k, hit in enumerate(overlaps):
+            if hit:
+                found[k] = max(face.score, found[k] or 0.0)
+    return detections, found
+
+
+def box_lr_scale(width: float, lr_size: int) -> float:
+    """The pipeline's crop scale for a face whose box is ``width`` px wide (YuNet-like box)."""
+    return 0.25 * lr_size / (BOX_EYE_SPREAD * width)  # the template eyes are 0.25 crop apart
+
+
+def precision_table(
+    detections: Sequence[Detection],
+    recalled: Sequence[float | None],
+    thresholds: Sequence[float],
+    photos: int,
+    limits: tuple[float, float],
+) -> list[dict[str, Any]]:
+    """Per score threshold: the detections the pipeline would restore (crop scale within
+    ``limits``), the fraction of them that are faces, false ones per photo, and the fraction of
+    annotated faces of restorable size found (``recalled``: best overlapping score per face)."""
+    low, high = limits
+    sized = [d for d in detections if low <= d.lr_scale <= high]
+    rows = []
+    for t in thresholds:
+        kept = [d for d in sized if d.score >= t]
+        true = sum(d.true for d in kept)
+        rows.append(
+            {
+                "threshold": t,
+                "restorable": len(kept),
+                "precision": true / len(kept) if kept else None,
+                "false_per_photo": (len(kept) - true) / photos,
+                "recall": float(np.mean([s is not None and s >= t for s in recalled]))
+                if recalled
+                else None,
+            }
+        )
+    return rows

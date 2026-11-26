@@ -13,7 +13,16 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from facehall.align import CELEBA_TEMPLATE, YUNET_TEMPLATES, Face, YuNet, mirror
+from facehall.align import (
+    CELEBA_TEMPLATE,
+    YUNET_BOX_LANDMARKS,
+    YUNET_TEMPLATES,
+    Face,
+    YuNet,
+    box_landmarks,
+    mirror,
+)
+from facehall.align.detect import box_iou, detect_tiled, suppress, tile_starts
 from facehall.align.warp import alignment_matrix
 from facehall.data.config import JitterConfig
 from facehall.eval.detection import (
@@ -21,6 +30,7 @@ from facehall.eval.detection import (
     SceneDegradation,
     alignment_error,
     degrade,
+    fit_box_landmarks,
     fit_template,
     interocular,
     landmark_error,
@@ -108,9 +118,92 @@ def test_yunet_without_faces_and_invalid_input(
         detector.detect(np.zeros((8, 8, 3), dtype=np.float32))
     with pytest.raises(FileNotFoundError, match="download_weights.py yunet"):
         YuNet(tmp_path / "missing.onnx")
-    for kwargs in ({"upsample": 0.0}, {"score_threshold": 1.5}, {"top_k": 0}):
+    for kwargs in (
+        {"upsample": 0.0},
+        {"score_threshold": 1.5},
+        {"top_k": 0},
+        {"upsample": 8.0, "max_pixels": 1000**2, "overlap": 125},  # tiles of 125 px
+    ):
         with pytest.raises(ValueError):
             YuNet(weights, **kwargs)
+
+
+def test_tile_starts_cover_with_overlap() -> None:
+    assert tile_starts(100, 120, 16) == [0]
+    for length, tile, overlap in ((1000, 300, 64), (1001, 500, 128), (4321, 1000, 128)):
+        starts = tile_starts(length, tile, overlap)
+        assert starts[0] == 0 and starts[-1] + tile == length
+        assert all(b - a <= tile - overlap + 1 for a, b in zip(starts, starts[1:], strict=False))
+    with pytest.raises(ValueError):
+        tile_starts(100, 16, 16)
+
+
+def test_box_iou_and_suppression() -> None:
+    assert box_iou((0, 0, 10, 10), (0, 0, 10, 10)) == pytest.approx(1.0)
+    assert box_iou((0, 0, 10, 10), (5, 0, 10, 10)) == pytest.approx(50 / 150)
+    assert box_iou((0, 0, 10, 10), (20, 20, 5, 5)) == 0.0
+    points = np.zeros((5, 2))
+    faces = [
+        Face((0, 0, 10, 10), points, 0.5),
+        Face((1, 0, 10, 10), points, 0.9),
+        Face((30, 30, 10, 10), points, 0.6),
+    ]
+    kept = suppress(faces, 0.3)
+    assert [f.score for f in kept] == [0.9, 0.6]
+
+
+def squares(image: npt.NDArray[np.uint8]) -> list[Face]:
+    """A stand-in detector: white squares that do not touch the image border are faces."""
+    count, _, stats, _ = cv2.connectedComponentsWithStats((image[:, :, 0] == 255).astype(np.uint8))
+    height, width = image.shape[:2]
+    faces = []
+    for left, top, w, h, area in stats[1:count]:
+        if left == 0 or top == 0 or left + w == width or top + h == height:
+            continue
+        corners = np.array([[left, top], [left + w - 1, top], [left, top + h - 1]], float)
+        landmarks = np.vstack([corners, corners[:2] + 1.0])
+        faces.append(Face((float(left), float(top), float(w), float(h)), landmarks, float(area)))
+    return sorted(faces, key=lambda f: -f.score)
+
+
+def test_detect_tiled_finds_the_same_faces_as_the_whole_image() -> None:
+    image = np.zeros((300, 500, 3), dtype=np.uint8)
+    rng = np.random.default_rng(0)
+    for k in range(12):
+        size = 10 + k
+        x, y = 20 + (k % 6) * 75 + int(rng.integers(0, 20)), 30 + (k // 6) * 140
+        image[y : y + size, x : x + size] = 255
+    whole = detect_tiled(
+        squares, image, upsample=4, max_pixels=10**9, overlap=40, nms_threshold=0.3
+    )
+    tiled = detect_tiled(
+        squares, image, upsample=4, max_pixels=(120 * 4) ** 2, overlap=40, nms_threshold=0.3
+    )
+    assert len(whole) == 12
+    assert sorted(f.box for f in tiled) == sorted(f.box for f in whole)
+    for a, b in zip(
+        sorted(tiled, key=lambda f: f.box), sorted(whole, key=lambda f: f.box), strict=True
+    ):
+        np.testing.assert_allclose(a.landmarks, b.landmarks)
+
+
+def test_box_landmarks_and_their_fit() -> None:
+    assert set(YUNET_BOX_LANDMARKS) == {4, 8}
+    for normalized in YUNET_BOX_LANDMARKS.values():
+        np.testing.assert_allclose(mirror(normalized), normalized, atol=1e-12)
+    normalized = YUNET_BOX_LANDMARKS[4]
+    points = box_landmarks((10.0, 20.0, 40.0, 50.0), normalized)
+    np.testing.assert_allclose(points, np.array([10.0, 20.0]) + normalized * [40, 50] - 0.5)
+    with pytest.raises(ValueError, match="positive"):
+        box_landmarks((0, 0, 0, 10), normalized)
+    # faces whose landmarks sit at the same box-relative positions give those positions back
+    faces = [
+        Face((x, y, s, s), box_landmarks((x, y, s, s), normalized), 0.9)
+        for x, y, s in ((0, 0, 10), (50, 20, 30), (7, 3, 64))
+    ]
+    np.testing.assert_allclose(fit_box_landmarks(faces), normalized, atol=1e-9)
+    with pytest.raises(ValueError):
+        fit_box_landmarks([])
 
 
 def test_yunet_templates_are_symmetric() -> None:

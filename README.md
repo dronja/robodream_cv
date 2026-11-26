@@ -49,9 +49,10 @@ a person or as evidence; at most they are a hint, to be shown next to the origin
 ## 🚧 Project status
 
 The repository is being turned into a product-ready package `facehall`. The current state and
-the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`. Phase 0 (repository
-hygiene) is done; Phase 1 (reproducible baseline) is in progress. The original notebook and
-weights live in `legacy/` and are read only.
+the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`; metrics are in
+`docs/RESULTS.md`. Phases 0–3 (repository hygiene, reproducible baseline, realistic
+degradations, model quality) are done; Phase 4 (inference pipeline) is in progress. The original
+notebook and weights live in `legacy/` and are read only. The trained weights are not published.
 
 ```bash
 uv sync                  # PyTorch from PyPI (CUDA build on Linux)
@@ -59,6 +60,27 @@ uv sync --extra cpu      # or: CPU-only PyTorch (then use `uv run --extra cpu ..
 uv run pytest
 uv run facehall --version
 ```
+
+### Enhancing photos
+
+`facehall enhance` detects the faces of a photo, restores each one with a model and pastes it
+back into a bicubic upscale of the photo:
+
+```bash
+uv run facehall enhance photo.jpg -o out.png --scale 4          # one photo
+uv run facehall enhance photos/ -o enhanced/ --scale 8 --watermark   # a folder, visible mark
+uv run facehall enhance photo.jpg -o out.png --box 120,80,18,22  # a face the detector misses
+uv run facehall enhance photo.jpg -o out.png --ckpt runs/<id>/best.safetensors
+```
+
+- **Face sizes:** the models restore small faces: about 8 px between the eyes at ×4 and 4 px at
+  ×8. Faces more than twice as large or as small are left to the bicubic background.
+- **Marks:** every output is marked as AI-enhanced:
+  - PNG text, XMP (IPTC digital source type `compositeWithTrainedAlgorithmicMedia`) and EXIF;
+  - the model, its checksum, the parameters and the sha256 of the input;
+  - no file names and no landmarks.
+
+  `--watermark` adds a visible mark.
 
 ---
 

@@ -29,6 +29,7 @@ from facehall.eval.detection import (
     AlignmentError,
     SceneDegradation,
     alignment_error,
+    box_lr_scale,
     degrade,
     fit_box_landmarks,
     fit_template,
@@ -36,6 +37,8 @@ from facehall.eval.detection import (
     landmark_error,
     make_scene,
     match,
+    precision_table,
+    score_detections,
     summarize,
 )
 
@@ -345,3 +348,31 @@ def test_measure_detection_report(load_script: Callable[[str], ModuleType]) -> N
     )
     args = script.parse_args([])
     assert args.scales == [4, 8] and args.upsample == [1, 2, 4, 8, 16]
+
+
+def test_detections_on_real_photos_are_scored_against_the_boxes() -> None:
+    template = YUNET_TEMPLATES[4]
+    # a face whose crop has the model input size (scale 1), and the same face 3 times smaller
+    face = template * 32 - 0.5 + 10.0
+    small = (face + 0.5) / 3 - 0.5 + 60.0
+    truth = [(8.0, 8.0, 36.0, 36.0), (200.0, 200.0, 20.0, 20.0)]
+    found, best = score_detections(
+        [
+            Face((10.0, 10.0, 32.0, 32.0), face, 0.9),  # on the first box
+            Face((60.0, 60.0, 11.0, 11.0), small, 0.7),  # on no box
+        ],
+        truth,
+        template,
+        32,
+    )
+    assert [d.true for d in found] == [True, False]
+    assert found[0].lr_scale == pytest.approx(1.0) and found[1].lr_scale == pytest.approx(3.0)
+    assert best == [pytest.approx(0.9), None]
+    # a box of the YuNet-like width 2.23 eye distances, eyes 8 px apart: crop scale 1
+    assert box_lr_scale(8 / 0.448, 32) == pytest.approx(1.0)
+
+    rows = precision_table(found, best, [0.5, 0.8, 0.95], photos=2, limits=(0.5, 2.0))
+    assert [r["restorable"] for r in rows] == [1, 1, 0]  # the small one is out of size
+    assert rows[0]["precision"] == 1.0 and rows[2]["precision"] is None
+    assert rows[0]["false_per_photo"] == 0.0
+    assert [r["recall"] for r in rows] == [0.5, 0.5, 0.0]

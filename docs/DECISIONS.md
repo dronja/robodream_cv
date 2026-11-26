@@ -1486,7 +1486,8 @@ folders with `facehall.pipeline.Enhancer` and writes marked outputs (`CLAUDE.md`
     folder can move.
   - `--ckpt` takes any checkpoint, and its scale comes from the checkpoint.
 - **Face boxes** (`--box`, the fallback planned in PR 4.2) for faces the detector misses:
-  - **Inside a box:** the highest-scoring YuNet face at threshold 0.3 (instead of 0.6) whose
+  - **Inside a box:** the highest-scoring YuNet face at threshold 0.3 (the pipeline's is 0.8,
+    D33) whose
     centre lies in the box and whose size is within 3× of the box's. The size factor is an
     initial value for hand-drawn boxes, not tuned.
   - **Measured on the threshold** (300 CelebA val scenes per cell, commit `903919e`): 0.3
@@ -1526,6 +1527,13 @@ folders with `facehall.pipeline.Enhancer` and writes marked outputs (`CLAUDE.md`
     RTX 6000 Ada, including the 133 MP PNG, with 3.3 GB peak memory; 33 faces are restored.
 - **Output size limit** `max_output_pixels: 200_000_000` (600 MB of RGB); a larger output is
   refused.
+- **Lower face-size limit** `max_upscale: 2.0`, the mirror of `max_downscale` (PR 4.2): a face
+  more than twice smaller than the model input is left to the background.
+  - **Why:** the models were trained on faces of 0.8–1.25 times their input size (`data.scene`,
+    PR 4.3) and the detector's p95 scale error is 1.18 (D31).
+  - **Seen:** on a real photo (WIDER FACE), a ×4 detection with score 0.60, 2.9 times smaller
+    than the model input, lay on background texture. The model drew a dark blob there.
+  - Initial value, not tuned.
 - **Paste-back in uint8:** the background stays uint8, and only a window around each face is
   blended in float and rounded. Same output as before for single faces. On 320 frames of the
   PR 4.2 protocol it differed in one frame, with two overlapping detections, by 1 level.
@@ -1562,6 +1570,53 @@ folders with `facehall.pipeline.Enhancer` and writes marked outputs (`CLAUDE.md`
   - No IPTC page names super-resolution, so the choice is ours.
   - *Needs verification:* the `Iptc4xmpExt` namespace URI was not read verbatim from the IPTC
     specification; it is the commonly used one.
+- **Real photos** (two WIDER group photos, then two crowd photos; local only):
+  - At the D31 threshold 0.6, all 9 faces restored at ×8 in the group photos were false
+    detections: tie patterns, a button and printed letters. The model drew faces on them. This
+    led to the measure below and D33.
+  - At 0.8, no false face was restored in those photos. In a team photo at ×4, all 66 restored
+    faces were real, and the restorations looked plausible (seen, not measured).
 - **C2PA: not now.** A C2PA manifest has to be signed. A self-signed local certificate is not
   trusted by validators, and the product stays local (D13). It also needs a new dependency.
   Revisit with Phase 6, if outputs are ever published.
+
+### D33 — Detector score threshold 0.8 in the pipeline (amends D31)
+**Decision** (the user, 2026-11-26): `facehall.pipeline` detects faces with YuNet at score
+threshold **0.8 at both scales**, instead of D31's 0.6. Inside a face box given by the user it
+stays 0.3 (PR 4.4).
+
+**Why:** D31 chose 0.6 on synthetic CelebA scenes, whose flat backgrounds have nothing to
+mistake for a face (a limitation D31 recorded). On real photos, a ×4 or ×8 upscale makes
+textures look like tiny faces, and the model then draws a face on them. A missed face only
+stays bicubic, and `--box` can add it; a false one is invented content (`CLAUDE.md` §11).
+
+**Measured** (`scripts/measure_detection.py --parts wider`, commit `e76633e`):
+- **Data:** 200 photos of the WIDER FACE `val` part (D20), against the official face boxes.
+- **Restorable detections:** those of a size the pipeline restores (crop scale ½–2).
+- **A face:** a detection whose box overlaps an official box with IoU ≥ 0.3.
+- **Recall:** official faces of restorable size, judged from the box width, that are found.
+- **Bias:** YuNet was trained on the WIDER FACE training photos, these included, so all the
+  numbers are optimistic.
+
+| Threshold | ×4: faces among detections | false per photo | faces found | ×8: faces among detections | false per photo | faces found |
+|---|---|---|---|---|---|---|
+| 0.3 | 0.527 | 5.38 | 0.809 | 0.180 | 19.00 | 0.701 |
+| 0.5 | 0.761 | 1.68 | 0.733 | 0.390 | 5.48 | 0.584 |
+| 0.6 (D31) | 0.837 | 0.98 | 0.690 | 0.513 | 2.88 | 0.506 |
+| 0.7 | 0.917 | 0.42 | 0.629 | 0.666 | 1.27 | 0.425 |
+| **0.8** | **0.971** | **0.12** | **0.517** | **0.845** | **0.32** | **0.293** |
+| 0.9 | 1.000 | 0.00 | 0.191 | 1.000 | 0.00 | 0.037 |
+
+(1,473 official faces of restorable size at ×4, 1,105 at ×8.) Some "false" detections may be
+faces that the official boxes miss, or match with IoU below 0.3; the ones seen were not faces.
+
+**Cost on synthetic CelebA scenes** (300 val scenes per cell, as in D31), detected clean /
+degraded at 0.6 → 0.8:
+- ×4 (8 px between the eyes, ×4 upscale): 0.997 / 0.993 → 0.997 / 0.987;
+- ×8 (4 px, ×8 upscale): 0.990 / 0.950 → 0.990 / 0.900.
+
+**Consequences:**
+- On real photos the pipeline restores about half the small faces at ×4 and under a third at
+  ×8; even at 0.8, about one restorable ×8 detection in seven is not a face.
+- The PR 4.2 and PR 4.3 end-to-end numbers (`detected` variant) were measured at 0.6.
+- D31's measurements (detection rate, alignment error, templates) are unchanged.

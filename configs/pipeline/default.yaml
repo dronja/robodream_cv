@@ -3,7 +3,7 @@
 # `facehall enhance --scale`. With --ckpt, the model and its scale come from the checkpoint.
 detector:
   weights: ""                # empty: $FACEHALL_WEIGHTS/yunet/face_detection_yunet_2026may.onnx
-  score_threshold: 0.6       # D31
+  score_threshold: 0.8       # D33; D31 had 0.6, which drew faces on ties and prints in real photos
   box_score_threshold: 0.3   # inside a face box given by the user (--box)
   nms_threshold: 0.3
   top_k: 5000

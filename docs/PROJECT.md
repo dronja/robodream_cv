@@ -109,6 +109,8 @@ As of 2026-11-26:
   - In review: PR 4.4 (`facehall enhance` for photos and folders, face boxes, tiled detection,
     output marking; branch `feat/enhance-cli`). An arbitrary photo with several faces is now
     processed end to end from the command line, with marked outputs (§9).
+  - Decided: detector threshold 0.8 in the pipeline (D33). At D31's 0.6, about half the small
+    detections at ×8 on real photos were not faces, and the model drew faces on them.
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -410,6 +412,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D29 | The PR 3.8 ×4 model (`srresnet_id_perc_robust_x4-20261126-121325`) is the ×4 reference; ×8 keeps `srresnet_id_robust_x8-20261125-174436` |
 | D30 | Phase 4 comes before the remaining Phase 3 items (prior-guided model, NME, skin tone) |
 | D31 | Face detector: YuNet (OpenCV Zoo, MIT) on a bicubic upscale by the model scale, score threshold 0.6, with YuNet templates per scale |
+| D32 | Fine-tune on pipeline-like LR crops before the CLI (PR 4.3: no gain, the references stay) |
+| D33 | Pipeline detector threshold 0.8 at both scales instead of 0.6: fewer faces drawn on textures in real photos (amends D31) |
 
 ## 8. Licenses — status
 
@@ -1404,6 +1408,22 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     (local use, D13).
   - **Paste-back** blends in uint8 frames, a window per face. Single-face outputs are
     unchanged; overlapping faces may differ by 1 level.
+  - **Face-size limits:** a face more than 2× larger (`max_downscale`, PR 4.2) or 2× smaller
+    (`max_upscale`, new) than the model input is left to the bicubic background.
+  - **False faces on real photos** (`measure_detection.py --parts wider`, D33): on 200 WIDER
+    `val` photos, against the official boxes, detections that the pipeline would restore:
+
+    | Threshold | ×4: faces / false per photo / faces found | ×8: faces / false per photo / faces found |
+    |---|---|---|
+    | 0.6 (D31) | 0.84 / 0.98 / 0.69 | 0.51 / 2.88 / 0.51 |
+    | 0.8 (D33) | 0.97 / 0.12 / 0.52 | 0.85 / 0.32 / 0.29 |
+
+    - Optimistic: YuNet was trained on these photos.
+    - At 0.6 the model drew faces on ties, buttons and printed letters (seen in two group
+      photos), so the pipeline now uses 0.8 (D33).
+    - On synthetic CelebA scenes 0.8 costs little: ×8 degraded 0.950 → 0.900 detected, ×4
+      0.993 → 0.987.
+    - A team photo at ×4: 66 faces restored, all real (seen, not measured).
 
 ## 10. Roadmap and progress
 
@@ -1567,6 +1587,11 @@ by D32.
 
 ### Risks
 
+- False face detections on real photos make the model draw faces on textures (ties, prints).
+  At the pipeline threshold 0.8 (D33), on WIDER photos, 3% of the restorable detections at ×4
+  and 15% at ×8 are still not faces, and only 52% / 29% of the small faces are found. These
+  numbers are optimistic, because YuNet was trained on those photos. Visual checks of outputs
+  remain necessary.
 - The face detector's alignment error often exceeds the training jitter, mostly in scale: only
   31–63% of detected faces fall inside it on synthetic CelebA scenes (D31), and real photos are
   harder. On those scenes it costs little ID (PR 4.2: −0.002 to −0.012 against annotated
@@ -1669,6 +1694,7 @@ uv run facehall enhance photo.jpg -o out.png --scale 4   # restore the faces; ma
 uv run facehall enhance photos/ -o enhanced/ --scale 8 --watermark   # a folder, visible mark
 uv run facehall enhance photo.jpg -o out.png --box 120,80,18,22   # a face the detector misses
 uv run python scripts/measure_detection.py --parts box   # box landmarks and their error (PR 4.4)
+uv run python scripts/measure_detection.py --parts wider # false faces on WIDER photos (D33), ~15 min
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/
 bash scripts/reproduce_phase1.sh               # Phase 1 end to end (full training: confirm first)
 uv run python scripts/preview_degradations.py --degrade configs/degrade/realistic.yaml --scale 4

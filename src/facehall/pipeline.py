@@ -65,7 +65,7 @@ class Detector(Protocol):
 @dataclass
 class DetectorConfig:
     weights: str = ""  # empty: facehall.weights.yunet_weights() ($FACEHALL_WEIGHTS)
-    score_threshold: float = 0.6  # D31
+    score_threshold: float = 0.8  # D33 (D31: 0.6, too many false faces on real photos)
     box_score_threshold: float = 0.3  # inside a face box given by the user
     nms_threshold: float = 0.3
     top_k: int = 5000

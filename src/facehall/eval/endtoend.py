@@ -7,9 +7,12 @@ degraded. Each variant turns the scene into a ×scale frame:
 - ``bicubic``: the bicubic background only;
 - ``annotated``: the pipeline with the annotated landmarks, aligned to ``CELEBA_TEMPLATE``;
 - ``detected``: the full pipeline, with YuNet (D31); a missed face stays bicubic;
-- ``direct``: the model output on the aligned LR crop, without paste-back. It is the crop the
-  protocols of ``facehall eval`` score, so it separates the cost of the paste-back (mask,
-  inverse warp) from that of the detection.
+- ``direct``: the model output on the LR crop aligned by the annotated landmarks, scored as it
+  is, without paste-back. Like the protocols of ``facehall eval`` it scores the model's own HR
+  crop, but its LR crop is cut from the scene instead of made by degrading the HR crop. Against
+  ``annotated`` it shows the cost of the paste-back (the mask, the inverse warp and the
+  resampling of the scored crop); ``annotated`` against ``detected`` shows the cost of the
+  detection.
 
 Every frame is scored on the 128 px crop that the **annotated** landmarks align to
 ``CELEBA_TEMPLATE`` in it, against the dataset's HR crop of the same image: the face where it

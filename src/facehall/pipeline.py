@@ -25,7 +25,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import cv2
 import numpy as np
@@ -33,7 +33,7 @@ import numpy.typing as npt
 import torch
 from torch import nn
 
-from facehall.align.detect import YuNet
+from facehall.align.detect import Face, YuNet
 from facehall.align.similarity import (
     Matrix,
     Points,
@@ -48,6 +48,12 @@ from facehall.align.warp import alignment_matrix, unwarp, warp
 from facehall.weights import yunet_weights
 
 Image = npt.NDArray[np.uint8]  # (H, W, 3) RGB
+
+
+class Detector(Protocol):
+    """Faces of an RGB image, with five landmarks in its pixel-centre coordinates (``YuNet``)."""
+
+    def detect(self, image: Image) -> list[Face]: ...
 
 
 @dataclass
@@ -203,7 +209,7 @@ class Enhancer:
         *,
         hr_size: int = 128,
         device: torch.device | str = "cpu",
-        detector: YuNet | None = None,
+        detector: Detector | None = None,
     ) -> None:
         if hr_size % scale:
             raise ValueError(f"HR size {hr_size} is not a multiple of scale {scale}")
@@ -226,7 +232,7 @@ class Enhancer:
         return cls(model, experiment.scale, config, hr_size=experiment.data.hr_size, device=device)
 
     @property
-    def detector(self) -> YuNet:
+    def detector(self) -> Detector:
         if self._detector is None:
             d = self.config.detector
             self._detector = YuNet(

@@ -8,8 +8,10 @@
 - **Face tracks:** faces are detected in every frame (D31, D33) and matched to the tracks of the
   previous frames by box overlap (``FaceTracker``). With ``smooth``, each track's landmarks and
   box go through an alpha-beta filter, which damps the detector's frame-to-frame jitter and
-  follows constant motion without lag. With ``hold``, a face the detector misses for up to that
-  many frames stays restored at its predicted place.
+  follows constant motion without lag. A track begins with a detection at the pipeline's
+  threshold (D33) and continues with weaker ones, down to ``track_threshold`` (hysteresis), so
+  a face whose score dips stays restored. With ``hold``, a face that is not detected at all
+  stays restored at its predicted place for up to that many frames.
 - **Timing:** constant frame rate, taken from the input. Variable-rate inputs are written at
   their mean rate.
 """
@@ -76,7 +78,8 @@ class FaceTracker:
       of two detections carries their jitter (a growing box pushed a face over the face-size
       limit). ``alpha = 1, beta = 0`` passes the detections through unchanged.
     - **Matching:** detections are matched to the predicted tracks greedily by box IoU (at
-      least ``iou``).
+      least ``iou``). Only a detection scoring at least ``start`` begins a new track; a weaker
+      one can only continue a track (hysteresis), and is dropped otherwise.
     - **Gaps:** a track without a detection moves on to its prediction. For ``hold`` frames it
       is still returned, so its face stays restored; after ``keep`` frames it ends.
     """
@@ -89,16 +92,18 @@ class FaceTracker:
         iou: float = 0.3,
         hold: int = 0,
         keep: int = 2,
+        start: float = 0.0,
     ) -> None:
         if not (0.0 < alpha <= 1.0 and 0.0 <= beta <= 1.0 and 0.0 < iou <= 1.0):
             raise ValueError("tracker alpha and iou must be in (0, 1], beta in [0, 1]")
         if not 0 <= hold <= keep:
             raise ValueError(f"tracker hold must be in [0, keep={keep}], got {hold}")
         self.alpha, self.beta, self.iou, self.hold, self.keep = alpha, beta, iou, hold, keep
+        self.start = start
         self.tracks: list[Track] = []
 
     def update(self, faces: Sequence[Face]) -> list[Face]:
-        """The tracked faces: one per detection, in the order of ``faces``, then the held
+        """The tracked faces: one per kept detection, in the order of ``faces``, then the held
         tracks that had no detection in this frame."""
         predicted = [t.state + t.velocity for t in self.tracks]
         pairs = sorted(
@@ -122,6 +127,8 @@ class FaceTracker:
         for j, face in enumerate(faces):
             z = face_state(face)
             if j not in matched:
+                if face.score < self.start:
+                    continue
                 track = Track(z, face.score)
             else:
                 track = self.tracks[matched[j]]
@@ -143,13 +150,21 @@ class FaceTracker:
         return out
 
 
-def tracker(config: VideoConfig) -> FaceTracker | None:
-    """The face tracker of ``config``, or None when it neither smooths nor holds."""
-    if not config.smooth and config.hold == 0:
+def tracker(config: VideoConfig, start: float) -> FaceTracker | None:
+    """The face tracker of ``config`` for detections at ``video.track_threshold``, where new
+    tracks need ``start`` (the pipeline's threshold); None when it neither smooths, holds nor
+    continues tracks below ``start``."""
+    hysteresis = config.track_threshold < start
+    if not config.smooth and config.hold == 0 and not hysteresis:
         return None
     alpha, beta = (config.alpha, config.beta) if config.smooth else (1.0, 0.0)
     return FaceTracker(
-        alpha, beta, iou=config.track_iou, hold=config.hold, keep=max(2, config.hold)
+        alpha,
+        beta,
+        iou=config.track_iou,
+        hold=config.hold,
+        keep=max(2, config.hold),
+        start=start if hysteresis else 0.0,
     )
 
 
@@ -327,12 +342,13 @@ def enhance_video(
     config = enhancer.config.video
     capture, info = open_video(source)
     stats = VideoStats()
-    tracks = tracker(config)
+    tracks = tracker(config, enhancer.config.detector.score_threshold)
+    detector = enhancer.detector if tracks is None else enhancer.track_detector
     size = (info.width * enhancer.scale, info.height * enhancer.scale)
 
     def frames() -> Iterator[bytes]:
         for frame in read_frames(capture):
-            faces = enhancer.detector.detect(frame)
+            faces = detector.detect(frame)
             if tracks is not None:
                 faces = tracks.update(faces)
             result = enhancer.enhance(frame, detections=faces)

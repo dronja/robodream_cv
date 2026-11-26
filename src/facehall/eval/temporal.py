@@ -27,8 +27,13 @@ at ×scale and aligned to the template by its own landmarks.
 - **Restored:** the fraction of frames in which the face (landmark NME below 0.5, as in D31) was
   restored.
 - **Variants:** ``bicubic``; ``annotated`` (the pipeline with the true landmarks of every
-  frame); ``detected`` (YuNet in every frame); ``track:<alpha>,<beta>,<hold>`` (YuNet and
-  ``facehall.video.FaceTracker``).
+  frame); ``detected`` (YuNet in every frame, at the pipeline's threshold);
+  ``track:<alpha>,<beta>,<hold>[,<low>]`` (YuNet and ``facehall.video.FaceTracker``; with
+  ``low``, detections down to that score continue a track).
+- **Detections:** YuNet runs once per frame at ``video.track_threshold``
+  (``Enhancer.track_detector``). The variants without ``low`` use the detections at or above
+  the pipeline's threshold, which are the detections YuNet gives at that threshold: NMS keeps
+  the higher-scoring box of an overlapping pair.
 """
 
 from collections.abc import Iterator, Sequence
@@ -77,22 +82,33 @@ class Tracking:
     alpha: float
     beta: float
     hold: int
+    low: float | None = None  # the score down to which detections continue a track
 
     @property
     def name(self) -> str:
-        return f"track:{self.alpha:g},{self.beta:g},{self.hold}"
+        low = "" if self.low is None else f",{self.low:g}"
+        return f"track:{self.alpha:g},{self.beta:g},{self.hold}{low}"
 
-    def tracker(self) -> FaceTracker:
-        return FaceTracker(self.alpha, self.beta, hold=self.hold, keep=max(2, self.hold))
+    def tracker(self, start: float) -> FaceTracker:
+        """A tracker whose new tracks need ``start`` (with ``low``)."""
+        return FaceTracker(
+            self.alpha,
+            self.beta,
+            hold=self.hold,
+            keep=max(2, self.hold),
+            start=start if self.low is not None else 0.0,
+        )
 
     @classmethod
     def parse(cls, text: str) -> "Tracking":
-        """``alpha,beta,hold``, e.g. ``0.5,0.1,2``."""
+        """``alpha,beta,hold[,low]``, e.g. ``0.5,0.1,2`` or ``0.5,0.1,0,0.3``."""
         try:
-            alpha, beta, hold = text.split(",")
-            return cls(float(alpha), float(beta), int(hold))
+            alpha, beta, hold, *rest = text.split(",")
+            if len(rest) > 1:
+                raise ValueError
+            return cls(float(alpha), float(beta), int(hold), float(rest[0]) if rest else None)
         except ValueError:
-            raise ValueError(f"expected alpha,beta,hold, got {text!r}") from None
+            raise ValueError(f"expected alpha,beta,hold[,low], got {text!r}") from None
 
 
 @dataclass(frozen=True)
@@ -202,17 +218,24 @@ def evaluate_clip(
     """Flicker, PSNR-Y and the restored fraction per variant for one clip."""
     scale, size = enhancer.scale, enhancer.hr_size
     weights = ellipse_mask(size, mask or MaskConfig())
-    trackers = {t.name: t.tracker() for t in tracking}
+    start = enhancer.config.detector.score_threshold
+    lowest = min(enhancer.config.video.track_threshold, start)
+    for t in tracking:
+        if t.low is not None and t.low < lowest:
+            raise ValueError(f"{t.name}: low {t.low} is below video.track_threshold {lowest}")
+    trackers = {t.name: (t, t.tracker(start)) for t in tracking}
     names = ["bicubic", "annotated", "detected", *trackers]
     crops: dict[str, list[Image]] = {"hr": list(clip.hr), **{n: [] for n in names}}
     restored = dict.fromkeys(["annotated", "detected", *trackers], 0)
     for frame, truth in zip(clip.frames, clip.truth, strict=True):
         crops["bicubic"].append(face_crop(upscale(frame, scale), truth, scale, size))
         results: dict[str, Enhanced] = {"annotated": enhancer.enhance(frame, [truth])}
-        faces = enhancer.detector.detect(frame)
+        found = enhancer.track_detector.detect(frame)
+        faces = [f for f in found if f.score >= start]
         results["detected"] = enhancer.enhance(frame, detections=faces)
-        for name, tracker in trackers.items():
-            results[name] = enhancer.enhance(frame, detections=tracker.update(faces))
+        for name, (setting, tracker) in trackers.items():
+            pool = faces if setting.low is None else [f for f in found if f.score >= setting.low]
+            results[name] = enhancer.enhance(frame, detections=tracker.update(pool))
         for name, result in results.items():
             crops[name].append(face_crop(result.image, truth, scale, size))
             restored[name] += face_restored(result, truth)

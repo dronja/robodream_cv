@@ -102,11 +102,16 @@ class ModelsConfig:
 class VideoConfig:
     """Video (``facehall.video``, PR 4.5): face tracks and encoding."""
 
-    smooth: bool = False  # alpha-beta filter of each face track's landmarks and box
+    # Face tracks (chosen on synthetic clips, PR 4.5): an alpha-beta filter of each track's
+    # landmarks and box, and the frames a missed face stays restored at its predicted place.
+    smooth: bool = True
     alpha: float = 0.5
     beta: float = 0.1
-    hold: int = 0  # frames a missed face stays restored at its predicted place
+    hold: int = 2
     track_iou: float = 0.3  # box IoU that continues a track
+    # Detector score at which a detection continues a track; a new track needs
+    # detector.score_threshold (D33). Equal to it: no hysteresis.
+    track_threshold: float = 0.3
     codec: str = "libx264"  # libx264 or libx265 (system ffmpeg)
     crf: int = 18
     preset: str = "medium"
@@ -119,6 +124,8 @@ class VideoConfig:
             raise ValueError(f"video crf must be in [0, 51], got {self.crf}")
         if not 0 <= self.hold <= 25:
             raise ValueError(f"video hold must be in [0, 25] frames, got {self.hold}")
+        if not 0.0 < self.track_threshold <= 1.0:
+            raise ValueError(f"video track_threshold must be in (0, 1], got {self.track_threshold}")
 
 
 @dataclass
@@ -275,6 +282,7 @@ class Enhancer:
         self.mask = ellipse_mask(hr_size, config.mask)
         self._detector = detector
         self._box_detector = box_detector if box_detector is not None else detector
+        self._track_detector = detector
         self.info: dict[str, Any] = {"scale": scale}  # model provenance for output marking
 
     @classmethod
@@ -322,6 +330,15 @@ class Enhancer:
         if self._box_detector is None:
             self._box_detector = self._yunet(self.config.detector.box_score_threshold)
         return self._box_detector
+
+    @property
+    def track_detector(self) -> Detector:
+        """The detector for video face tracks, at ``video.track_threshold`` (or the pipeline's
+        threshold, if that is lower)."""
+        if self._track_detector is None:
+            threshold = min(self.config.video.track_threshold, self.config.detector.score_threshold)
+            self._track_detector = self._yunet(threshold)
+        return self._track_detector
 
     def enhance(
         self,

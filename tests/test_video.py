@@ -56,6 +56,12 @@ class StubDetector:
         return self.faces
 
 
+def stub(enhancer: Enhancer, detector: object) -> Enhancer:
+    """``enhancer`` with ``detector`` for photos, face boxes and video tracks (no weights)."""
+    enhancer._detector = enhancer._box_detector = enhancer._track_detector = detector  # type: ignore[assignment]
+    return enhancer
+
+
 @pytest.fixture(scope="module")
 def checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
     config = load_experiment(
@@ -110,6 +116,18 @@ def test_hold_keeps_a_missed_face_then_ends_the_track() -> None:
     assert len(tracks.tracks) == 1
 
 
+def test_weak_detections_only_continue_tracks() -> None:
+    tracks = FaceTracker(1.0, 0.0, start=0.8)
+    assert tracks.update([face(score=0.5)]) == []  # too weak to begin a track
+    assert tracks.tracks == []
+    (strong,) = tracks.update([face(score=0.9)])
+    (weak,) = tracks.update([face((0.5, 0.0), score=0.4)])  # continues it
+    assert weak.score == 0.4 and len(tracks.tracks) == 1
+    # a weak detection elsewhere begins nothing
+    (kept,) = tracks.update([face((0.5, 0.0), score=0.4), face((100.0, 0.0), score=0.4)])
+    assert kept.box[0] < 20 and len(tracks.tracks) == 1
+
+
 def test_faces_far_apart_get_their_own_tracks() -> None:
     tracks = FaceTracker(0.5, 0.0)
     tracks.update([face(), face((100.0, 0.0))])
@@ -119,15 +137,19 @@ def test_faces_far_apart_get_their_own_tracks() -> None:
 
 
 def test_tracker_settings_and_validation() -> None:
-    assert tracker(VideoConfig()) is None
-    held = tracker(VideoConfig(hold=3))
+    off = VideoConfig(smooth=False, hold=0, track_threshold=0.8)
+    assert tracker(off, 0.8) is None
+    default = tracker(VideoConfig(), 0.8)
+    assert default is not None and (default.alpha, default.beta, default.start) == (0.5, 0.1, 0.8)
+    held = tracker(VideoConfig(smooth=False, hold=3, track_threshold=0.8), 0.8)
     assert held is not None and (held.alpha, held.beta, held.hold, held.keep) == (1.0, 0.0, 3, 3)
-    smooth = tracker(VideoConfig(smooth=True, alpha=0.3, beta=0.05))
+    assert held.start == 0.0  # no hysteresis
+    smooth = tracker(VideoConfig(alpha=0.3, beta=0.05, hold=0), 0.8)
     assert smooth is not None and (smooth.alpha, smooth.beta, smooth.hold) == (0.3, 0.05, 0)
     for kwargs in ({"alpha": 0.0}, {"beta": 1.5}, {"iou": 0.0}, {"hold": 3, "keep": 2}):
         with pytest.raises(ValueError):
             FaceTracker(**{"alpha": 0.5, "beta": 0.1, **kwargs})  # type: ignore[arg-type]
-    for config in ({"codec": "mpeg4"}, {"crf": 52}, {"hold": -1}):
+    for config in ({"codec": "mpeg4"}, {"crf": 52}, {"hold": -1}, {"track_threshold": 0.0}):
         with pytest.raises(ValueError):
             VideoConfig(**config)
 
@@ -227,13 +249,13 @@ def test_cli_enhances_a_video_with_audio_and_marks(
 
     def with_stub(*args: object, **kwargs: object) -> Enhancer:
         enhancer = original(*args, **kwargs)  # type: ignore[arg-type]
-        enhancer._detector = detector
+        stub(enhancer, detector)
         return enhancer
 
     monkeypatch.setattr(Enhancer, "from_checkpoint", with_stub)
     code = main(
         ["enhance", str(source), "-o", str(target), "--ckpt", str(checkpoint), "--device", "cpu"]
-        + ["--set", "video.smooth=true", "--set", "video.hold=2"]
+        + ["--set", "video.smooth=false", "--set", "video.hold=0"]
     )
     output = capsys.readouterr().out
     assert code == 0, output
@@ -244,7 +266,7 @@ def test_cli_enhances_a_video_with_audio_and_marks(
     assert int(kinds["video"]["nb_read_frames"]) == 5
     rec = read_record(target)
     assert rec is not None and rec["faces"]["restored"] == 5
-    assert rec["parameters"]["video"]["smooth"] is True and rec["model"]["name"] == "tiny_x4-test"
+    assert rec["parameters"]["video"]["smooth"] is False and rec["model"]["name"] == "tiny_x4-test"
     assert not list(target.parent.glob("tmp*")), "no scratch files left"
 
 
@@ -256,7 +278,7 @@ def test_video_without_audio_and_a_broken_video(tmp_path: Path, checkpoint: Path
     make_video(silent, frames=3, audio=False)
     broken.write_bytes(b"not a video")
     enhancer = Enhancer.from_checkpoint(checkpoint, PipelineConfig())
-    enhancer._detector = StubDetector([])
+    stub(enhancer, StubDetector([]))
     jobs = plan([silent, broken], tmp_path / "out")
     failures = enhance_files(enhancer, jobs, report=lambda _: None)
     assert [f[0] for f in failures] == [broken]
@@ -264,7 +286,7 @@ def test_video_without_audio_and_a_broken_video(tmp_path: Path, checkpoint: Path
     assert [s["codec_type"] for s in streams(out)] == ["video"]
     rec = read_record(out)
     assert rec is not None and rec["faces"]["detected"] == 0
-    assert "models" not in rec["parameters"] and rec["parameters"]["video"]["hold"] == 0
+    assert "models" not in rec["parameters"] and rec["parameters"]["video"]["hold"] == 2
 
 
 @needs_ffmpeg
@@ -284,7 +306,7 @@ def test_rotated_video_is_written_upright(tmp_path: Path, checkpoint: Path) -> N
         check=True,
     )
     enhancer = Enhancer.from_checkpoint(checkpoint, PipelineConfig())
-    enhancer._detector = StubDetector([])
+    stub(enhancer, StubDetector([]))
     out = tmp_path / "out.mp4"
     enhance_video(enhancer, rotated, out, parameters={}, report=lambda _: None)
     (video,) = streams(out)
@@ -322,8 +344,11 @@ def test_motion_and_flicker() -> None:
     assert flicker(steps, weights) == pytest.approx(2.0)
     assert Tracking.parse("0.3,0.05,2") == Tracking(0.3, 0.05, 2)
     assert Tracking(0.3, 0.05, 2).name == "track:0.3,0.05,2"
-    with pytest.raises(ValueError):
-        Tracking.parse("0.3,0.05")
+    assert Tracking.parse("0.5,0.1,0,0.3") == Tracking(0.5, 0.1, 0, 0.3)
+    assert Tracking(0.5, 0.1, 0, 0.3).name == "track:0.5,0.1,0,0.3"
+    for text in ("0.3,0.05", "1,0,0,0.3,1"):
+        with pytest.raises(ValueError):
+            Tracking.parse(text)
 
 
 def test_clip_and_evaluation_with_a_stand_in_detector(checkpoint: Path) -> None:
@@ -350,9 +375,11 @@ def test_clip_and_evaluation_with_a_stand_in_detector(checkpoint: Path) -> None:
             right, bottom = truth.max(axis=0) + 4
             return [Face((left, top, right - left, bottom - top), truth, 0.9)]
 
-    enhancer._detector = TruthDetector()
+    stub(enhancer, TruthDetector())
     result = evaluate_clip(enhancer, clip, [Tracking(1.0, 0.0, 0)])
     assert set(result) == {"hr", "bicubic", "annotated", "detected", "track:1,0,0"}
+    with pytest.raises(ValueError, match="below"):
+        evaluate_clip(enhancer, clip, [Tracking(1.0, 0.0, 0, 0.1)])
     # a tracker that neither smooths nor holds changes nothing
     assert result["track:1,0,0"] == result["detected"]
     assert result["hr"]["flicker"] == pytest.approx(0.0, abs=1.0)

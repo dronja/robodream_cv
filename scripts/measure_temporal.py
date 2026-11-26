@@ -41,7 +41,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         nargs="*",
         type=Tracking.parse,
         default=[],
-        metavar="ALPHA,BETA,HOLD",
+        metavar="ALPHA,BETA,HOLD[,LOW]",
         help="face tracker settings to compare (facehall.video.FaceTracker)",
     )
     parser.add_argument("--seed", type=int, default=0)
@@ -85,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         "split": args.split,
         "pipeline": str(args.pipeline),
         "detector_threshold": config.detector.score_threshold,
+        "track_threshold": config.video.track_threshold,
         "git_commit": git_commit(),
         "clips": len(rows),
         "frames": args.frames,

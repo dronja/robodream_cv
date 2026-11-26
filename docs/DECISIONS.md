@@ -1009,4 +1009,45 @@ but left a fine periodic hatching (PR 3.6, D27), which the spectral check (D28) 
   run of the winner then goes through the gate on test. If none qualifies, the recipe is
   reported as failing and no full run is made.
 
-SELECTION_PLACEHOLDER
+**Selection** (2026-11-26, runs from commit `e2d2c6c`, three in parallel). Val, PSNR-Y and LPIPS
+change against `srresnet_x4` / ID similarity / spectral peak ratio; WIDER val KID ×10³:
+
+| Perceptual weight | light | medium | WIDER val KID | Qualifies |
+|---|---|---|---|---|
+| reference `srresnet_x4` | 27.92 dB / 0.2004 / 0.4475 / 0.22 | 26.40 dB / 0.2465 / 0.2971 / 0.18 | 95.1 ± 2.2 (limit 99.5) | — |
+| PR 3.6, 0.01 without defences | −0.29 / −0.0202 / 0.4832 / 37.0¹ | −0.26 / −0.0199 / 0.3200 / 25.7¹ | 79.4 | no: spectral peak |
+| **0.03** | −0.21 / −0.0163 / 0.4788 / 0.30 | −0.24 / −0.0206 / 0.3169 / 0.34 | 65.0 | **yes** |
+| 0.1 | −0.27 / −0.0261 / 0.4704 / 1.22 | −0.30 (−0.305) / −0.0359 / 0.3115 / 1.62 | 66.7 | no: spectral peak, PSNR-Y on medium |
+| 0.3 | −0.39 / −0.0392 / 0.4591 / 3.53 | −0.42 / −0.0523 / 0.3036 / 3.94 | 84.7 | no: PSNR-Y, spectral peak |
+
+¹ the full PR 3.6 run (D28 calibration); the sweep run was not measured with this code.
+
+- **The defences work:** at 0.03 the LPIPS gain is about that of PR 3.6 (−0.016 and −0.021
+  against −0.020 and −0.020). The spectral peak falls from 37.0 / 25.7 to 0.30 / 0.34, the range
+  of the models without a pattern.
+- **Side effects:** PSNR-Y loses less than in PR 3.6 (−0.21 against −0.29 dB on light), and the
+  real-photo KID is the lowest of the project (65.0).
+- **Larger weights bring a pattern back,** as with the identity term. In the zoomed val grids
+  (6 samples per model, 5×, not measured), 0.03 shows no hatching on the lips where PR 3.6
+  does, and 0.1 shows faint horizontal stripes on the chin.
+- ID similarity is about that of PR 3.6 (0.479 against 0.483 on light).
+
+**Result** (2026-11-26, run `srresnet_id_perc_robust_x4-20261126-121325` from commit `e20e095`,
+2 epochs, 503 s at 641 img/s):
+- **Gate (D23, D26, D28) against `srresnet_x4`: passes all 17 checks.**
+  - Light: LPIPS 0.195 → 0.180, ID 0.445 → 0.477, PSNR-Y −0.20 dB, spectral peak 0.34.
+  - Medium: LPIPS 0.241 → 0.222, ID 0.292 → 0.313, PSNR-Y −0.24 dB, spectral peak 0.43.
+  - Every subgroup gains ID; WIDER test KID ×10³ 92.3 → 61.9.
+- **Against PR 3.6:** about the same LPIPS and ID (light 0.179 / 0.477 against 0.176 / 0.481), a
+  smaller PSNR-Y loss, no pattern (peak 0.34 against 38.1) and a lower real-photo KID (61.9
+  against 77.3).
+- **Spectrum on the ungated levels** (val, all images): clean bicubic inputs 0.92 (L1 0.27, PR
+  3.6 102.4), heavy 0.65 (L1 0.09, PR 3.6 23.8). On clean inputs a weak residue of the PR 3.6
+  peaks remains at the same frequencies, about 110× weaker and below the limit. It is not
+  visible in the zoomed test grids (4 clean samples at 5×, not measured).
+- **Grids** (6 synthetic, 6 real and 4 clean test samples, not measured): no hatching; eyes and
+  lips slightly sharper than the L1 model's. In some faces the eyes have a slight bluish tint,
+  as with the identity term alone.
+- **Reference:** by D23 the model would replace `srresnet_x4`. The user decided each earlier
+  replacement (D24, D25, D27), so this one waits for an explicit decision (`docs/PROJECT.md`
+  §11, Q13); `configs/gate.yaml` is unchanged.

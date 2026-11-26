@@ -306,6 +306,8 @@ def test_render_moves_the_landmarks_with_the_content() -> None:
         y, x = np.mgrid[: scene.shape[0], : scene.shape[1]]
         centroid = np.array([(x * weight).sum(), (y * weight).sum()]) / weight.sum()
         assert np.allclose(centroid, truth[0], atol=0.2)
+    scene, truth = render(image, points, 0.5, (0.0, 0.0), pad=3)
+    assert scene.shape == (140, 105, 3) and np.allclose(truth[0], (52.25, 69.75))
 
 
 def test_motion_and_flicker() -> None:

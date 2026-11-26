@@ -11,7 +11,8 @@ the model's input size, as in ``facehall.eval.detection.make_scene``. Conditions
   ``SWAY_PERIOD`` frames (up to 0.79 LR px per frame), so its speed keeps changing; this shows
   the lag of a smoothing filter;
 - ``fast_degraded``: the face moves by ``FAST`` LR px per frame, like a small face crossing the
-  frame; a filter without a velocity lags behind it in proportion to the speed.
+  frame; a filter without a velocity lags behind it in proportion to the speed. Its scene is
+  padded by three times the image size instead of once, so the face stays inside.
 
 Every frame is rendered from the source image: the source is padded by its own size with its
 mean colour, shifted (bicubic) at the source resolution and downscaled (area). So frames differ
@@ -106,16 +107,16 @@ def render(
     points: npt.NDArray[np.float64],
     factor: float,
     offset: tuple[float, float],
+    pad: int = 1,
 ) -> tuple[Image, npt.NDArray[np.float64]]:
-    """A scene of ``image`` padded by its own size on each side (mean colour), scaled by
-    ``factor`` (area) and with the content moved by ``offset`` px of the scene; returns the
-    scene and the landmarks in it."""
+    """A scene of ``image`` padded by ``pad`` times its own size on each side (mean colour),
+    scaled by ``factor`` (area) and with the content moved by ``offset`` px of the scene;
+    returns the scene and the landmarks in it."""
     height, width = image.shape[:2]
     fill = tuple(float(v) for v in image.reshape(-1, 3).mean(axis=0))
-    padded = cv2.copyMakeBorder(
-        image, height, height, width, width, cv2.BORDER_CONSTANT, value=fill
-    )
-    full = (3 * width, 3 * height)
+    px, py = pad * width, pad * height
+    padded = cv2.copyMakeBorder(image, py, py, px, px, cv2.BORDER_CONSTANT, value=fill)
+    full = ((2 * pad + 1) * width, (2 * pad + 1) * height)
     size = (max(1, round(full[0] * factor)), max(1, round(full[1] * factor)))
     scale = np.array([size[0] / full[0], size[1] / full[1]])
     shift = np.asarray(offset, dtype=np.float64) / scale  # source px
@@ -128,7 +129,7 @@ def render(
         borderValue=fill,
     )
     scene = np.asarray(cv2.resize(moved, size, interpolation=cv2.INTER_AREA), dtype=np.uint8)
-    truth = (points + np.array([width, height]) + shift + 0.5) * scale - 0.5
+    truth = (points + np.array([px, py]) + shift + 0.5) * scale - 0.5
     return scene, truth
 
 
@@ -148,16 +149,17 @@ def make_clip(
     eyes = float(CELEBA_TEMPLATE[1, 0] - CELEBA_TEMPLATE[0, 0]) * hr_size / scale
     factor = eyes / interocular(source)
     degradation = SceneDegradation() if condition.endswith("degraded") else None
+    pad = 3 if condition.startswith("fast") else 1  # room for the face to travel
     lr: list[Image] = []
     truth: list[npt.NDArray[np.float64]] = []
     hr: list[Image] = []
     for t in range(frames):
         offset = motion(condition, t)
-        scene, landmarks = render(image, source, factor, offset)
+        scene, landmarks = render(image, source, factor, offset, pad)
         if degradation is not None:
             scene = degrade(scene, degradation, rng)
         hr_offset = (offset[0] * scale, offset[1] * scale)
-        hr_scene, hr_points = render(image, source, factor * scale, hr_offset)
+        hr_scene, hr_points = render(image, source, factor * scale, hr_offset, pad)
         matrix = alignment_matrix(hr_points, CELEBA_TEMPLATE, hr_size)
         hr.append(np.asarray(warp(hr_scene, matrix, hr_size, border="reflect"), dtype=np.uint8))
         lr.append(scene)

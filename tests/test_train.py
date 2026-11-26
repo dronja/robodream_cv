@@ -249,6 +249,7 @@ TRAIN_CONFIGS = {
     "srresnet_id_robust_x8": "realistic_x8",
     "srresnet_id_perc_x4": "realistic",
     "srresnet_id_perc_robust_x4": "realistic",
+    "srresnet_id_perc_robust_x8": "realistic_x8",
 }
 
 

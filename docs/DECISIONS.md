@@ -1057,3 +1057,32 @@ change against `srresnet_x4` / ID similarity / spectral peak ratio; WIDER val KI
 `srresnet_id_robust_x8-20261125-174436` (D25).
 
 **Reason:** it passes all 17 gate checks (D23, D26, D28) without a visible pattern.
+
+### Robust perceptual loss at ×8 (PR 3.9)
+**Context:** at ×4 the defended perceptual term won back LPIPS without a periodic pattern (PR
+3.8, D29). The ×8 reference (D25) has the robust identity term only.
+
+**Decision:**
+- **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml`, the ×8 reference recipe
+  (`srresnet_id_robust_x8`: L1 1.0, robust identity 0.1, 2 epochs from `srresnet_x8`,
+  `realistic_x8.yaml`) plus the defended VGG19 conv5_4 term of PR 3.8, with the same defences
+  (shift 0.05, rotation 5°, scale ×1.1, blur sigma 1 HR px). So the candidate differs from the
+  reference only by the perceptual term.
+- **Perceptual weights 0.005, 0.014 and 0.04.** On the ×8 start model (2026-11-26, 32 training
+  batches of 16, gradient norm with respect to SR at weight 1): the defended term 0.676, the
+  undefended one 1.989, the identity term 0.279 (0.028 at its weight 0.1). At ×4 only the weight
+  at about ⅓× the identity gradient qualified, and 1× and 3× brought a pattern back (PR 3.8).
+  So the grid moves one step down: about 1/9×, ⅓× and 1× the identity gradient. A default taken
+  without a separate question.
+- **Weight selection on the val split, rule set before the runs** (the PR 3.8 rule against the
+  ×8 reference): a weight qualifies if, on val:
+  - on light and medium, against `srresnet_id_robust_x8-20261125-174436`: LPIPS lower, ID
+    similarity higher, PSNR-Y at most 0.3 dB lower, and spectral peak ratio at most 1.0;
+  - on the WIDER `val` faces, KID at most the reference's plus two standard deviations.
+
+  The reference is evaluated on val for this (it had no val evaluation). Among the qualifying
+  weights, the highest mean ID similarity on light and medium wins; a full run of the winner then
+  goes through the gate on test. If none qualifies, the recipe is reported as failing and no full
+  run is made.
+
+SELECTION_PLACEHOLDER

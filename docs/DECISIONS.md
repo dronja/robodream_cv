@@ -766,3 +766,47 @@ the gate reference / ID similarity; WIDER val KID ×10³ (± std):
 
 **Reason:** it passes all 14 gate checks (D23), and unlike the PR 3.3 model (D24) it shows no
 stripe grid and keeps the real-photo KID of the L1 model.
+
+### D26 — Artifact check in the quality gate (closes Q10)
+**Decision** (the user approved the proposal on 2026-11-26): the gate (D23) gets one more check.
+On the frozen WIDER `test` faces of the candidate's scale (`wider_real_x{4,8}`), the
+candidate's KID against real HR faces (all faces) may exceed the reference's by at most 2
+standard deviations of the reference's KID.
+
+**Implementation:** `realworld` and `kid_stds` in `configs/gate.yaml`, `facehall.eval.gate`
+(`artifact_check`). A candidate now needs a real-world evaluation before the gate runs.
+
+**Defaults taken without a separate question:**
+- **One-sided:** a lower KID is not a gain. KID against CelebA rewards invented faces as well
+  as faithful ones (PR 2.5), so the check only catches outputs that move away from real photos.
+  This amends D23's "the real-world set is not gated".
+- **KID, not FID:** KID comes with a spread; the PR 3.4 selection rule used it too.
+- **The spread:** the standard deviation that torchmetrics reports over KID subsets of the
+  reference. It measures the estimator's sampling spread on one set of outputs, not the spread
+  between training runs.
+- **All faces**, not the WIDER subsets.
+
+**Reason:**
+- **The PR 3.3 artifact:** the stripe grid passed the synthetic checks (LPIPS and PSNR-Y barely
+  react to it) but raised the real-photo KID clearly. The same rule on WIDER `val` rejected
+  every model with visible stripes in the PR 3.4 selection.
+- **Checked on the earlier pairs** (2026-11-26, from the existing evaluations; KID ×10³ of the
+  candidate against the limit):
+
+  | Candidate | Reference | KID check | Gate verdict before → after |
+  |---|---|---|---|
+  | `srresnet_x4` (PR 3.1) | `fnet_x4_realistic` | 92.3 ≤ 100.1, pass | pass → pass |
+  | `srresnet_gan_x4` (PR 3.2) | `srresnet_x4` | 55.1 ≤ 96.5, pass | fail → fail |
+  | `srresnet_id_x4` (PR 3.3) | `srresnet_x4` | 124.6 > 96.5, **fail** | fail → fail |
+  | `srresnet_x8` (PR 3.1) | `fnet_x8_tuned` | 98.8 ≤ 106.8, pass | fail → fail |
+  | `srresnet_gan_x8` (PR 3.2) | `fnet_x8_tuned` | 78.8 ≤ 106.8, pass | fail → fail |
+  | `srresnet_id_x8` (PR 3.3) | `fnet_x8_tuned` | 141.4 > 106.8, **fail** | pass → **fail** |
+  | `srresnet_id_robust_x8` (PR 3.4) | `fnet_x8_tuned` | 98.4 ≤ 106.8, pass | pass → pass |
+
+  The only changed verdict is the PR 3.3 ×8 model, which the user had rejected by hand (D24).
+- **Current limits:** ×4 96.46 (`srresnet_x4`, 92.29 ± 2.09), ×8 102.05
+  (`srresnet_id_robust_x8`, 98.37 ± 1.84).
+
+**Limits of the check:** KID sees any shift of the output statistics, not artifacts as such. A
+model whose outputs are faithful but look less like CelebA could fail it. Visual checks of the
+grids stay part of every gate decision.

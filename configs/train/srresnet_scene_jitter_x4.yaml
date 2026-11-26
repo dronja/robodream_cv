@@ -1,6 +1,7 @@
 # srresnet_scene_x4 (Q15) with alignment jitter matched to the face detector's errors: the p95
 # shift, rotation and scale error of YuNet on degraded x4 scenes (D31). Only the jitter differs
 # from srresnet_scene_x4. `best` is the last epoch.
+# Not adopted: no variant met the D32 val rule (docs/DECISIONS.md, PR 4.3).
 include:
   data: ../data/celeba_128.yaml
   degrade: ../degrade/realistic.yaml

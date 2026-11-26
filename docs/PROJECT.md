@@ -97,10 +97,15 @@ As of 2026-11-26:
   - Merged: PR 4.1 (face detection with five landmarks: YuNet, D31; PR #28, `558fdd1`).
     Result: an upscale by the model scale finds 95–99% of faces of the model input size, but
     the alignment error often exceeds the training jitter (§9).
-  - In review: PR 4.2 (align, restore, paste back; end-to-end evaluation; branch
-    `feat/paste-back`). Result: the pipeline works end to end and beats a bicubic upscale in
+  - Merged: PR 4.2 (align, restore, paste back; end-to-end evaluation; PR #29, `fa53c6e`).
+    Result: the pipeline works end to end and beats a bicubic upscale in
     PSNR, SSIM and LPIPS. It loses about 0.06 ID to the alignment at LR resolution, which the
     protocols do not see, and stays below bicubic in ID except at ×8 on degraded faces (§9).
+  - Decided: fine-tune on pipeline-like LR crops before the CLI (D32).
+  - In review: PR 4.3 (LR crops made like the pipeline's, `data.scene`; branch
+    `feat/pipeline-crops`). Result: no fine-tuned variant beats the references end to end on
+    val; the references stay. The LR-alignment cost is mostly information lost in the
+    resampling, not a mismatch with training (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -120,6 +125,7 @@ robodream_cv/
 │                              # train/{fnet,cnet,srresnet,srresnet_gan,srresnet_id,srresnet_id_robust}_x{4,8}.yaml,
 │                              # train/srresnet_id_perc_x4.yaml,
 │                              # train/srresnet_id_perc_robust_x{4,8}.yaml,
+│                              # train/srresnet_scene{,_jitter}_x{4,8}.yaml (PR 4.3),
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
@@ -151,7 +157,8 @@ robodream_cv/
 │   │                          # endtoend.py (pipeline on synthetic scenes, PR 4.2)
 │   ├── pipeline.py            # end-to-end inference: detect, align, restore, paste back (PR 4.2)
 │   ├── weights.py             # pinned third-party weights (download, checksums)
-│   └── align/                 # similarity.py (Umeyama, matrices), template.py, warp.py,
+│   └── align/                 # similarity.py (Umeyama, matrices), template.py,
+│                              # warp.py (warp, inverse warp, resample_crop),
 │                              # detect.py (YuNet face detector, D31)
 ├── scripts/                   # prepare_dataset.py (CelebA mirror → files + manifest),
 │                              # prepare_wider.py (WIDER FACE → real-world LR crops),
@@ -1286,7 +1293,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Limits:** CelebA scenes are optimistic (near-frontal, centred faces, flat backgrounds, a
     light degradation). YuNet was trained on WIDER FACE, so the WIDER real-world set cannot
     measure it.
-- **Inference pipeline (PR 4.2, in review).** Defaults, the full table and reasons in
+- **Inference pipeline (PR 4.2, done).** Defaults, the full table and reasons in
   `DECISIONS.md` (2026-11-26, "Inference pipeline and its end-to-end evaluation (PR 4.2)").
   - **Code:**
     - `facehall.pipeline.Enhancer` (`from_checkpoint`, `enhance(image, landmarks=None)`):
@@ -1318,7 +1325,8 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Observations:**
     - **Alignment at LR resolution** is the largest cost: −0.058 ID at ×4 and −0.055 at ×8 on
       clean scenes. The interpolation does not matter. The models were trained on LR crops on
-      the template's grid, which a real photo never gives.
+      the template's grid, which a real photo never gives; but fine-tuning on resampled crops
+      does not recover the loss (PR 4.3), so it is mostly information lost in the resampling.
     - **Paste-back and detection** cost little identity. The paste-back raises LPIPS by
       0.05–0.07, because hair and background stay bicubic.
     - **Against a bicubic upscale:**
@@ -1327,8 +1335,37 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       - the ×4 reference is already below bicubic in ID on clean and light protocols.
     - **Colour correction** has no effect (off by default).
     - **Grids** (local): no seams. At ×8, faces get younger and some look like another person.
-  - **Consequence:** the protocol numbers overstate the pipeline in ID. Candidate remedy:
-    fine-tune on pipeline-like LR crops (Q15).
+  - **Consequence:** the protocol numbers overstate the pipeline in ID. Fine-tuning on
+    pipeline-like LR crops was tried in PR 4.3 and does not help.
+- **LR crops made like the pipeline's (PR 4.3, in review).** Decision, data, selection rule,
+  tables and reasons in `DECISIONS.md` (D32, "LR crops made like the pipeline's (PR 4.3)").
+  - **Code:**
+    - `facehall.align.resample_crop`: the pipeline's LR crop, now shared;
+    - `data.scene` (`SceneConfig`): with probability `prob`, the face is degraded as part of a
+      larger scene with a random sub-pixel position (±0.5 LR px), rotation (±10°) and size
+      (0.8–1.25×), then cut out at LR resolution. The HR target is unchanged. Probability 0
+      draws nothing, so the protocols and their digests stay as they were.
+  - **Runs:** the reference recipes from the same L1 starts, 2 epochs, on 2026-11-26 from
+    `0309ebe`:
+    - A: `srresnet_scene_x{4,8}`;
+    - B: `srresnet_scene_jitter_x{4,8}`, with jitter matched to the detector's p95 errors (D31).
+  - **Selection on 1,000 val scenes** (`detected` variant, rule set before the runs): **no
+    variant qualifies.** ID clean / degraded:
+
+    | Model | ×4 | ×8 |
+    |---|---|---|
+    | reference | 0.613 / 0.367 | 0.261 / 0.128 |
+    | A: scene crops | 0.607 / 0.361 | 0.257 / 0.127 |
+    | B: + detector jitter | 0.607 / 0.362 | 0.260 / 0.132 |
+
+  - **Observations:**
+    - on crops resampled at LR the fine-tuned models equal the references in ID, and on grid
+      crops they lose 0.024–0.027;
+    - their remaining grid-to-resampled gap equals that of plain bicubic upsampling, so the
+      cost of the LR alignment is mostly information lost in the resampling;
+    - detector-matched jitter helps only on ×8 degraded scenes (+0.004 ID).
+  - **Result:** the references stay (D25, D29). Not tested: training the L1 start from scratch
+    on scene crops.
 
 ## 10. Roadmap and progress
 
@@ -1444,13 +1481,13 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       feathered-ellipse mask → inverse warp → paste-back on the bicubic background; optional
       colour correction. End-to-end evaluation on synthetic CelebA scenes: aligned, LR-aligned,
       pasted, detected (`scripts/evaluate_pipeline.py`)
-- [ ] **PR 4.3** `facehall enhance` for photos and folders; a face box as a fallback (given
+- [x] **PR 4.3** `feat(data):` LR crops made like the pipeline's (`data.scene`, D32); the
+      references fine-tuned on them, without and with detector-matched jitter (D31). No variant
+      meets the val rule; the references stay (§9)
+- [ ] **PR 4.4** `facehall enhance` for photos and folders; a face box as a fallback (given
       landmarks work since PR 4.2); output marking: PNG text / XMP (`AI-enhanced`, model,
       version, parameters, input sha256); optional visible watermark; consider C2PA
-- [ ] **PR 4.4** Video (per frame; check flicker between frames)
-- [ ] *(candidate, Q15)* Fine-tune the references on LR crops made like the pipeline's
-      (degradation at the scene's resolution, alignment at LR resolution, PR 4.2) and with
-      alignment jitter matched to the detector's errors (D31)
+- [ ] **PR 4.5** Video (per frame; check flicker between frames)
 
 **Done when** an arbitrary photo with several faces is processed end to end.
 
@@ -1481,11 +1518,11 @@ with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
 by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
 D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28, Q13 (the PR 3.8 ×4 model as reference) by D29, Q14
-(Phase 4 or the rest of Phase 3 first) by D30.
+(Phase 4 or the rest of Phase 3 first) by D30, Q15 (fine-tune on pipeline-like LR crops first)
+by D32.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q15 | The pipeline loses about 0.06 ID to the alignment at LR resolution (PR 4.2). Fine-tune the references on pipeline-like LR crops before PR 4.3 (`facehall enhance`, output marking), or after it? | before PR 4.3 | Before: after a change to the data pipeline it is a fine-tune (the reference recipes take 7–9 min per scale), and every later step (CLI, API, video) uses these models |
 | Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
 
 ### Risks
@@ -1497,7 +1534,8 @@ D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in th
 - The evaluation protocols cut the LR crop on the template's pixel grid, which no real photo
   gives. In the pipeline the alignment at LR resolution costs about 0.06 ID at both scales
   (PR 4.2), so the `RESULTS.md` numbers overstate the product in ID. On clean and lightly
-  degraded faces, the pipeline's ID is below a plain bicubic upscale.
+  degraded faces, the pipeline's ID is below a plain bicubic upscale. Fine-tuning on such crops
+  does not recover it (PR 4.3).
 - ×8 from 16 px means ≈4 px between the eyes: the output is mostly invented, and ID similarity
   will be low. This must be stated clearly (`CLAUDE.md` §11).
 - JPEG artifacts in the HR targets (§6.4) limit perceptual quality.
@@ -1572,8 +1610,10 @@ uv run python scripts/download_weights.py vgg19                      # perceptua
 uv run python scripts/download_weights.py facenet_vggface2           # identity loss (PR 3.3)
 uv run python scripts/download_weights.py yunet                      # face detector (D31)
 uv run python scripts/measure_detection.py     # detection and alignment on CelebA scenes, ~12 min
-uv run python scripts/evaluate_pipeline.py --ckpt runs/<id>/best.safetensors
+uv run python scripts/evaluate_pipeline.py --ckpt runs/<id>/best.safetensors [--split test]
                                                # pipeline end to end on CelebA scenes, ~8 min
+uv run facehall train --config configs/train/srresnet_scene_x4.yaml   # pipeline-like LR crops
+                                               # (PR 4.3, D32), ~10 min
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --model bicubic
 uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/best.safetensors
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/

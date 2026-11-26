@@ -2,6 +2,7 @@
 # made like the inference pipeline's: the face is degraded as part of a larger scene and cut
 # out by a warp at LR resolution (data.scene, Q15). Only the LR crops differ from the reference
 # recipe. `best` is the last epoch.
+# Not adopted: no variant met the D32 val rule (docs/DECISIONS.md, PR 4.3).
 include:
   data: ../data/celeba_128.yaml
   degrade: ../degrade/realistic_x8.yaml

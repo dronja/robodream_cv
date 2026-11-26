@@ -3,7 +3,9 @@
 Output directory ``<output>/<protocol>/<split>/<model label>/``:
 
 - ``metrics.json``: means and standard deviations per subset, the metric setup and provenance
-  (git commit, versions, device, checkpoint and recognition-model checksums, dataset counts);
+  (git commit, versions, device, checkpoint and recognition-model checksums, dataset counts),
+  and ``spectrum``: the SR / HR power-spectrum ratios over all images, a periodic-pattern check
+  (``facehall.eval.spectrum``, D28);
 - ``per_image.parquet``: every metric per image, with the ``padded``, ``blurry`` and subgroup
   columns and the drawn degradation parameters (``degradation``, JSON), so other breakdowns need
   no re-run;
@@ -54,6 +56,7 @@ from facehall.eval.metrics import (
     psnr_y,
     ssim_y,
 )
+from facehall.eval.spectrum import SpectrumRatio
 from facehall.provenance import file_sha256, git_commit, package_versions
 from facehall.train.trainer import (
     VERSIONED,
@@ -180,6 +183,7 @@ def evaluate_model(
     cache_path = Path(config.output) / CACHE / f"identity_hr-{fingerprint[:16]}.npz"
     cached = load_embeddings(cache_path, fingerprint, len(dataset)) if identity else None
     hr_embeddings: list[npt.NDArray[np.float64]] = []
+    spectrum = SpectrumRatio(config.data.hr_size, config.data.hr_size, device)
 
     names = [*scores, *(["identity"] if identity is not None else [])]
     values: dict[str, list[npt.NDArray[np.float64]]] = {name: [] for name in names}
@@ -197,6 +201,7 @@ def evaluate_model(
             lr = batch["lr"].to(device, non_blocking=True)
             hr = batch["hr"].to(device, non_blocking=True)
             sr = quantize(model(lr).float())
+            spectrum.update(sr, hr)
             batch_indices = batch["index"].numpy()
             for name, metric in scores.items():
                 values[name].append(metric(sr, hr).double().cpu().numpy())
@@ -230,6 +235,7 @@ def evaluate_model(
     pq.write_table(table, out / "per_image.parquet")
 
     subsets = summarize(columns, names, list(subgroups))
+    spectral = spectrum.summary()
     summary = {
         "protocol": config.name,
         "level": config.level or config.name,
@@ -248,9 +254,16 @@ def evaluate_model(
         "manifest": manifest_info(Path(config.data.root)),
         "metric_setup": metric_setup(config),
         "subsets": subsets,
+        "spectrum": spectral,
     }
     write_json(out / "metrics.json", summary)
-    log.info("%s: %s in %.0f s", label, format_means(subsets["all"]), seconds)
+    log.info(
+        "%s: %s, spectral peak %.2f in %.0f s",
+        label,
+        format_means(subsets["all"]),
+        spectral["peak_ratio"],
+        seconds,
+    )
     return out
 
 
@@ -332,6 +345,8 @@ def metric_setup(config: EvalConfig) -> dict[str, Any]:
         "ssim_y": "torchmetrics SSIM on Y: Gaussian window 11, sigma 1.5, data range 255",
         "lpips": {"net": config.metrics.lpips} if config.metrics.lpips else None,
         "identity": None,
+        "spectrum": "luma (BT.601 weights), mean removed, 2-D Hann window; power summed over all "
+        "images; SR / HR per frequency bin, peak over radius >= 0.25 cycles/px",
     }
     if config.metrics.identity:
         path = Path(config.metrics.identity)

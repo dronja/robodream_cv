@@ -896,3 +896,65 @@ script that is not in the repository. Method:
 - **Reference:** by D23 and D26 the model would replace `srresnet_x4`. It carries a periodic
   pattern, the reason for D24, so the replacement waits for the user (`docs/PROJECT.md` §11,
   Q11); `configs/gate.yaml` is unchanged.
+
+### D27 — The PR 3.6 ×4 model does not become the reference (closes Q11)
+**Decision** (the user, 2026-11-26): `srresnet_id_perc_x4-20261126-094522` passes the gate (D23,
+D26) but does not replace `srresnet_x4-20261125-093232` as the ×4 reference.
+
+**Reason:** its outputs carry a fine periodic pattern from the perceptual term (spectral peak
+ratio 25.7 on val medium), as the PR 3.3 model did (D24).
+
+### D28 — Spectral check in the quality gate (closes Q12)
+**Decision** (the user approved the proposal on 2026-11-26): the gate (D23, D26) gets a
+periodic-pattern check. On each gated protocol (light and medium test), the candidate's
+**spectral peak ratio** must be at most **1.0**.
+
+**The measure** (`facehall.eval.spectrum`):
+- luma of every SR and HR image (BT.601 weights), mean removed, times a 2-D Hann window;
+- power spectra summed over all images of the protocol;
+- the ratio SR / HR per frequency bin; the peak ratio is its maximum over the bins at radius
+  ≥ 0.25 cycles/px.
+
+It is now recorded by every synthetic evaluation (`spectrum` in `metrics.json`, also the
+ratios of five radial bands). Evaluations from before this change lack it; the gate then asks for
+a new evaluation of the candidate.
+
+**Implementation:** `spectral_peak` in `configs/gate.yaml`; `facehall.eval.gate`.
+
+**Defaults taken without a separate question:**
+- **An absolute limit, not one relative to the reference:** a model without a pattern stays
+  below 1 whatever the reference.
+- **The meaning of 1:** in no frequency bin may SR have more power, summed over the protocol,
+  than the real HR faces. A faithful model can at best match HR power; more is invented energy.
+- **Radius 0.25 cycles/px:** periods of 4 px and shorter; the patterns seen so far have periods
+  of 2–4 px.
+
+**Limit set on val** (2026-11-26, every val image, from the working tree that became this PR's
+first commit; peak ratio on light / medium):
+
+| Model | ×4 | ×8 |
+|---|---|---|
+| bicubic upsampling | 0.27 / 0.27 | 0.01 / 0.01 |
+| FNet (`fnet_x4_realistic`, `fnet_x8_tuned`) | 0.16 / 0.10 | 0.24 / 0.23 |
+| SRResNet-v2 L1 (`srresnet_x{4,8}`) | 0.22 / 0.18 | 0.08 / 0.06 |
+| robust identity, val sweep 0.3 | 0.49 / 0.31 | 0.21 / 0.29 |
+| robust identity ×8, 0.1 (`srresnet_id_robust_x8`) | — | 0.12 / 0.11 |
+| robust identity, val sweep 1.0 (rejected by KID in PR 3.4) | 2.93 / 6.62 | 1.34 / 1.53 |
+| identity, PR 3.3 (`srresnet_id_x{4,8}`; stripe grid) | 5.92 / 9.21 | 2.30 / 2.79 |
+| ESRGAN recipe (`srresnet_gan_x{4,8}`) | 4.21 / 2.35 | 21.28 / 18.89 |
+| perceptual 0.03 (val sweep) / 0.01 (`srresnet_id_perc_x4`) | 33.10 / 23.75; 37.01 / 25.66 | — |
+
+- **The two groups:** models without a visible pattern stay at or below 0.49; models with a
+  known pattern (PR 3.3, PR 3.6, ESRGAN) are at 2.3 or above. So the proposed limit of 1 holds.
+- **Rejected by KID before:** the PR 3.4 val models with weight 1.0, which KID rejected, are
+  above the limit too.
+- **What it misses:** the PR 3.4 ×8 val model with weight 0.3 (KID 117.3, faint stripes in the
+  zoomed grid) stays at 0.21–0.29. The KID check (D26) is still needed: the two checks see
+  different things.
+- **ESRGAN** puts more power than HR into every high-frequency band (ratios 0.9–1.6), not only
+  into peaks: invented texture, as its grids showed (PR 3.2).
+
+**Limits of the check:** it sees regular patterns and excess high-frequency power, not every
+artifact (blotches, distorted features). Visual checks stay part of every gate decision.
+
+RESULT_PLACEHOLDER

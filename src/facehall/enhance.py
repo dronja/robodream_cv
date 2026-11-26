@@ -1,11 +1,11 @@
-"""``facehall enhance``: restore the faces of photos and folders of photos (PR 4.4).
+"""``facehall enhance``: restore the faces of photos, videos and folders of them (PR 4.4, 4.5).
 
 Each input image goes through ``facehall.pipeline.Enhancer`` and is written with its marks
-(``facehall.marking``).
+(``facehall.marking``); each video goes through ``facehall.video`` frame by frame.
 
-- **Inputs:** image files or folders (searched recursively).
+- **Inputs:** image or video files, or folders (searched recursively).
 - **Outputs:** one output file for one input file, or an output folder that mirrors the inputs.
-  Outputs are PNG by default; JPEG and WebP are lossy.
+  Images are written as PNG by default (JPEG and WebP are lossy), videos as MP4 (H.264).
 - **Overwriting:** existing outputs are not overwritten unless asked, and an output never
   replaces its input.
 - **Image orientation:** the EXIF orientation is applied, and alpha is dropped.
@@ -24,10 +24,11 @@ import numpy as np
 import numpy.typing as npt
 from PIL import Image, ImageOps
 
-from facehall import marking
+from facehall import marking, video
 from facehall.pipeline import Box, Enhancer, PipelineConfig
 
 INPUT_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+MEDIA_SUFFIXES = INPUT_SUFFIXES + video.INPUT_SUFFIXES
 
 
 @dataclass(frozen=True)
@@ -36,26 +37,47 @@ class Job:
     target: Path
 
 
-def find_images(folder: Path) -> list[Path]:
+def find_media(folder: Path) -> list[Path]:
+    """The images and videos in ``folder`` and its subfolders."""
     return sorted(
-        p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in INPUT_SUFFIXES
+        p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES
     )
 
 
 def plan(
-    inputs: Sequence[Path], output: Path, *, suffix: str = ".png", overwrite: bool = False
+    inputs: Sequence[Path],
+    output: Path,
+    *,
+    suffix: str = ".png",
+    video_suffix: str = ".mp4",
+    overwrite: bool = False,
 ) -> list[Job]:
     """Input and output path pairs.
 
-    One input file and an output with an image suffix give one output file. Otherwise
-    ``output`` is a folder: an input file ``a/b.jpg`` goes to ``output/b<suffix>``, and the
-    images of an input folder go to the same relative paths under ``output``.
+    One input file and an output with a suffix of the same kind (image or video) give one
+    output file. Otherwise ``output`` is a folder: an input file ``a/b.jpg`` goes to
+    ``output/b<suffix>`` (videos: ``video_suffix``), and the images and videos of an input
+    folder go to the same relative paths under ``output``.
     """
     marking.output_format(Path("x" + suffix))
+    if video_suffix not in video.OUTPUT_SUFFIXES:
+        raise ValueError(f"unsupported video format {video_suffix}; use {video.OUTPUT_SUFFIXES}")
     for path in inputs:
         if not path.exists():
             raise FileNotFoundError(f"{path}: no such file or folder")
-    if len(inputs) == 1 and inputs[0].is_file() and output.suffix.lower() in marking.FORMATS:
+
+    def target_suffix(path: Path) -> str:
+        return video_suffix if video.is_video(path) else suffix
+
+    kind = output.suffix.lower()
+    if (
+        len(inputs) == 1
+        and inputs[0].is_file()
+        and kind in (*marking.FORMATS, *video.OUTPUT_SUFFIXES)
+    ):
+        expected = video.OUTPUT_SUFFIXES if video.is_video(inputs[0]) else tuple(marking.FORMATS)
+        if kind not in expected:
+            raise ValueError(f"{output}: give an output of the input's kind, one of {expected}")
         jobs = [Job(inputs[0], output)]
     else:
         if output.is_file():
@@ -64,13 +86,13 @@ def plan(
         for path in inputs:
             if path.is_dir():
                 jobs += [
-                    Job(image, (output / image.relative_to(path)).with_suffix(suffix))
-                    for image in find_images(path)
+                    Job(item, (output / item.relative_to(path)).with_suffix(target_suffix(item)))
+                    for item in find_media(path)
                 ]
             else:
-                jobs.append(Job(path, output / (path.stem + suffix)))
+                jobs.append(Job(path, output / (path.stem + target_suffix(path))))
     if not jobs:
-        raise ValueError("no input images found")
+        raise ValueError("no input images or videos found")
     targets = [j.target.resolve() for j in jobs]
     if len(set(targets)) < len(targets):
         raise ValueError("two inputs would be written to the same output file; rename one")
@@ -119,7 +141,9 @@ def enhance_files(
     report: Callable[[str], None] = print,
 ) -> list[tuple[Path, str]]:
     """Enhance and write every job; returns the failures (input, message)."""
-    if (landmarks is not None or boxes is not None) and len(jobs) != 1:
+    if (landmarks is not None or boxes is not None) and (
+        len(jobs) != 1 or video.is_video(jobs[0].source)
+    ):
         raise ValueError("landmarks and face boxes are for one input image only")
     faces_from = "detector"
     if landmarks is not None:
@@ -129,6 +153,22 @@ def enhance_files(
     settings = parameters(enhancer.config)
     failures: list[tuple[Path, str]] = []
     for job in jobs:
+        if video.is_video(job.source):
+            try:
+                stats = video.enhance_video(
+                    enhancer,
+                    job.source,
+                    job.target,
+                    parameters=settings,
+                    visible_mark=visible_mark,
+                    report=report,
+                )
+            except (OSError, ValueError) as error:
+                failures.append((job.source, str(error)))
+                report(f"{job.source}: failed: {error}")
+                continue
+            report(f"{job.source} -> {job.target}: {stats.summary()}")
+            continue
         try:
             image, digest = load_image(job.source)
             result = enhancer.enhance(image, landmarks=landmarks, boxes=boxes)
@@ -191,6 +231,7 @@ def run_enhance(
     boxes: Sequence[str] = (),
     visible_mark: bool = False,
     suffix: str = ".png",
+    video_suffix: str = ".mp4",
     quality: int = 95,
     overwrite: bool = False,
     device: str = "auto",
@@ -204,7 +245,7 @@ def run_enhance(
         raise ValueError("give --landmarks or --box, not both")
     points = [numbers(t, 10, "--landmarks") for t in landmarks] or None
     face_boxes = [to_box(numbers(t, 4, "--box")) for t in boxes] or None
-    jobs = plan(inputs, output, suffix=suffix, overwrite=overwrite)
+    jobs = plan(inputs, output, suffix=suffix, video_suffix=video_suffix, overwrite=overwrite)
     path = checkpoint if checkpoint is not None else Path(config.models.checkpoint(scale or 4))
     if not path.is_file():
         raise FileNotFoundError(

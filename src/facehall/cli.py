@@ -65,19 +65,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     enhance = commands.add_parser(
         "enhance",
-        help="restore the faces of photos",
-        description="Restore the faces of photos or folders of photos with a restoration model "
-        "and write marked outputs (AI-enhanced metadata). The restored faces are a plausible "
+        help="restore the faces of photos and videos",
+        description="Restore the faces of photos, videos or folders of them with a restoration "
+        "model and write marked outputs (AI-enhanced metadata; videos need the ffmpeg program). "
+        "The restored faces are a plausible "
         "reconstruction, not a recovery of the real details: do not use them to identify a "
         "person or as evidence.",
     )
-    enhance.add_argument("inputs", type=Path, nargs="+", metavar="INPUT", help="image or folder")
+    enhance.add_argument(
+        "inputs", type=Path, nargs="+", metavar="INPUT", help="image, video or folder"
+    )
     enhance.add_argument(
         "-o",
         "--output",
         type=Path,
         required=True,
-        help="output image (one input image) or folder (mirrors the inputs)",
+        help="output image or video (one input file) or folder (mirrors the inputs)",
     )
     model = enhance.add_mutually_exclusive_group()
     model.add_argument(
@@ -123,7 +126,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--format",
         choices=("png", "jpg", "webp"),
         default="png",
-        help="output format in an output folder (default: %(default)s)",
+        help="image format in an output folder (default: %(default)s)",
+    )
+    enhance.add_argument(
+        "--video-format",
+        choices=("mp4", "mkv", "mov"),
+        default="mp4",
+        help="video format in an output folder (default: %(default)s)",
     )
     enhance.add_argument("--quality", type=int, default=95, help="JPEG and WebP quality")
     enhance.add_argument("--overwrite", action="store_true", help="replace existing outputs")
@@ -167,6 +176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 boxes=args.box,
                 visible_mark=args.watermark,
                 suffix="." + args.format,
+                video_suffix="." + args.video_format,
                 quality=args.quality,
                 overwrite=args.overwrite,
                 device=args.device,

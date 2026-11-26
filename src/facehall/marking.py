@@ -8,6 +8,9 @@ The marks written into the file:
   - XMP (iTXt ``XML:com.adobe.xmp``);
   - EXIF.
 - **JPEG and WebP:** XMP and EXIF.
+- **Video** (MP4, MOV, MKV; ``facehall.video``): container tags ``ai_enhanced``, ``comment``
+  and ``description`` (``NOTICE``), ``digital_source_type`` and ``facehall`` (the record, with
+  face counts over all frames).
 
 The XMP packet carries:
 
@@ -99,6 +102,47 @@ def record(
             {k: f[k] for k in ("source", "score", "restored", "reason", "region")} for f in faces
         ],
         "watermark": watermark,
+    }
+
+
+def video_record(
+    *,
+    model: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    input_sha256: str,
+    input_size: tuple[int, int],
+    output_size: tuple[int, int],
+    video: Mapping[str, Any],
+    faces: Mapping[str, int],
+    watermark: bool,
+    created: str | None = None,
+) -> dict[str, Any]:
+    """The provenance record of an output video: as ``record``, with face counts over all
+    frames instead of one entry per face."""
+    rec = record(
+        [],
+        model=model,
+        parameters=parameters,
+        input_sha256=input_sha256,
+        input_size=input_size,
+        output_size=output_size,
+        faces_from="detector",
+        watermark=watermark,
+        created=created,
+    )
+    rec["video"] = dict(video)
+    rec["faces"] = dict(faces)
+    return rec
+
+
+def video_tags(rec: Mapping[str, Any]) -> dict[str, str]:
+    """Container tags of a marked video (MP4, MOV, MKV)."""
+    return {
+        "ai_enhanced": "true",
+        "comment": NOTICE,
+        "description": NOTICE,
+        "digital_source_type": DIGITAL_SOURCE_TYPE,
+        "facehall": json.dumps(rec, sort_keys=True),
     }
 
 

@@ -18,6 +18,16 @@ mask:                        # feathered ellipse in normalized crop coordinates;
 models:                      # the references (configs/gate.yaml); FACEHALL_RUNS: their folder
   x4: ${oc.env:FACEHALL_RUNS,runs}/srresnet_id_perc_robust_x4-20261126-121325/best.safetensors  # D29
   x8: ${oc.env:FACEHALL_RUNS,runs}/srresnet_id_robust_x8-20261125-174436/best.safetensors  # D25
+video:                       # facehall enhance on videos (PR 4.5)
+  smooth: false              # alpha-beta filter of each face track (decided by the flicker measure)
+  alpha: 0.5
+  beta: 0.1
+  hold: 0                    # frames a missed face stays restored (decided by the flicker measure)
+  track_iou: 0.3
+  codec: libx264             # system ffmpeg; libx264 or libx265
+  crf: 18
+  preset: medium
+  audio: true                # keep the input's audio (AAC in MP4 and MOV)
 max_downscale: 2.0           # faces more than 2x the model input size are left to the background
 max_upscale: 2.0             # so are faces more than 2x smaller (mostly false detections)
 max_output_pixels: 200000000 # larger outputs are refused (3 bytes per pixel)

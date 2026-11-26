@@ -99,10 +99,34 @@ class ModelsConfig:
 
 
 @dataclass
+class VideoConfig:
+    """Video (``facehall.video``, PR 4.5): face tracks and encoding."""
+
+    smooth: bool = False  # alpha-beta filter of each face track's landmarks and box
+    alpha: float = 0.5
+    beta: float = 0.1
+    hold: int = 0  # frames a missed face stays restored at its predicted place
+    track_iou: float = 0.3  # box IoU that continues a track
+    codec: str = "libx264"  # libx264 or libx265 (system ffmpeg)
+    crf: int = 18
+    preset: str = "medium"
+    audio: bool = True  # keep the input's audio (re-encoded to AAC in MP4 and MOV)
+
+    def __post_init__(self) -> None:
+        if self.codec not in ("libx264", "libx265"):
+            raise ValueError(f"video codec must be libx264 or libx265, got {self.codec!r}")
+        if not 0 <= self.crf <= 51:
+            raise ValueError(f"video crf must be in [0, 51], got {self.crf}")
+        if not 0 <= self.hold <= 25:
+            raise ValueError(f"video hold must be in [0, 25] frames, got {self.hold}")
+
+
+@dataclass
 class PipelineConfig:
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     mask: MaskConfig = field(default_factory=MaskConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
+    video: VideoConfig = field(default_factory=VideoConfig)
     max_downscale: float = 2.0  # larger faces are left to the background
     max_upscale: float = 2.0  # so are faces this many times smaller than the model input
     max_output_pixels: int = 200_000_000  # larger outputs are refused (memory: 3 bytes each)
@@ -304,9 +328,10 @@ class Enhancer:
         image: Image,
         landmarks: Sequence[npt.ArrayLike] | None = None,
         boxes: Sequence[Box] | None = None,
+        detections: Sequence[Face] | None = None,
     ) -> Enhanced:
-        """Restore the faces of ``image``: detected, or at the given landmarks or face boxes
-        (input pixels)."""
+        """Restore the faces of ``image``: detected, or at the given landmarks, face boxes or
+        detections (YuNet's convention, e.g. smoothed over video frames); input pixels."""
         if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
             raise ValueError(
                 f"expected an RGB uint8 image (H, W, 3), got {image.shape} {image.dtype}"
@@ -318,10 +343,13 @@ class Enhancer:
                 f"the output would have {pixels / 1e6:.0f} MP at x{self.scale}, more than the "
                 f"limit of {self.config.max_output_pixels / 1e6:.0f} MP (max_output_pixels)"
             )
-        if landmarks is not None and boxes is not None:
-            raise ValueError("give landmarks or face boxes, not both")
+        if sum(v is not None for v in (landmarks, boxes, detections)) > 1:
+            raise ValueError("give landmarks, face boxes or detections, not more than one")
         found: list[tuple[Points, str, float | None, Points]] = []
-        if landmarks is not None:
+        if detections is not None:
+            template = self.yunet_template()
+            found = [(f.landmarks, "detected", f.score, template) for f in detections]
+        elif landmarks is not None:
             found = [(given_points(p), "given", None, CELEBA_TEMPLATE) for p in landmarks]
         elif boxes is not None:
             found = self.faces_in_boxes(image, boxes)

@@ -1,0 +1,50 @@
+# Robust identity loss plus a robust perceptual term (PR 3.9) on SRResNet-v2, x8: the x4 recipe
+# srresnet_id_perc_robust_x4 (PR 3.8) at x8, with the x8 identity weight of PR 3.4 (0.1). Same
+# data and degradations as srresnet_x8 (realistic_x8, D22). The perceptual weight was chosen on
+# the val split (docs/DECISIONS.md, PR 3.9); no weight met the selection rule, because every one
+# lowers ID similarity below the reference's. `best` is the last epoch.
+include:
+  data: ../data/celeba_128.yaml
+  degrade: ../degrade/realistic_x8.yaml
+  model: ../model/srresnet.yaml
+name: srresnet_id_perc_robust_x8
+scale: 8
+seed: 0
+train:
+  epochs: 2
+  init: runs/srresnet_x8-20261125-095801/best.safetensors   # local run (PR 3.1)
+  batch_size: 16
+  loss: l1
+  losses:
+    pixel: 1.0
+    identity: 0.1       # the x8 weight chosen on val in PR 3.4 (srresnet_id_robust_x8)
+    perceptual: 0.005   # no weight met the val rule (0.005, 0.014, 0.04); not trained in full
+  identity:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/facenet_vggface2/20180402-114759-vggface2.pt
+    crop_side: 0.875
+    crop_center_y: 0.55
+    jitter:
+      shift: 0.05
+      rotation: 5.0
+      scale: 0.1
+    blur: 1.0
+  perceptual:
+    weights: ${oc.env:FACEHALL_WEIGHTS,/mnt/storage/AI/Face/weights}/vgg19/vgg19-dcbb9e9d.pth
+    layer: conv5_4
+    jitter:
+      shift: 0.05       # x the image side (6.4 px at 128): more than the 2 and 4 px periods of PR 3.6
+      rotation: 5.0     # degrees
+      scale: 0.1
+    blur: 1.0           # HR px, as for the identity term
+  best_metric: none
+  optimizer:
+    name: adam
+    lr: 1.0e-4
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+  scheduler:
+    name: cosine
+    min_lr: 1.0e-6
+  ema_decay: 0.999
+  precision: bf16

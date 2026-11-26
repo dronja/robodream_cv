@@ -1057,3 +1057,64 @@ change against `srresnet_x4` / ID similarity / spectral peak ratio; WIDER val KI
 `srresnet_id_robust_x8-20261125-174436` (D25).
 
 **Reason:** it passes all 17 gate checks (D23, D26, D28) without a visible pattern.
+
+### Robust perceptual loss at ×8 (PR 3.9)
+**Context:** at ×4 the defended perceptual term won back LPIPS without a periodic pattern (PR
+3.8, D29). The ×8 reference (D25) has the robust identity term only.
+
+**Decision:**
+- **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml`, the ×8 reference recipe
+  (`srresnet_id_robust_x8`: L1 1.0, robust identity 0.1, 2 epochs from `srresnet_x8`,
+  `realistic_x8.yaml`) plus the defended VGG19 conv5_4 term of PR 3.8, with the same defences
+  (shift 0.05, rotation 5°, scale ×1.1, blur sigma 1 HR px). So the candidate differs from the
+  reference only by the perceptual term.
+- **Perceptual weights 0.005, 0.014 and 0.04.** On the ×8 start model (2026-11-26, 32 training
+  batches of 16, gradient norm with respect to SR at weight 1): the defended term 0.676, the
+  undefended one 1.989, the identity term 0.279 (0.028 at its weight 0.1). At ×4 only the weight
+  at about ⅓× the identity gradient qualified, and 1× and 3× brought a pattern back (PR 3.8).
+  So the grid moves one step down: about 1/9×, ⅓× and 1× the identity gradient. A default taken
+  without a separate question.
+- **Weight selection on the val split, rule set before the runs** (the PR 3.8 rule against the
+  ×8 reference): a weight qualifies if, on val:
+  - on light and medium, against `srresnet_id_robust_x8-20261125-174436`: LPIPS lower, ID
+    similarity higher, PSNR-Y at most 0.3 dB lower, and spectral peak ratio at most 1.0;
+  - on the WIDER `val` faces, KID at most the reference's plus two standard deviations.
+
+  The reference is evaluated on val for this (it had no val evaluation). Among the qualifying
+  weights, the highest mean ID similarity on light and medium wins; a full run of the winner then
+  goes through the gate on test. If none qualifies, the recipe is reported as failing and no full
+  run is made.
+
+**Selection** (2026-11-26, runs from commit `8e84f12`, three in parallel; the reference evaluated
+on val from the same commit). Val, PSNR-Y change / LPIPS change / ID similarity / spectral peak
+ratio against `srresnet_id_robust_x8`; WIDER val KID ×10³:
+
+| Perceptual weight | light | medium | WIDER val KID | Qualifies |
+|---|---|---|---|---|
+| reference `srresnet_id_robust_x8` | 24.33 dB / 0.2996 / 0.2018 / 0.12 | 23.00 dB / 0.3387 / 0.1232 / 0.11 | 89.1 ± 1.9 (limit 92.9) | — |
+| 0.005 | −0.02 / −0.0229 / 0.1960 / 0.13 | −0.02 / −0.0282 / 0.1193 / 0.11 | 74.1 | no: ID similarity |
+| 0.014 | −0.05 / −0.0341 / 0.1940 / 0.11 | −0.04 / −0.0400 / 0.1194 / 0.11 | 71.2 | no: ID similarity |
+| 0.04 | −0.11 / −0.0473 / 0.1869 / 0.10 | −0.08 / −0.0560 / 0.1155 / 0.10 | 70.3 | no: ID similarity |
+
+- **No weight qualifies.** Every weight fails on ID similarity only, and ID falls as the weight
+  grows. LPIPS, PSNR-Y, the spectral peak and KID all pass, with large LPIPS gains (−0.023 to
+  −0.056) and a lower real-photo KID.
+- **The ID loss is not run-to-run noise:**
+  - a second run of the reference recipe (the PR 3.4 sweep run with weight 0.1,
+    `srresnet_id_robust_x8_sweep_l0.1-20261125-163518`) differs from the reference by 0.0011
+    (light) and 0.0015 (medium);
+  - the standard error of each mean is 0.0006;
+  - the smallest deficit, at 0.005, is 0.0058 and 0.0039, and it grows with the weight.
+- **The same cost appears at ×4:**
+  - there, adding the defended perceptual term (0.03) to the identity term (0.3) lowered val ID
+    from 0.4880 to 0.4788 on light and from 0.3238 to 0.3169 on medium (PR 3.4 sweep run against
+    PR 3.8 sweep run);
+  - the ×4 candidate passed only because its reference, `srresnet_x4`, had no identity term;
+  - the ×8 reference already has one, so the cost decides here.
+- **No pattern:** spectral peak 0.10–0.13, the reference's range.
+- **Grids** (5 synthetic and 5 real val samples, zoomed, not measured): slightly sharper hair and
+  contours than the reference, no hatching; the faces are as generic as the reference's.
+
+**Result:**
+- No full run is made; the ×8 reference stays `srresnet_id_robust_x8-20261125-174436` (D25).
+- The config keeps weight 0.005, the closest to the rule, marked as not trained in full.

@@ -85,8 +85,11 @@ As of 2026-11-26:
     reference (D27, §9).
   - Merged: PR 3.7 (spectral periodic-pattern check in evaluation and the gate, D28; PR #24,
     `bd58ebc`).
-  - In review: PR 3.8 (×4 robust perceptual loss; branch `feat/robust-perceptual-x4`). Result:
-    passes all 17 gate checks without a pattern and becomes the ×4 reference (D29, §9).
+  - Merged: PR 3.8 (×4 robust perceptual loss; PR #25, `9aba820`). Result: passes all 17 gate
+    checks without a pattern and becomes the ×4 reference (D29, §9).
+  - In review: PR 3.9 (×8 robust perceptual loss; branch `feat/robust-perceptual-x8`). Result:
+    no weight meets the val rule: every one lowers ID similarity below the ×8 reference's, which
+    stays (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -104,7 +107,8 @@ robodream_cv/
 │                              # degrade/search/realistic.yaml (PR 2.6 search space),
 │                              # model/{bicubic,fnet,cnet,srresnet}.yaml,
 │                              # train/{fnet,cnet,srresnet,srresnet_gan,srresnet_id,srresnet_id_robust}_x{4,8}.yaml,
-│                              # train/srresnet_id_perc{,_robust}_x4.yaml,
+│                              # train/srresnet_id_perc_x4.yaml,
+│                              # train/srresnet_id_perc_robust_x{4,8}.yaml,
 │                              # train/fnet_x{4,8}_realistic.yaml, train/fnet_x8_tuned.yaml,
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
@@ -1142,7 +1146,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Not covered:** the check sees regular patterns and excess high-frequency power, not every
     artifact. Visual checks stay part of every gate decision. Older evaluations lack the
     spectrum until they are run again.
-- **Robust perceptual loss at ×4 (PR 3.8, in review).** Decision, selection rule and reasons in
+- **Robust perceptual loss at ×4 (PR 3.8, done).** Decision, selection rule and reasons in
   `DECISIONS.md` (2026-11-26, "Robust perceptual loss at ×4 (PR 3.8)").
   - **Code:**
     - `facehall.losses.views.RandomView`: the PR 3.4 defences (a random shift, rotation and
@@ -1181,6 +1185,26 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       bicubic level is not gated.
     - **Grids** (not measured): no hatching. Eyes and lips are slightly sharper than with the L1
       model. In some faces the eyes have a slight bluish tint, as with the identity term alone.
+- **Robust perceptual loss at ×8 (PR 3.9, in review).** Decision, selection rule, table and
+  reasons in `DECISIONS.md` (2026-11-26, "Robust perceptual loss at ×8 (PR 3.9)").
+  - **Recipe:** `configs/train/srresnet_id_perc_robust_x8.yaml`, the ×8 reference recipe (L1,
+    robust identity 0.1) plus the defended perceptual term of PR 3.8. It differs from the
+    reference only by that term.
+  - **Weights 0.005, 0.014 and 0.04:** about 1/9×, ⅓× and 1× the identity gradient on the ×8
+    start model. That is one step below the ×4 grid, where only ⅓× qualified.
+  - **Selection on val,** against the ×8 reference (rule set before the runs: the PR 3.8 rule):
+    **no weight qualifies.**
+    - Every weight fails only on ID similarity: light 0.2018 for the reference against 0.1960,
+      0.1940 and 0.1869; medium 0.1232 against 0.1193, 0.1194 and 0.1155.
+    - Everything else passes, with large gains: LPIPS −0.023 to −0.056, WIDER val KID ×10³ 89.1
+      → 70–74, spectral peak 0.10–0.13.
+    - The ID deficit is several times the run-to-run difference of the reference recipe (≤ 0.0015)
+      and grows with the weight.
+  - **Why ×4 passed and ×8 does not:** the same ID cost appears at ×4 (−0.009 on light when the
+    perceptual term joins the identity term). There the reference had no identity term; at ×8 it
+    has one.
+  - **Result:** no full run; the ×8 reference stays `srresnet_id_robust_x8-20261125-174436`
+    (D25).
 
 ## 10. Roadmap and progress
 
@@ -1274,6 +1298,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 3.8** ×4: the perceptual term with the PR 3.4 defences (shared `RandomView`);
       weight 0.03, chosen on val. Passes all 17 gate checks without a pattern and becomes the ×4
       reference (§9, D29)
+- [x] **PR 3.9** ×8: the same defended perceptual term on the ×8 reference recipe. No weight
+      meets the val rule: each lowers ID similarity below the reference's (§9)
 - [ ] Prior-guided model (FSRNet-like: coarse SR → prior → fine SR). Landmark heatmaps come from
       the CelebA 5 points; parsing maps would need CelebAMask-HQ (non-commercial, separate
       decision); facial component loss

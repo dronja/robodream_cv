@@ -839,4 +839,60 @@ LPIPS on medium, so no weight passed the selection.
   run of the winner then goes through the gate on test. If none qualifies, the recipe is
   reported as failing and no full run is made.
 
-SELECTION_PLACEHOLDER
+**Selection** (2026-11-26, runs from commit `55114c4`, three in parallel). Val, PSNR-Y and LPIPS
+change against `srresnet_x4` / ID similarity; WIDER val KID ×10³:
+
+| Perceptual weight | light | medium | WIDER val KID | Qualifies |
+|---|---|---|---|---|
+| reference `srresnet_x4` (L1 start) | 27.92 dB / 0.2004 / 0.4475 | 26.40 dB / 0.2465 / 0.2971 | 95.1 ± 2.2 (limit 99.5) | — |
+| none (PR 3.4, identity 0.3) | −0.15 / −0.0003 / 0.4880 | −0.16 / +0.0057 / 0.3238 | 84.5 | no: LPIPS on medium |
+| **0.01** | −0.29 / −0.0202 / 0.4832 | −0.26 / −0.0199 / 0.3200 | 79.4 | **yes** |
+| 0.03 | −0.37 / −0.0288 / 0.4771 | −0.32 / −0.0326 / 0.3162 | 81.3 | no: PSNR-Y |
+| 0.1 | −0.50 / −0.0381 / 0.4658 | −0.42 / −0.0468 / 0.3088 | 84.0 | no: PSNR-Y |
+
+- **LPIPS:** even the smallest perceptual weight wins back far more LPIPS than the identity
+  term costs (−0.020 against the reference on both levels).
+- **PSNR-Y is the binding rule:** at 0.01 the margin on light is 0.01 dB.
+- **KID** falls with every perceptual weight.
+
+**A new periodic pattern.** The zoomed val grids (5 synthetic and 5 real samples per model, not
+measured) show a fine diagonal hatching on the lips and the skin with every perceptual weight,
+stronger at 0.1. To measure it, the power spectrum was compared with the HR one, with an ad hoc
+script that is not in the repository. Method:
+- luminance (BT.601) of every 10th val image of the protocol (1,987 images), mean removed, Hann
+  window;
+- power spectra summed over the images, SR (8-bit) and HR separately;
+- the ratio SR / HR per frequency bin; the **peak ratio** is its maximum over the bins at radius
+  ≥ 0.25 cycles/px.
+
+| Model | Protocol (val) | Power ratio at 0.375–0.5 cycles/px | Peak ratio |
+|---|---|---|---|
+| `srresnet_x4` (L1) | medium ×4 | 0.016 | 0.17 |
+| robust identity 0.3 (PR 3.4) | medium ×4 | 0.018 | 0.33 |
+| `srresnet_id_x4` (PR 3.3, the grid) | medium ×4 | 0.023 | 9.30 |
+| + perceptual 0.01 / 0.03 / 0.1 | medium ×4 | 0.123 / 0.138 / 0.144 | 26.96 / 24.81 / 23.42 |
+| `fnet_x8_tuned` | light ×8 | 0.008 | 0.26 |
+| `srresnet_x8` (L1) | light ×8 | 0.011 | 0.08 |
+| `srresnet_id_x8` (PR 3.3, the grid) | light ×8 | 0.018 | 2.27 |
+| `srresnet_id_robust_x8` (PR 3.4, reference) | light ×8 | 0.014 | 0.11 |
+
+- **The perceptual pattern is periodic:** sharp peaks at periods of 2 and 4 px, along the axes
+  and the diagonals. It fits the max-pooling structure of VGG19. The PR 3.3 grid gives four
+  peaks at a period of about 3.7 px.
+- **It is near the Nyquist frequency,** where real faces have almost no power, so its peak ratio
+  is higher than the PR 3.3 grid's although it is much less visible.
+- **The models without a pattern** stay at or below 0.33, including both current references.
+- **KID does not see it:** it even falls. D26 catches the PR 3.3 grid but not this pattern.
+
+**Result** (2026-11-26, run `srresnet_id_perc_x4-20261126-094522` from commit `5cc7e53`,
+2 epochs, 498 s at 649 img/s alone):
+- **Gate (D23, D26) against `srresnet_x4`: passes all 15 checks.** Light: LPIPS 0.195 → 0.176,
+  ID 0.445 → 0.481, PSNR-Y −0.29 dB; medium: LPIPS 0.241 → 0.222, ID 0.292 → 0.316, PSNR-Y
+  −0.26 dB; every subgroup gains ID; WIDER test KID ×10³ 92.3 → 77.3.
+- **Spectrum:** peak ratio 26.87 on val medium, the same as the sweep run.
+- **Grids** (6 synthetic and 6 real test samples at about 3×, not measured): sharper eyes and
+  lips than the L1 model, with a fine hatching on lips and skin in some faces; much less
+  visible than the PR 3.3 stripes.
+- **Reference:** by D23 and D26 the model would replace `srresnet_x4`. It carries a periodic
+  pattern, the reason for D24, so the replacement waits for the user (`docs/PROJECT.md` §11,
+  Q11); `configs/gate.yaml` is unchanged.

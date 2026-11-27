@@ -13,6 +13,7 @@
 
 | | ×4 model | ×8 model |
 |---|---|---|
+| Model and version | `facehall-x4` 0.1.0 | `facehall-x8` 0.1.0 |
 | Run | `srresnet_id_perc_robust_x4-20261126-121325` | `srresnet_id_robust_x8-20261125-174436` |
 | Chosen as reference | D29 (PR 3.8) | D25 (PR 3.4) |
 | Task | aligned 32×32 face crop → 128×128 | aligned 16×16 face crop → 128×128 |
@@ -24,7 +25,7 @@
 | Files | PyTorch weights (`safetensors` + JSON record); ONNX export, opset 20, with the record in its metadata | the same |
 | Training code | commit `e20e095` | commit `fb2c38c` |
 
-Model versions and checksums: PR 6.3.
+Versions and checksums: §12.
 
 ## 2. Intended use
 
@@ -338,3 +339,32 @@ uv run facehall eval --config configs/eval/celeba128_light_x4.yaml --ckpt runs/<
 
 The `init` paths of the fine-tuning configs name the local L1 runs; point them at your own with
 `--set train.init=runs/<id>/best.safetensors`. GPU runs are not bit-exact (cuDNN autotuning).
+
+## 12. Versions and checksums
+
+Each model has its own semantic version:
+- **major:** the contract changes (scale, input or output size, value range, channel order);
+  callers must change;
+- **minor:** new weights, a new reference that passed the quality gate;
+- **patch:** the same weights in a new ONNX export (another exporter, opset or facehall
+  version).
+
+The first versions follow the package's first release, 0.1.0. The record in an output's marks
+holds the sha256 of the model that made it, so an output can be traced to a version with this
+table:
+
+| Model | Version | File | Bytes | sha256 |
+|---|---|---|---:|---|
+| `facehall-x4` | 0.1.0 | `runs/srresnet_id_perc_robust_x4-20261126-121325/best.safetensors` | 6,076,748 | `6f499d9ceb51147d3a2727c9033c6cc052372faf4fa0cb19d551d8e2a950312a` |
+| | | `models/x4.onnx` | 6,236,777 | `d9f020a735afa64b499238e26d6c6b45e862ce4df1b8317642c7ee7689201031` |
+| `facehall-x8` | 0.1.0 | `runs/srresnet_id_robust_x8-20261125-174436/best.safetensors` | 6,667,764 | `18633e869d122a068efc7060d165581773627fcf192453b108ca00188f70dca0` |
+| | | `models/x8.onnx` | 6,832,199 | `0313127375854230b1c4bb2b3b8b599215377de045004ee60b409bcb6931cef0` |
+
+- **The ONNX files** were exported with facehall 0.1.0, torch 2.15.0, onnxscript 0.7.2 and
+  ONNX Runtime 1.32.0, by `facehall export onnx --scale 4|8`. Exporting again with the same
+  versions gives the same bytes (checked twice); the facehall version is part of the file's
+  metadata, so another version gives another checksum.
+- **Check local copies** from the repository root: `sha256sum -c docs/models.sha256`.
+- **The face detector** the pipeline needs, YuNet, is pinned by its own checksum in
+  `facehall.weights` (`THIRD_PARTY_LICENSES.md` §3).
+- **The files stay local** (D39).

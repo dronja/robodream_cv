@@ -38,10 +38,11 @@ a person or as evidence; at most they are a hint, to be shown next to the origin
 ## 🚧 Project status
 
 The research notebook of this repository has become the package `facehall`: training,
-evaluation, a command-line tool, ONNX models, a local REST API and Docker images. Phases 0–5 of
-the plan are done; Phase 6 (release documentation) is in progress. The current state and the plan
-are in [`docs/PROJECT.md`](docs/PROJECT.md), decisions in [`docs/DECISIONS.md`](docs/DECISIONS.md)
-and all metrics in [`docs/RESULTS.md`](docs/RESULTS.md).
+evaluation, a command-line tool, ONNX models, a local REST API and Docker images. The current
+release is **0.1.0** ([`CHANGELOG.md`](CHANGELOG.md)), with the reference models `facehall-x4`
+and `facehall-x8` 0.1.0 ([`docs/MODEL_CARD.md`](docs/MODEL_CARD.md)). The current state and the
+plan are in [`docs/PROJECT.md`](docs/PROJECT.md), decisions in
+[`docs/DECISIONS.md`](docs/DECISIONS.md) and all metrics in [`docs/RESULTS.md`](docs/RESULTS.md).
 
 **The trained weights are not published.** They are derived from CelebA, whose terms allow
 non-commercial research only, so they stay local. To use the tools, train the models yourself
@@ -240,7 +241,8 @@ frame, mostly spent finding the faces.
   numbers are optimistic: the detector was trained on those photos.
 - **Videos** flicker more than the input, because each frame is restored on its own.
 - **Subgroups:** ID similarity is lower for faces annotated `Male` = 0 than `Male` = 1 (CelebA's
-  binary attribute) on every test level, bicubic upscale included. Skin tone is not measured: CelebA has no such annotation.
+  binary attribute) on every test level, bicubic upscale included. Skin tone is not measured:
+  CelebA has no such annotation.
 - **Training data:** CelebA celebrities, near-frontal and well lit, with JPEG artifacts in the
   targets.
 
@@ -274,7 +276,8 @@ frame, mostly spent finding the faces.
 | **C-Face** | Identity-aware face hallucination with a face-recognition (compare-face) loss; the "shape control" wording in earlier README versions needs verification | [JAIR 2022, doi:10.1613/JAIR.1.13816](https://doi.org/10.1613/JAIR.1.13816) |
 
 **The original research** (`legacy/FH.ipynb`, read only) compared four approaches on small crops
-of the earlier dataset (24×24 → 96×96 for the trained models). PULSE gave realistic faces of other people; the SRGAN generator
+of the earlier dataset (24×24 → 96×96 for the trained models). PULSE gave realistic faces of other
+people; the SRGAN generator
 did poorly; a simplified SRResNet (FNet) did best; a simplified C-Face (CNet) slightly worse.
 Those results are not comparable with the protocol above. FNet and CNet were re-trained on it as
 baselines (`docs/RESULTS.md`), and the SRGAN result most likely came from its training recipe

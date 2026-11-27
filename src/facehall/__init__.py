@@ -2,7 +2,7 @@
 
 import os
 
-__version__ = "0.0.0"
+__version__ = "0.1.0"
 
 # ONNX Runtime's official builds send telemetry to Microsoft by default, Linux included (the
 # package's Privacy.md). The variable stops the uploader, the events and the persistent device

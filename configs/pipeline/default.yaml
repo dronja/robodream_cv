@@ -33,6 +33,15 @@ video:                       # facehall enhance on videos (PR 4.5)
   crf: 18
   preset: medium
   audio: true                # keep the input's audio (AAC in MP4 and MOV)
+serve:                       # facehall serve, the REST API (PR 5.3); its models: models.onnx_x4/x8
+  host: 127.0.0.1            # no authentication: local use only (D13)
+  port: 8000
+  scales: [4, 8]             # a model each, loaded at start-up
+  max_upload_mb: 25          # request body
+  max_output_pixels: 134217728  # 2^27: a 4K photo at x4, a 1080p one at x8
+  queue: 8                   # requests that may wait while one is enhanced
+  timeout: 120               # seconds per request, waiting included
+  warmup: true               # run the models once per batch size at start-up
 max_downscale: 2.0           # faces more than 2x the model input size are left to the background
 max_upscale: 2.0             # so are faces more than 2x smaller (mostly false detections)
 max_output_pixels: 200000000 # larger outputs are refused (3 bytes per pixel)

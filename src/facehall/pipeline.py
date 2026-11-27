@@ -158,11 +158,36 @@ class VideoConfig:
 
 
 @dataclass
+class ServeConfig:
+    """The REST API (``facehall serve``, PR 5.3): address, scales and limits."""
+
+    host: str = "127.0.0.1"  # no authentication: local use only (D13)
+    port: int = 8000
+    scales: list[int] = field(default_factory=lambda: [4, 8])  # a model each, loaded at start
+    max_upload_mb: float = 25.0  # request body
+    max_output_pixels: int = 134_217_728  # 2^27: a 4K photo at x4, a 1080p one at x8
+    queue: int = 8  # requests that may wait while one is enhanced
+    timeout: float = 120.0  # seconds per request, waiting included
+    warmup: bool = True  # run the models once per batch size at start-up
+
+    def __post_init__(self) -> None:
+        if not self.scales or any(s not in (4, 8) for s in self.scales):
+            raise ValueError(f"serve scales must be 4 and/or 8, got {self.scales}")
+        if not 0 < self.port < 65536:
+            raise ValueError(f"serve port must be in [1, 65535], got {self.port}")
+        if self.max_upload_mb <= 0 or self.max_output_pixels < 1 or self.timeout <= 0:
+            raise ValueError("serve max_upload_mb, max_output_pixels and timeout must be positive")
+        if self.queue < 0:
+            raise ValueError(f"serve queue must be at least 0, got {self.queue}")
+
+
+@dataclass
 class PipelineConfig:
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     mask: MaskConfig = field(default_factory=MaskConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
+    serve: ServeConfig = field(default_factory=ServeConfig)
     max_downscale: float = 2.0  # larger faces are left to the background
     max_upscale: float = 2.0  # so are faces this many times smaller than the model input
     max_output_pixels: int = 200_000_000  # larger outputs are refused (memory: 3 bytes each)

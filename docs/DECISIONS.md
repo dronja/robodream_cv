@@ -1797,3 +1797,124 @@ fewer frames than per-frame detection is ×4 sway_degraded, 0.990 against 0.991 
 
 **Next steps** (proposals, not decided): a temporal model, or blending each face's restored
 crop over time in the template frame; cut detection; a real video set for the measure.
+
+### D34 — Inference without PyTorch; the service images carry ONNX Runtime only
+**Decision** (the user, 2026-11-27): the inference path (`facehall.pipeline`, `enhance`, `video`
+and the coming `serve`) runs the restoration models through ONNX Runtime without importing
+PyTorch. PyTorch stays a dependency of the package for training, evaluation, export and a
+`torch` backend. The Docker images (PR 5.4) install only what serving needs.
+
+**Why:** measured on 2026-11-27, a Python 3.12 environment with numpy, opencv-python-headless,
+pillow, onnxruntime, omegaconf, fastapi, uvicorn and python-multipart takes 336 MB, against
+6.0 GB for the project's `.venv` with the CUDA build of torch (the CPU-only environment is about
+1.5 GB, `PROJECT.md` §4). In the pipeline, only `Enhancer.restore` and the optional colour
+correction use PyTorch.
+
+**Consequences:** PR 5.2 moves those two to numpy, adds the backend choice and a test that the
+ONNX path does not import torch. The developers' `uv sync` does not change; the serving set
+becomes a dependency group.
+
+### D35 — GPU image: ONNX Runtime with the CUDA execution provider
+**Decision** (the user, 2026-11-27): the GPU image runs the models with `onnxruntime-gpu` and its
+CUDA execution provider, not with PyTorch.
+
+**Facts** (PyPI, checked 2026-11-27): `onnxruntime-gpu` 1.32.0 declares the extras `cuda`
+(nvidia-cuda-runtime and nvidia-cuda-nvrtc ~13.0, nvidia-cufft, nvidia-curand) and `cudnn`
+(nvidia-cudnn-cu13 ~9.0), so the CUDA libraries come from pip and no `nvidia/cuda` base image is
+needed. The host needs an NVIDIA driver for CUDA 13 (this machine: 595.99, CUDA 13.2) and the
+NVIDIA Container Toolkit.
+
+*Needs verification* (PR 5.2, 5.4): that it runs on this machine and in a container; that
+`onnxruntime` and `onnxruntime-gpu` cannot be installed side by side (both provide the
+`onnxruntime` module), so the GPU image installs the latter instead; whether the CUDA provider
+uses TF32, which in PyTorch moves the outputs by more than the export tolerance (PR 5.1 below).
+
+### D36 — REST API: photos only, answered in the same request
+**Decision** (the user, 2026-11-27): `facehall serve` takes photos only, and `POST /enhance`
+returns the enhanced image in its response. Videos stay with `facehall enhance`.
+
+**Why:** a video runs at about 8 frames/s (PR 4.5), so a request would take minutes. Background
+jobs would keep the upload on disk for that time, against `CLAUDE.md` §11 (by default the API
+stores no uploads).
+
+### D37 — No Gradio demo for now
+**Decision** (the user, 2026-11-27): the optional Gradio demo of Phase 5 is deferred. FastAPI's
+`/docs` page is enough to try the API by hand, and Gradio is a large dependency (Apache-2.0).
+
+### Phase 5 plan and defaults
+**Decision** (defaults taken without a separate question, 2026-11-27):
+- **PRs:**
+  - 5.1: ONNX export with a parity check;
+  - 5.2: ONNX Runtime in the pipeline, without PyTorch (D34);
+  - 5.3: the REST API (D36);
+  - 5.4: Docker CPU and GPU images (D35);
+  - 5.5: latency and memory benchmark.
+- **Weights stay out of the images:** the ONNX models and the YuNet weights are mounted
+  read-only. The weights are not published (D7), and one image serves any model.
+- **No authentication:** the service binds to `127.0.0.1` by default, and the documentation
+  warns against exposing it (D13: local use only).
+- **Limits** (upload size, pixels, timeout, queue) are set and recorded in PR 5.3.
+
+### ONNX export and its parity check (PR 5.1)
+**Decision** (defaults taken without a separate question, 2026-11-27):
+`facehall export onnx (--ckpt CKPT | --scale 4|8) -o OUT.onnx` (`facehall.export`).
+- **Exporter:** PyTorch's dynamo exporter (`torch.onnx.export(dynamo=True)`, the default in
+  torch 2.15; the TorchScript exporter is deprecated). It needs `onnx` and `onnxscript`, added
+  as dependencies for exporting only. Inference reads the files with onnxruntime alone.
+- **Opset 20, pinned**, so a newer PyTorch does not change the files silently.
+- **Batch axis:** dynamic (1–4096), so one session restores any number of faces.
+- **Graph:** the model as it is, in eval mode (the output clamp is in the graph), with no
+  rewrites (see the speed below).
+- **Model record** in the ONNX metadata (`facehall`, JSON):
+  - the source checkpoint: run name, file and weights sha256;
+  - architecture, scale, crop sizes, tensor layout, opset;
+  - the exporting versions;
+  - the export parity;
+  - the notice of `facehall.marking`.
+
+  It holds no local paths. Output marks will cite it (PR 5.2).
+- **Parity at export:** ONNX Runtime (CPU) against PyTorch (CPU, float32) on 16 crops of uniform
+  noise, seed 0. Above the tolerance of 1e-3 (`CLAUDE.md` §10), nothing is written.
+- **Files:** local, like checkpoints; `*.onnx` is in `.gitignore`.
+
+**Measured** (`scripts/measure_onnx.py`, commit `9b24b92`): both references, on the first 1,000
+test crops of each protocol. Values are in [0, 1] units; the level columns compare both outputs
+after rounding to 8 bit.
+
+| Protocol | Max abs diff | Mean abs diff | Max level diff | Values changed | PyTorch CUDA − CPU |
+|---|---|---|---|---|---|
+| ×4 bicubic | 3.6e-07 | 2.2e-08 | 1 | 0.0005% | 4.2e-04 |
+| ×4 light | 6.9e-07 | 3.0e-08 | 1 | 0.0008% | 1.5e-03 |
+| ×4 medium | 6.6e-07 | 3.3e-08 | 1 | 0.0008% | 1.8e-03 |
+| ×4 heavy | 7.5e-07 | 3.6e-08 | 1 | 0.0009% | 2.1e-03 |
+| ×8 bicubic | 4.2e-07 | 2.3e-08 | 1 | 0.0006% | 6.3e-04 |
+| ×8 light | 8.3e-07 | 3.3e-08 | 1 | 0.0008% | 1.8e-03 |
+| ×8 medium | 9.5e-07 | 3.5e-08 | 1 | 0.0008% | 2.1e-03 |
+| ×8 heavy | 9.2e-07 | 3.7e-08 | 1 | 0.0009% | 2.2e-03 |
+
+The export check itself (noise) gave 3.6e-07 at both scales.
+
+**Speed:** a batch of 32 crops (the pipeline's batch size), median of 30 runs, on a Ryzen 9
+9950X (16 cores) and the RTX 6000 Ada:
+
+| Model | PyTorch CPU | ONNX Runtime CPU | PyTorch CUDA |
+|---|---|---|---|
+| ×4 | 79.1 ms | 216.2 ms | 3.7 ms |
+| ×8 | 51.4 ms | 216.3 ms | 2.9 ms |
+
+**Observations:**
+- **Parity:** at most 9.5e-07 on real crops, about 1,000 times below the tolerance. After
+  rounding to 8 bit, outputs differ by at most 1 level in under 0.001% of the values.
+- **PyTorch differs more from itself across devices** (up to 2.2e-03) than ONNX Runtime does
+  from PyTorch. The cause is TF32 in cuDNN's convolutions, on by default in PyTorch: on 256 ×8
+  heavy crops the CUDA − CPU difference is 4.6e-04 with TF32 and 1.2e-06 without. So
+  `facehall enhance` on a GPU already differs from CPU by up to about half a level.
+- **ONNX Runtime on CPU is 2.7–4.2× slower than PyTorch on CPU**, about 7 ms per face.
+  - **Profile** (×4, batch 32, a local probe): DepthToSpace (the pixel shuffle) 86 ms, Resize
+    (the bicubic skip) 65 ms and Conv 55 ms of about 215 ms.
+  - **Rewrites tried:**
+    - the bicubic skip as two MatMuls with a fixed interpolation matrix takes 0.3 ms instead
+      of 65 ms, with the same output within 5e-07;
+    - the pixel shuffle as Reshape and Transpose, or merged with its convolution into a
+      transposed convolution, was slower.
+  - Not adopted here: PR 5.2 measures the end-to-end cost first.

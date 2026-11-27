@@ -54,7 +54,9 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 |---|---|---|---|
 | numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | |
 | omegaconf | 2.4.0 | BSD License | From classifiers |
+| onnx | 1.23.2 | Apache-2.0 | Exporting models to ONNX only (`facehall export onnx`, PR 5.1); adds ml-dtypes (Apache-2.0). Inference reads ONNX files with onnxruntime alone (D34) |
 | onnxruntime | 1.32.0 | MIT License | Runs the recognition model (PR 1.7). Adds flatbuffers and protobuf. CPU build; [PyPI](https://pypi.org/project/onnxruntime/) also states MIT |
+| onnxscript | 0.7.2 | MIT License | Needed by PyTorch's dynamo ONNX exporter (PR 5.1); adds onnx-ir (Apache-2.0) |
 | opencv-python-headless | 5.1.0.95 | Apache 2.0 | The wheel bundles OpenCV (Apache-2.0), packaging code (MIT), libvpx (BSD-style) and **FFmpeg (LGPL-2.1)**; see `LICENSE-3RD-PARTY.txt` in the wheel. The LGPL obligations apply to distribution; none is planned (D13, local use only) |
 | pillow | 13.0.0 | MIT-CMU | |
 | pyarrow | 26.0.1 | Apache-2.0 | |
@@ -89,6 +91,7 @@ marked with †.
 | jinja2 | 3.1.6 | BSD License |
 | lightning-utilities | 0.15.3 | Apache-2.0 |
 | markupsafe | 3.0.4 | BSD-3-Clause |
+| ml-dtypes | 0.7.0 | Apache-2.0 |
 | mpmath | 1.3.0 | BSD |
 | networkx | 3.7 | BSD-3-Clause |
 | numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 |
@@ -108,7 +111,10 @@ marked with †.
 | nvidia-nvshmem-cu13 | 3.7.2 | LicenseRef-NVIDIA-Proprietary |
 | nvidia-nvtx | 13.2.86 | LicenseRef-NVIDIA-Proprietary |
 | omegaconf | 2.4.0 | BSD License |
+| onnx | 1.23.2 | Apache-2.0 |
+| onnx-ir | 1.1.0 | Apache-2.0 |
 | onnxruntime | 1.32.0 | MIT License |
+| onnxscript | 0.7.2 | MIT License |
 | opencv-python-headless | 5.1.0.95 | Apache 2.0 |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause |
 | pillow | 13.0.0 | MIT-CMU |

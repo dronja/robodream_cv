@@ -115,8 +115,18 @@ As of 2026-11-27:
   - Merged: PR 4.5 (videos frame by frame, face tracks, flicker measure; PR #32, `49d0e65`).
     Face tracking lowers the flicker that detection jitter adds, but the restored faces still
     flicker more than a bicubic upscale (§9). It was the last Phase 4 item.
-- **CI:** in review: installing `ffmpeg`, so the video tests run there too (branch `ci/ffmpeg`,
-  PR #33).
+- **CI** installs `ffmpeg`, so the video tests run there too (PR #33, `b9df9b2`).
+- **Phase 5 (product): in progress.**
+  - Decided (D34–D37):
+    - inference without PyTorch: the service images carry ONNX Runtime only;
+    - the GPU image uses ONNX Runtime's CUDA provider;
+    - the REST API takes photos only;
+    - no Gradio demo for now.
+  - Plan: PRs 5.1–5.5 (§10). Defaults: weights mounted, not built in; no authentication, bound to
+    `127.0.0.1` (`DECISIONS.md`, "Phase 5 plan and defaults").
+  - In review: PR 5.1 (ONNX export with a parity check; branch `feat/onnx-export`). Both
+    references export within 9.5e-07 of PyTorch on real crops, against the 1e-3 gate. ONNX
+    Runtime on CPU is 2.7–4.2× slower than PyTorch on CPU (§9).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -148,7 +158,7 @@ robodream_cv/
 ├── .github/workflows/ci.yml   # uv sync --locked → apt ffmpeg → ruff check, ruff format --check
 │                              # → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train
-│                              # [--resume], eval, enhance)
+│                              # [--resume], eval, enhance, export onnx)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
@@ -174,6 +184,7 @@ robodream_cv/
 │   ├── video.py               # videos: face tracks, frames through ffmpeg, marks (PR 4.5)
 │   ├── marking.py             # output marks: PNG text, XMP, EXIF, video tags, visible mark
 │   ├── weights.py             # pinned third-party weights (download, checksums)
+│   ├── export/                # onnx.py: ONNX export, model record, parity check (PR 5.1)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py,
 │                              # warp.py (warp, inverse warp, resample_crop),
 │                              # detect.py (YuNet face detector, D31; tiles and
@@ -185,21 +196,22 @@ robodream_cv/
 │                              # preview_degradations.py, protocol_digest.py,
 │                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
 │                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2),
-│                              # measure_temporal.py (PR 4.5)
+│                              # measure_temporal.py (PR 4.5), measure_onnx.py (PR 5.1)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
 │                              # degradation matching, quality gate, losses, spectrum,
-│                              # face detection, inference pipeline, enhance, video
+│                              # face detection, inference pipeline, enhance, video, export
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
 ```
 
-- Package `facehall` 0.0.0, Python ≥ 3.12. Runtime dependencies: numpy, omegaconf,
-  opencv-python-headless, pillow, pyarrow, safetensors, torch, torchmetrics[image], torchvision
+- Package `facehall` 0.0.0, Python ≥ 3.12. Runtime dependencies: numpy, omegaconf, onnx,
+  onnxruntime, onnxscript, opencv-python-headless, pillow, pyarrow, safetensors, torch,
+  torchmetrics[image], torchvision
   (versions and licenses: `docs/THIRD_PARTY_LICENSES.md` §4.1). Dev group: ruff, mypy, pytest,
   pre-commit. Entry point: `facehall = facehall.cli:main`.
 - PyTorch build: by default torch comes from PyPI (CUDA 13.2 on Linux). The `cpu` extra switches
@@ -428,6 +440,10 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D31 | Face detector: YuNet (OpenCV Zoo, MIT) on a bicubic upscale by the model scale, score threshold 0.6, with YuNet templates per scale |
 | D32 | Fine-tune on pipeline-like LR crops before the CLI (PR 4.3: no gain, the references stay) |
 | D33 | Pipeline detector threshold 0.8 at both scales instead of 0.6: fewer faces drawn on textures in real photos (amends D31) |
+| D34 | Inference without PyTorch: the pipeline runs ONNX models through ONNX Runtime; the service images carry no torch |
+| D35 | GPU image: `onnxruntime-gpu` with the CUDA execution provider (CUDA libraries from pip) |
+| D36 | REST API: photos only, answered in the same request; videos stay with `facehall enhance` |
+| D37 | No Gradio demo for now; FastAPI's `/docs` page serves for manual tries |
 
 ## 8. Licenses — status
 
@@ -441,6 +457,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | InsightFace `buffalo_l` (ID similarity, D18) | Non-commercial research only. Open point: the README's 2025-11-24 note asks users to contact InsightFace "for licensing" of `buffalo_l`, without saying whether that covers research use |
 | LPIPS linear weights (torchmetrics) and the torchvision AlexNet backbone | LPIPS project: BSD 2-Clause. torchvision weights: terms follow the training data (ImageNet), *needs verification*. Used for non-commercial research (D2) |
 | onnxruntime | MIT (PR 1.7) |
+| onnx, onnxscript (ONNX export, PR 5.1) | Apache-2.0 and MIT; they add onnx-ir and ml-dtypes (both Apache-2.0) |
 | NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Local use only, nothing is distributed (D13). Review the redistribution terms if that changes |
 | Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
 | WIDER FACE and the RetinaFace annotations (D20) | Done in PR 2.3: CC BY-NC-ND 4.0 and non-commercial research only (`docs/THIRD_PARTY_LICENSES.md` §2) |
@@ -1480,6 +1497,59 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
   - **Speed** (RTX 6000 Ada, about 62 faces per frame): 640 × 360 at ×4 runs at 8.3 frames/s
     end to end, and 320 × 180 at ×8 at 8.6 frames/s; peak memory 2.4 GB.
 
+### Phase 5
+
+- **The system** (D13: local use only; decisions D34–D37, plan and defaults in
+  `DECISIONS.md`):
+
+  ```
+  runs/<id>/best.safetensors ──facehall export onnx──▶ models/x{4,8}.onnx (record in the metadata)
+                                                              │
+       facehall enhance (photos, videos) ─┐                   ▼
+       facehall serve (FastAPI, photos) ──┼──▶ Enhancer: YuNet (OpenCV) → align →
+       Docker cpu / gpu (serve, weights   │    ONNX Runtime (CPU or CUDA) → mask → paste back
+       mounted read-only) ────────────────┘    → marks (AI-enhanced)
+  ```
+
+  - **Inference:** `facehall enhance` and `facehall serve` run the restoration models from ONNX
+    files through ONNX Runtime, without PyTorch (D34). PyTorch stays for training, evaluation,
+    export and a `torch` backend.
+  - **API:**
+    - `POST /enhance` (photos only, D36) returns the marked image, with the notice of
+      `CLAUDE.md` §11 in its headers;
+    - `GET /health` and `GET /version`;
+    - limits on size, pixels, time and queue;
+    - uploads only in memory;
+    - logs without pixels, file names or face positions;
+    - no authentication, bound to `127.0.0.1`.
+  - **Images:** CPU (onnxruntime) and GPU (onnxruntime-gpu, D35), without weights; models and
+    YuNet are mounted read-only.
+- **ONNX export (PR 5.1, in review).** Defaults, the full table and reasons in `DECISIONS.md`
+  ("ONNX export and its parity check (PR 5.1)").
+  - **Command:** `facehall export onnx (--ckpt CKPT | --scale 4|8) -o OUT.onnx`
+    (`facehall.export`):
+    - PyTorch's dynamo exporter, opset 20 (pinned), dynamic batch axis;
+    - the graph is the model in eval mode, output clamp included;
+    - the model record (source run, weights sha256, scale, sizes, versions, parity, notice) is
+      in the ONNX metadata, which ONNX Runtime alone can read.
+  - **Parity check** on every export: ONNX Runtime (CPU) against PyTorch (CPU, float32) on 16
+    noise crops. Above 1e-3 (`CLAUDE.md` §10) nothing is written.
+  - **Measured** (`scripts/measure_onnx.py`, commit `9b24b92`, the first 1,000 test crops of
+    the bicubic, light, medium and heavy protocols):
+    - **Parity:** the max abs difference is at most 7.5e-07 at ×4 and 9.5e-07 at ×8. After
+      rounding to 8 bit, at most 1 level, in under 0.001% of the values.
+    - **PyTorch across devices:** on CUDA it differs from itself on CPU by up to 2.2e-03, because
+      of TF32 convolutions (cuDNN's default in PyTorch; 1.2e-06 without TF32).
+    - **Speed** (batch of 32 crops, median):
+      - ONNX Runtime on CPU: 216 ms at both scales, about 7 ms per face;
+      - PyTorch on CPU: 79 ms (×4) and 51 ms (×8);
+      - PyTorch on CUDA: 3.7 ms and 2.9 ms.
+
+      In a profile, ONNX Runtime spends most of the time in the pixel shuffle (DepthToSpace)
+      and the bicubic Resize, not in the convolutions. The bicubic as two MatMuls would save
+      about 30%. PR 5.2 measures the end-to-end cost first.
+  - **Files:** about 6.2 MB (×4) and 6.8 MB (×8), local only (`*.onnx` in `.gitignore`).
+
 ## 10. Roadmap and progress
 
 Each step is compared with the previous best on the same frozen test set. A smoke run (a few
@@ -1611,12 +1681,19 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Phase 5 — product
 
-- [ ] ONNX export + parity test (max abs diff ≤ 1e-3); ONNX Runtime in the pipeline
-- [ ] FastAPI `/enhance`, `/health`, `/version`: size limits, timeouts, input validation; uploaded
-      images are not stored, and logs contain no images or faces
-- [ ] Docker CPU and GPU images for local use, not published (D13; install Docker first); latency
-      and memory benchmark
-- [ ] Gradio demo (optional)
+- [x] **PR 5.1** `feat(export):` `facehall export onnx`: dynamic batch, the model record in the
+      ONNX metadata, parity check on every export (max abs diff ≤ 1e-3);
+      `scripts/measure_onnx.py` on real crops (§9)
+- [ ] **PR 5.2** `feat(pipeline):` ONNX Runtime in the pipeline, without PyTorch (D34): `onnx`
+      and `torch` backends, a test that the ONNX path imports no torch, end-to-end parity and
+      speed on CPU and CUDA
+- [ ] **PR 5.3** `feat(serve):` FastAPI `/enhance` (photos only, D36), `/health`, `/version`:
+      size limits, timeouts, input validation; uploads only in memory, and logs contain no
+      images or faces; `facehall serve`
+- [ ] **PR 5.4** `build(docker):` CPU and GPU images for local use, not published (D13, D35);
+      weights mounted read-only. Docker and the NVIDIA Container Toolkit must be installed first
+- [ ] **PR 5.5** latency and memory benchmark of the images
+- [ ] Gradio demo (optional; deferred, D37)
 
 **Done when** `docker run` + `curl` returns an enhanced image and the latency is documented.
 
@@ -1702,6 +1779,10 @@ by D32.
 - Videos need the system `ffmpeg`; tests that encode video are skipped without it (CI installs
   it, PR #33). Inputs with
   a variable frame rate are written at OpenCV's frame rate, which is not verified (PR 4.5).
+- ONNX Runtime on CPU runs the restoration models 2.7–4.2× slower than PyTorch on CPU (PR 5.1),
+  so the CPU image may be slower than `facehall enhance` with PyTorch today. The GPU image
+  depends on `onnxruntime-gpu` with CUDA libraries from pip, which is not yet verified on this
+  machine (D35).
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -1767,6 +1848,10 @@ uv run facehall enhance clip.mp4 -o clip_x4.mp4 --scale 4   # a video (system ff
 uv run facehall enhance videos/ -o out/ --scale 8 --video-format mkv   # a folder of videos
 uv run python scripts/measure_temporal.py --ckpt runs/<id>/best.safetensors \
     --tracking 0.5,0.1,0,0.3                   # flicker on synthetic clips (PR 4.5), ~5 min
+uv run facehall export onnx --scale 4 -o models/x4.onnx   # ONNX with the parity check (PR 5.1)
+uv run facehall export onnx --ckpt runs/<id>/best.safetensors -o models/<name>.onnx
+uv run python scripts/measure_onnx.py --ckpt runs/<id>/best.safetensors   # parity on real crops
+                                               # and speed (PR 5.1), ~1 min
 uv run python scripts/measure_detection.py --parts box   # box landmarks and their error (PR 4.4)
 uv run python scripts/measure_detection.py --parts wider # false faces on WIDER photos (D33), ~15 min
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/
@@ -1784,6 +1869,5 @@ uv run python scripts/match_degradations.py --spec configs/degrade/search/realis
 Planned (target interface):
 
 ```bash
-uv run facehall export onnx --ckpt runs/<id>/best.safetensors --out models/x4.onnx
 uv run facehall serve --port 8000
 ```

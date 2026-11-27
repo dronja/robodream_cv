@@ -52,6 +52,7 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 
 | Package | Version | License | Notes |
 |---|---|---|---|
+| fastapi | 0.165.0 | MIT | The REST API (`facehall serve`, PR 5.3). Adds starlette (BSD-3-Clause), pydantic and pydantic-core (MIT), anyio (MIT), annotated-doc, annotated-types and typing-inspection (MIT), and opentelemetry-api (Apache-2.0), the interface of FastAPI's built-in telemetry, which the service turns off |
 | numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | |
 | omegaconf | 2.4.0 | BSD License | From classifiers |
 | onnx | 1.23.2 | Apache-2.0 | Exporting models to ONNX only (`facehall export onnx`, PR 5.1); adds ml-dtypes (Apache-2.0). Inference reads ONNX files with onnxruntime alone (D34) |
@@ -64,6 +65,7 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 | torch | 2.15.0 | Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND ISC AND MIT AND Zlib | Same metadata for the `+cpu` build |
 | torchmetrics[image] | 1.9.0 | Apache-2.0 | The `image` extra adds scipy and torch-fidelity; bundles LPIPS weights (§3) |
 | torchvision | 0.29.2 | BSD | Same metadata for the `+cpu` build |
+| uvicorn | 0.54.0 | BSD-3-Clause | Runs the REST API (PR 5.3). Adds click (BSD-3-Clause) and h11 (MIT); idna (BSD-3-Clause) comes with anyio |
 
 ### 4.2 CUDA build
 
@@ -81,13 +83,20 @@ marked with †.
 
 | Package | Version | License (from package metadata) |
 |---|---|---|
+| annotated-doc | 0.0.7 | MIT |
+| annotated-types | 0.8.0 | MIT |
+| anyio | 4.16.0 | MIT |
+| click | 8.5.1 | BSD-3-Clause |
 | colorama | 0.4.6 | BSD License † (PyPI classifier; installed on Windows only) |
 | cuda-bindings | 13.5.0 | Apache-2.0 |
 | cuda-pathfinder | 1.9.1 | Apache-2.0 |
 | cuda-toolkit | 13.2.2 | Not stated † (meta-package for the NVIDIA packages below) |
+| fastapi | 0.165.0 | MIT |
 | filelock | 4.2.4 | MIT |
 | flatbuffers | 25.12.19 | Apache 2.0 |
 | fsspec | 2026.9.0 | BSD-3-Clause |
+| h11 | 0.16.0 | MIT |
+| idna | 3.20 | BSD-3-Clause |
 | jinja2 | 3.1.6 | BSD License |
 | lightning-utilities | 0.15.3 | Apache-2.0 |
 | markupsafe | 3.0.4 | BSD-3-Clause |
@@ -116,14 +125,18 @@ marked with †.
 | onnxruntime | 1.32.0 | MIT License |
 | onnxscript | 0.7.2 | MIT License |
 | opencv-python-headless | 5.1.0.95 | Apache 2.0 |
+| opentelemetry-api | 1.45.2 | Apache-2.0 |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause |
 | pillow | 13.0.0 | MIT-CMU |
 | protobuf | 7.36.2 | 3-Clause BSD License |
 | pyarrow | 26.0.1 | Apache-2.0 |
+| pydantic | 2.14.4 | MIT |
+| pydantic-core | 2.50.5 | MIT |
 | pyyaml | 6.0.3 | MIT |
 | safetensors | 0.8.0 | Apache Software License |
 | scipy | 1.18.1 | BSD License |
 | setuptools | 84.2.1 | MIT |
+| starlette | 1.10.0 | BSD-3-Clause |
 | sympy | 1.14.0 | BSD |
 | torch | 2.15.0 | Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND ISC AND MIT AND Zlib |
 | torch-fidelity | 0.4.0 | Apache License 2.0 |
@@ -132,6 +145,9 @@ marked with †.
 | tqdm | 4.70.1 | MPL-2.0 AND MIT |
 | triton | 3.9.0 | MIT |
 | typing-extensions | 4.16.0 | PSF-2.0 |
+| typing-inspection | 0.4.5 | MIT |
+| uvicorn | 0.54.0 | BSD-3-Clause |
+
 
 ### 4.4 External programs
 

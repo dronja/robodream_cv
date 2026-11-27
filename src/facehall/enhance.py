@@ -25,7 +25,7 @@ import numpy.typing as npt
 from PIL import Image, ImageOps
 
 from facehall import marking, video
-from facehall.pipeline import Box, Enhancer, PipelineConfig
+from facehall.pipeline import Box, Enhanced, Enhancer, PipelineConfig
 
 INPUT_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 MEDIA_SUFFIXES = INPUT_SUFFIXES + video.INPUT_SUFFIXES
@@ -107,16 +107,61 @@ def plan(
 
 def load_image(path: Path) -> tuple[npt.NDArray[np.uint8], str]:
     """RGB uint8 pixels (EXIF orientation applied) and the sha256 of the file."""
-    data = path.read_bytes()
+    return decode_image(path.read_bytes())
+
+
+def decode_image(data: bytes) -> tuple[npt.NDArray[np.uint8], str]:
+    """RGB uint8 pixels of an image file's bytes (EXIF orientation applied) and their sha256."""
     with Image.open(io.BytesIO(data)) as picture:
         rgb = ImageOps.exif_transpose(picture).convert("RGB")
     return np.asarray(rgb, dtype=np.uint8), hashlib.sha256(data).hexdigest()
 
 
+def marked(
+    enhancer: Enhancer,
+    image: npt.NDArray[np.uint8],
+    result: Enhanced,
+    *,
+    digest: str,
+    faces_from: str,
+    visible_mark: bool,
+    settings: dict[str, Any],
+) -> tuple[npt.NDArray[np.uint8], dict[str, Any]]:
+    """The output pixels (with the visible mark if asked) and their record (``marking``)."""
+    out = marking.watermark(result.image) if visible_mark else result.image
+    rec = marking.record(
+        [f.to_dict() for f in result.faces],
+        model=enhancer.info,
+        parameters=settings,
+        input_sha256=digest,
+        input_size=(image.shape[1], image.shape[0]),
+        output_size=(out.shape[1], out.shape[0]),
+        faces_from=faces_from,
+        watermark=visible_mark,
+    )
+    return out, rec
+
+
+def model_path(config: PipelineConfig, scale: int, pipeline: Path) -> Path:
+    """The configured model of ``scale`` (by ``models.backend``); an error says how to get it."""
+    path = Path(config.models.path(scale))
+    if not path.is_file():
+        hint = (
+            f"export it with: facehall export onnx --scale {scale} -o {path}"
+            if path.suffix == ".onnx"
+            else "FACEHALL_RUNS: the folder of the reference runs"
+        )
+        raise FileNotFoundError(
+            f"{path}: no model; pass --ckpt, or set the models in {pipeline} ({hint})"
+        )
+    return path
+
+
 def parameters(config: PipelineConfig) -> dict[str, Any]:
-    """The pipeline settings for the record, without local paths."""
+    """The pipeline settings for the record, without local paths or the service settings."""
     values = asdict(config)
     values.pop("models")
+    values.pop("serve")
     weights = values["detector"].pop("weights")
     values["detector"]["weights_file"] = Path(weights).name if weights else None
     return values
@@ -172,16 +217,14 @@ def enhance_files(
         try:
             image, digest = load_image(job.source)
             result = enhancer.enhance(image, landmarks=landmarks, boxes=boxes)
-            out = marking.watermark(result.image) if visible_mark else result.image
-            rec = marking.record(
-                [f.to_dict() for f in result.faces],
-                model=enhancer.info,
-                parameters=settings,
-                input_sha256=digest,
-                input_size=(image.shape[1], image.shape[0]),
-                output_size=(out.shape[1], out.shape[0]),
+            out, rec = marked(
+                enhancer,
+                image,
+                result,
+                digest=digest,
                 faces_from=faces_from,
-                watermark=visible_mark,
+                visible_mark=visible_mark,
+                settings=settings,
             )
             job.target.parent.mkdir(parents=True, exist_ok=True)
             partial = job.target.with_name(job.target.name + ".partial" + job.target.suffix)
@@ -238,16 +281,9 @@ def run_enhance(
     points = [numbers(t, 10, "--landmarks") for t in landmarks] or None
     face_boxes = [to_box(numbers(t, 4, "--box")) for t in boxes] or None
     jobs = plan(inputs, output, suffix=suffix, video_suffix=video_suffix, overwrite=overwrite)
-    path = checkpoint if checkpoint is not None else Path(config.models.path(scale or 4))
-    if not path.is_file():
-        hint = (
-            f"export it with: facehall export onnx --scale {scale or 4} -o {path}"
-            if path.suffix == ".onnx"
-            else "FACEHALL_RUNS: the folder of the reference runs"
-        )
-        raise FileNotFoundError(
-            f"{path}: no model; pass --ckpt, or set the models in {pipeline} ({hint})"
-        )
+    if checkpoint is not None and not checkpoint.is_file():
+        raise FileNotFoundError(f"{checkpoint}: no model")
+    path = checkpoint if checkpoint is not None else model_path(config, scale or 4, pipeline)
     enhancer = Enhancer.load(path, config, device)
     if scale is not None and enhancer.scale != scale:
         raise ValueError(f"{path} is a x{enhancer.scale} model, not x{scale}")

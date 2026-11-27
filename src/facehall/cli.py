@@ -176,6 +176,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="largest allowed difference from PyTorch (default: %(default)s)",
     )
     onnx.add_argument("--overwrite", action="store_true", help="replace an existing output")
+
+    serve = commands.add_parser(
+        "serve",
+        help="REST API for photos, for local use",
+        description="Serve the REST API (POST /enhance, GET /health, GET /version; try it at "
+        "/docs) with the ONNX exports of the reference models (models.onnx_x4, onnx_x8), "
+        "without PyTorch. Photos are processed in memory and not stored. There is no "
+        "authentication: keep it on 127.0.0.1. The restored faces are a plausible "
+        "reconstruction, not a recovery of the real details: do not use them to identify a "
+        "person or as evidence.",
+    )
+    serve.add_argument("--host", help="address to bind (default: serve.host, 127.0.0.1)")
+    serve.add_argument("--port", type=int, help="port (default: serve.port, 8000)")
+    serve.add_argument(
+        "--scale",
+        dest="scales",
+        type=int,
+        choices=(4, 8),
+        action="append",
+        default=[],
+        help="model scale to serve (repeatable; default: serve.scales, 4 and 8)",
+    )
+    serve.add_argument(
+        "--pipeline",
+        type=Path,
+        default=Path("configs/pipeline/default.yaml"),
+        help="pipeline config with the models and the serve limits (default: %(default)s)",
+    )
+    serve.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a pipeline value, e.g. --set serve.queue=4 or --set models.backend=torch "
+        "(the checkpoints, with PyTorch) (repeatable)",
+    )
+    serve.add_argument("--device", default="auto", help="auto, cpu or cuda (default: auto)")
     return parser
 
 
@@ -246,4 +284,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             parser.exit(2, f"facehall export: error: {error}\n")
         print(describe(exported))
+    elif args.command == "serve":
+        from facehall.serve import run_serve
+
+        try:
+            return run_serve(
+                pipeline=args.pipeline,
+                overrides=args.overrides,
+                scales=args.scales,
+                host=args.host,
+                port=args.port,
+                device=args.device,
+            )
+        except (OSError, ValueError, RuntimeError) as error:
+            parser.exit(2, f"facehall serve: error: {error}\n")
     return 0

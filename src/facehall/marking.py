@@ -38,12 +38,13 @@ A visible mark is optional (``watermark``). C2PA is not written (``docs/DECISION
 """
 
 import html
+import io
 import json
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from xml.sax.saxutils import escape, quoteattr
 
 import cv2
@@ -197,7 +198,26 @@ def output_format(path: Path) -> str:
 
 def save(path: Path, image: Image8, rec: Mapping[str, Any], *, quality: int = 95) -> None:
     """Write ``image`` with its marks. JPEG and WebP use ``quality``; PNG is lossless."""
-    kind = output_format(path)
+    write(path, image, rec, kind=output_format(path), quality=quality)
+
+
+def encode(image: Image8, rec: Mapping[str, Any], kind: str, *, quality: int = 95) -> bytes:
+    """``image`` with its marks as the bytes of a ``kind`` file (PNG, JPEG or WEBP), in memory."""
+    if kind not in FORMATS.values():
+        raise ValueError(f"unsupported output format {kind!r}; use one of PNG, JPEG, WEBP")
+    buffer = io.BytesIO()
+    write(buffer, image, rec, kind=kind, quality=quality)
+    return buffer.getvalue()
+
+
+def write(
+    target: Path | IO[bytes],
+    image: Image8,
+    rec: Mapping[str, Any],
+    *,
+    kind: str,
+    quality: int = 95,
+) -> None:
     picture = Image.fromarray(image, "RGB")
     packet = xmp_packet(rec)
     if kind == "PNG":
@@ -207,13 +227,14 @@ def save(path: Path, image: Image8, rec: Mapping[str, Any], *, quality: int = 95
         info.add_text("Software", f"facehall {rec['software']['version']}")
         info.add_itxt("facehall", json.dumps(rec, sort_keys=True))
         info.add_itxt(XMP_KEY, packet)
-        picture.save(path, "PNG", pnginfo=info, exif=exif(rec))
+        picture.save(target, "PNG", pnginfo=info, exif=exif(rec))
     else:
-        picture.save(path, kind, quality=quality, xmp=packet.encode(), exif=exif(rec))
+        picture.save(target, kind, quality=quality, xmp=packet.encode(), exif=exif(rec))
 
 
-def read_record(path: Path) -> dict[str, Any] | None:
-    """The facehall record of a marked image, or None for an unmarked one."""
+def read_record(path: Path | IO[bytes]) -> dict[str, Any] | None:
+    """The facehall record of a marked image (a file or its bytes in a stream), or None for an
+    unmarked one."""
     with Image.open(path) as picture:
         info = dict(picture.info)
     if "facehall" in info:

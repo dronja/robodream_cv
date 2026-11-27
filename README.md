@@ -59,6 +59,8 @@ uv run facehall --version
 
 ## 🚀 Usage
 
+The full guide, from getting the models to troubleshooting, is [`docs/USAGE.md`](docs/USAGE.md).
+
 ### Enhancing photos and videos
 
 `facehall enhance` detects the faces of a photo or of every video frame, restores each one with

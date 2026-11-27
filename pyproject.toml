@@ -1,6 +1,6 @@
 [project]
 name = "facehall"
-version = "0.0.0"
+version = "0.1.0"
 description = "Face hallucination: identity-preserving face super-resolution."
 readme = "README.md"
 requires-python = ">=3.12"

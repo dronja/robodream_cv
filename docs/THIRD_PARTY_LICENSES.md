@@ -1,6 +1,6 @@
 # Third-party licenses
 
-> This is not legal advice. Last reviewed: **2026-11-24**.
+> This is not legal advice. Last reviewed: **2026-11-27**, for release 0.1.0 (PR 6.3).
 >
 > - Package licenses come from the installed package metadata, generated with
 >   `scripts/license_report.py` and reviewed by hand.
@@ -13,7 +13,8 @@
 The code is licensed under Apache-2.0 (`LICENSE`). Trained weights are a different matter: the
 CelebA terms also cover "derived data" (§2). Until that is reviewed, weights trained on CelebA,
 including the legacy weights, are treated as **non-commercial research only** and are not covered
-by the code license.
+by the code license. The reference models of release 0.1.0 are not published (D39): besides
+CelebA, their identity loss used facenet weights whose license is unknown (§3).
 
 ## 2. Datasets
 
@@ -25,8 +26,9 @@ by the code license.
 | RetinaFace annotations of WIDER FACE (`retinaface_gt.zip`: boxes and five landmarks) | Alignment of the real-world test set (D20) | No license file comes with the annotations. The [InsightFace README](https://github.com/deepinsight/insightface), section "License": "The training data containing the annotation (and the models trained with these data) are available for non-commercial research purposes only." The [RetinaFace README](https://github.com/deepinsight/insightface/tree/master/detection/retinaface) links the download | READMEs, 2026-11-24 |
 
 Consequence for this public repository: CelebA images, annotations and per-image manifests are not
-committed (D14); `docs/DATA.md` holds only counts and checksums. Public figures that show CelebA
-faces need a separate decision (`docs/PROJECT.md` §11, Q2 and Q3). The same applies to WIDER FACE:
+committed (D14); `docs/DATA.md` holds only counts and checksums. Grids that show CelebA faces stay
+local (D19); the README figures that showed a face from the legacy dataset, which includes CelebA,
+were removed (D38, D40). The same applies to WIDER FACE:
 its crops, the manifest and any figure that shows its faces stay local. "NoDerivatives" forbids
 sharing adapted material such as crops, and the people in the photos gave no consent to this use
 (D20).
@@ -156,7 +158,7 @@ nothing is linked against them or distributed (D13).
 
 | Program | Used for | Version checked | License |
 |---|---|---|---|
-| `ffmpeg`, `ffprobe` | Videos only (`facehall.video`, PR 4.5): encoding the restored frames (libx264 or libx265), copying the audio and writing the marks; `ffprobe` reads the marks back. CI installs the same Ubuntu package on its runner for the video tests (PR #33) | Ubuntu package `7:8.0.1-3ubuntu2` (here and on the CI runner) | FFmpeg is LGPL-2.1+, but this build is configured with `--enable-gpl` and links libx264 and libx265 (both GPL-2.0+), so the program as built is GPL. That matters for distributing it, which is not planned; a Docker image with it (Phase 5) would need this reviewed |
+| `ffmpeg`, `ffprobe` | Videos only (`facehall.video`, PR 4.5): encoding the restored frames (libx264 or libx265), copying the audio and writing the marks; `ffprobe` reads the marks back. CI installs the same Ubuntu package on its runner for the video tests (PR #33) | Ubuntu package `7:8.0.1-3ubuntu2` (here and on the CI runner) | FFmpeg is LGPL-2.1+, but this build is configured with `--enable-gpl` and links libx264 and libx265 (both GPL-2.0+), so the program as built is GPL. That matters for distributing it, which is not planned. The Docker images do not contain it (§4.5) |
 
 ### 4.5 Service images
 

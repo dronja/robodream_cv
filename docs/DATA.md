@@ -1,7 +1,8 @@
 # Data
 
 > Composition, sources, verified source facts, layout and reproduction of the datasets.
-> Last updated: **2026-11-24**.
+> Last updated: **2026-11-27** (reviewed for release 0.1.0; the data have not changed since
+> 2026-11-24).
 >
 > - Every number here comes from reading the source files directly or from a real run of
 >   `scripts/prepare_dataset.py` or `scripts/prepare_wider.py`.
@@ -22,7 +23,7 @@
 
 | Dataset | Used for | Location | Terms |
 |---|---|---|---|
-| CelebA aligned (`img_align_celeba`) from the Hugging Face mirror `eurecom-ds/celeba` | Training and evaluation, Phases 1–3 (D8) | Raw: `/mnt/storage/AI/Face/celeba_eurecom/data/`. Prepared: `/mnt/storage/AI/Face/celeba/` | Non-commercial research only, no redistribution |
+| CelebA aligned (`img_align_celeba`) from the Hugging Face mirror `eurecom-ds/celeba` | Training and evaluation (D8); the synthetic scenes of the pipeline, video and benchmark measurements (Phases 4–5) | Raw: `/mnt/storage/AI/Face/celeba_eurecom/data/`. Prepared: `/mnt/storage/AI/Face/celeba/` | Non-commercial research only, no redistribution |
 | WIDER FACE training images + RetinaFace 5-point landmarks | Real-world test set without HR reference (D20, §7) | Raw: `/mnt/storage/AI/Face/wider_face/raw/`. Prepared: `/mnt/storage/AI/Face/wider_face/realworld/` | WIDER FACE: CC BY-NC-ND 4.0. Landmarks: non-commercial research only |
 
 The legacy 89×109 dataset is not used (D9). No image, annotation or manifest of these datasets is

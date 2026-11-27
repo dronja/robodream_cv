@@ -2381,3 +2381,23 @@ README figures removed by D38.
   checked against (PR 1.5), and the training logs behind the legacy timings (`PROJECT.md` §5).
 
 The notebook shrinks from 456 KB to 127 KB. Git history is not rewritten (D7).
+
+### Versions and checksums (PR 6.3)
+**Decision** (defaults taken without a separate question, 2026-11-27):
+- **Package:** semantic versions, starting at 0.1.0 (from 0.0.0). Before 1.0.0 a minor release
+  may change the command line, the API and the model contract. `CHANGELOG.md` follows Keep a
+  Changelog. A test keeps `facehall.__version__` equal to the version in `pyproject.toml`.
+- **Models:** each reference has its own semantic version, `facehall-x4` and `facehall-x8`, both
+  0.1.0. Major: the contract changes (scale, sizes, value range, channels); minor: new weights
+  that passed the gate; patch: a new ONNX export of the same weights.
+- **Checksums** of the weights and the ONNX files are in `docs/MODEL_CARD.md` §12 and in
+  `docs/models.sha256` (`sha256sum -c`). An output's marks already hold the model's sha256, so no
+  code change is needed to trace an output to a model version.
+- **The ONNX files were exported again** with facehall 0.1.0. The export is deterministic: with
+  facehall 0.0.0 it reproduced the earlier files byte for byte, and with 0.1.0 two exports gave
+  the same bytes. Only the facehall version in the metadata differs, so the checksums change.
+- **No git tag and no GitHub release** without a separate confirmation (D7, D39).
+- **Review for the release:**
+  - `THIRD_PARTY_LICENSES.md`: the generated table matches `uv.lock` (only the rows corrected by
+    hand differ); the stale references to Q2, Q3 and a Docker image with ffmpeg are updated.
+  - `DATA.md`: unchanged data; the use of CelebA in Phases 4–5 added.

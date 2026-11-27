@@ -161,7 +161,9 @@ docker run --rm -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
 ## 📊 Results
 
 Numbers from real runs only; every table below is in [`docs/RESULTS.md`](docs/RESULTS.md) or in
-[`docs/PROJECT.md`](docs/PROJECT.md) §9 with its full context.
+[`docs/PROJECT.md`](docs/PROJECT.md) §9 with its full context. The model card
+([`docs/MODEL_CARD.md`](docs/MODEL_CARD.md)) adds the training details, subgroups and
+intended use.
 
 ### Models
 

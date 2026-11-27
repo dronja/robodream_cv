@@ -116,9 +116,10 @@ Both models start from an L1 model of the same architecture (PR 3.1), then are f
   the face (PR 3.3, D24).
 - **Perceptual loss (×4 only):** VGG19 `conv5_4` features, with the same defences (PR 3.8).
   Without them it drew a fine hatching (PR 3.6, D27).
-- **Weights selected on val** by rules set before the runs: no loss of PSNR-Y beyond 0.3 dB, no
-  worse LPIPS or ID similarity than the previous reference, a real-photo KID limit, and from
-  PR 3.8 on a spectral limit.
+- **Weights selected on val** by rules set before the runs (D23): on light and medium inputs,
+  better LPIPS and ID similarity than the previous reference, PSNR-Y at most 0.3 dB lower, and
+  no subgroup losing more than 0.01 ID; a real-photo KID limit (D26); from PR 3.8 on, a spectral
+  limit (D28).
 - **Not used:** an adversarial loss. The ESRGAN recipe (PR 3.2) halved the ID similarity and
   invented features, and was rejected.
 - **×8 and the perceptual term:** at ×8, every perceptual weight tried lowered ID similarity
@@ -140,7 +141,8 @@ Both models start from an L1 model of the same architecture (PR 3.1), then are f
   - LPIPS (AlexNet);
   - **ID similarity:** the cosine similarity of ArcFace embeddings (InsightFace `buffalo_l`,
     D18) of the output and the original. This model is not the one the identity loss used.
-    Same-person pairs of CelebA val faces score 0.565 on average, different people 0.015.
+    On CelebA val faces of 60 identities, same-person pairs score 0.565 on average and
+    different people 0.015.
 - **Real low-resolution photos:** WIDER FACE faces that are natively that small (D20), 8,645 at
   ×4 and 2,172 at ×8, with no reference. FID and KID against real CelebA faces.
 - **End to end:** 1,000 synthetic scenes of CelebA **val** faces in a larger image, with
@@ -217,7 +219,9 @@ Observations:
   inputs, and −0.028 against +0.008 on heavy ones. At ×8 it is −0.016 against +0.012 on light
   inputs. This fits what the evaluation grids show: the models make older people look younger.
 - **Against the bicubic upscale, the models also do worse on `Male` = 1 than on `Male` = 0** on
-  every level at both scales, by 0.006–0.032.
+  every level at both scales, by 0.005–0.032.
+- **Uncertainty:** these are differences of means; no confidence intervals were computed, and
+  the smallest of them (0.005–0.010) may be within noise.
 - **The quality gate** limits the drop of each subgroup against the previous reference to 0.01
   (D23). It does not compare subgroups with each other.
 - **Not measured:** skin tone (no annotation, D10), age beyond the binary `Young`, and any
@@ -277,8 +281,9 @@ On a Ryzen 9 9950X with an RTX 6000 Ada, a small photo with one face takes 18 ms
 
 ## 8. Limitations and risks
 
-- **Invented details:** older people look younger, glasses can disappear, and at ×8 whole faces can be drawn from near-featureless inputs (seen in the grids,
-  not measured; §7.3 shows the age effect in the numbers).
+- **Invented details:** older people look younger, glasses can disappear, and at ×8 whole faces
+  can be drawn from near-featureless inputs. Seen in the evaluation grids of these models and
+  their L1 starts, not measured; §7.3 shows the age effect in the numbers.
 - **Identity below a bicubic upscale** in real use (§7.4).
 - **False faces:** on real WIDER FACE photos, 3% (×4) and 15% (×8) of the restored detections
   were not faces, and only 52% / 29% of the small faces were found. Both numbers are

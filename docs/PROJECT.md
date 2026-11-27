@@ -130,8 +130,12 @@ As of 2026-11-27:
     Runtime gives PyTorch's CPU output on CPU and CUDA; end to end it is as fast as PyTorch on
     CUDA and 4–17% slower on CPU (§9).
   - Merged: PR 5.3 (the REST API, `facehall serve`; PR #36, `ec21d30`).
-  - In review: PR 5.4 (Docker CPU and GPU images; PR #37, branch `build/docker`). Both images
-    pass the end-to-end check, the GPU image on the CUDA provider in a container too (§9).
+  - Merged: PR 5.4 (Docker CPU and GPU images; PR #37, `d407dfe`). Both images pass the
+    end-to-end check, the GPU image on the CUDA provider in a container too (§9).
+  - In review: PR 5.5 (latency and memory of the images; branch `perf/image-benchmark`).
+    Result: Docker adds no latency. A GPU saves only the restoration, while face detection on the
+    CPU takes most of the time on larger photos (§9). With it, the Phase 5 "done when" criterion
+    is met; the Gradio demo stays deferred (D37).
   - Found in PR 5.4: ONNX Runtime sends telemetry to Microsoft by default, also on Linux. facehall
     now turns it off on import, and so do the images (`DECISIONS.md`, "ONNX Runtime telemetry
     off").
@@ -214,7 +218,8 @@ robodream_cv/
 │                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
 │                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2),
 │                              # measure_temporal.py (PR 4.5), measure_onnx.py (PR 5.1),
-│                              # compare_backends.py (PR 5.2), smoke_image.py (PR 5.4)
+│                              # compare_backends.py (PR 5.2), smoke_image.py (PR 5.4),
+│                              # benchmark_images.py (PR 5.5)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
@@ -1646,7 +1651,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - on CUDA without PyTorch: warm-up 1.5 s, then 12 ms per single-face photo and 2.0–2.2 s
       per 64-face mosaic at ×8;
     - peak memory 2.5 GB (CPU) and 2.9 GB (CUDA) with 34 MP outputs.
-- **Docker images (PR 5.4, in review).** Defaults, measurements and reasons in `DECISIONS.md`
+- **Docker images (PR 5.4, done).** Defaults, measurements and reasons in `DECISIONS.md`
   ("Docker images (PR 5.4)" and "ONNX Runtime telemetry off").
   - **Images:** `docker/Dockerfile.cpu` (`onnxruntime`) and `docker/Dockerfile.gpu`
     (`onnxruntime-gpu` with the CUDA libraries from pip, D35), both on `python:3.12.14-slim`
@@ -1687,6 +1692,49 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     over HTTPS by default, Linux included (its `Privacy.md`; seen with strace).
     `ORT_DISABLE_TELEMETRY=1` stops it only if set before `import onnxruntime`, so
     `facehall/__init__.py` sets it.
+- **Latency and memory of the images (PR 5.5, in review).** Method, full tables and reasons in
+  `DECISIONS.md` ("Latency and memory of the service images (PR 5.5)").
+  - **Script:** `scripts/benchmark_images.py`. It starts a fresh service per scale and workload,
+    in an image or as a local process, and sends one request at a time. It measures:
+    - the start to a healthy `/health`;
+    - the latency as the client sees it;
+    - the peak resident memory and the GPU memory.
+
+    `--stages` times the parts of a request in-process.
+  - **Workloads:** synthetic CelebA scenes (local):
+    - one small face;
+    - a mosaic of 64 faces;
+    - a 1920 × 1080 frame with 8 faces, answered as PNG or JPEG.
+  - **Run** on 2026-11-27, from commit `de0cb67` (Ryzen 9 9950X, RTX 6000 Ada). Median latency
+    in seconds:
+
+    | Scale | Request | CPU image | CPU image, 4 cores | GPU image (CUDA) |
+    |---|---|---|---|---|
+    | ×4 | one face | 0.018 | 0.019 | 0.012 |
+    | ×4 | 64 faces | 2.30 | 2.47 | 2.02 |
+    | ×4 | 1920 × 1080, 8 faces, PNG / JPEG | 2.63 / 2.24 | 2.63 / 2.24 | 2.64 / 2.23 |
+    | ×8 | one face | 0.018 | 0.018 | 0.012 |
+    | ×8 | 64 faces | 2.35 | 2.41 | 2.01 |
+    | ×8 | 1920 × 1080, 8 faces, PNG / JPEG | 6.86 / 5.41 | 7.12 / 5.55 | 7.07 / 5.66 |
+
+  - **Start and memory:**
+    - **Start:** to a healthy service, 0.6 s for the CPU image and 1.9–2.1 s for the GPU image
+      (0.3 s and 1.2–1.4 s without Docker).
+    - **Peak resident memory, CPU image:** 0.3 GB for one face, 2.3 GB for 64 faces or an ×8
+      frame.
+    - **GPU image:** 1.3–3.1 GB of resident memory and 1.48 GiB of GPU memory per scale.
+  - **Observations:**
+    - **Docker** adds no measurable latency: the services without Docker are within the run's
+      spread (±3%).
+    - **The GPU saves only the restoration:** 0.35–0.38 s of a 64-face request and 6 ms of a
+      single face. It saves nothing on the frames, where 8 faces restore in 0.05 s on the CPU.
+    - **Face detection** takes most of every larger request: 1.40 s of a 64-face mosaic, 2.09 s
+      of 2.62 s for an ×4 frame and 5.21 s of 7.02 s for an ×8 one.
+      - It is YuNet on the bicubic upscale by the model scale (D31), tiled above 16 MP
+        (PR 4.4), and runs on the CPU in both images.
+      - It parallelises poorly: 1.7–1.8× faster on 32 threads than on one. A container limited
+        to 4 cores is at most 8% slower than the full machine.
+    - **PNG encoding** of the 133 MP answer to an ×8 frame takes 1.7 s; JPEG takes 0.25 s.
 
 ## 10. Roadmap and progress
 
@@ -1832,7 +1880,9 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       weights mounted read-only; dependency groups from `uv.lock`; `scripts/smoke_image.py`; the
       CPU image built and checked in CI; ONNX Runtime telemetry off; the GPU image checked on
       CUDA in a container (§9)
-- [ ] **PR 5.5** latency and memory benchmark of the images
+- [x] **PR 5.5** latency and memory benchmark of the images: `scripts/benchmark_images.py`
+      (start, latency, resident and GPU memory; `--stages` for the parts of a request), CPU and
+      GPU images, a 4-core container and the services without Docker (§9)
 - [ ] Gradio demo (optional; deferred, D37)
 
 **Done when** `docker run` + `curl` returns an enhanced image and the latency is documented.
@@ -1936,6 +1986,16 @@ by D32.
   a rebuild policy.
 - Mounted models and weights must be readable by the container's user (uid 10001); a private
   folder (mode 0700) makes `serve` fail at start with "Permission denied" (seen in PR 5.4).
+- Face detection on the CPU sets the speed of the service for anything larger than a few faces,
+  with or without a GPU (PR 5.5):
+  - 80% of a 1920 × 1080 request at ×4 and 74% at ×8;
+  - it parallelises poorly (1.7–1.8× on 32 threads).
+
+  Proposals, not tested: detect on a smaller upscale when the faces are large enough, run YuNet
+  through ONNX Runtime (CUDA in the GPU image), or detect the tiles in parallel.
+- The benchmark frames are synthetic: CelebA faces on a flat grey canvas. Real photos compress
+  worse, so their PNG answers take longer to encode and are larger than the measured 1.6 MB for
+  133 MP. An ×8 Full HD answer is just under the output limit of 2^27 pixels (PR 5.5).
 - ONNX Runtime on CUDA searches cuDNN algorithms once per new batch size (about 20 ms each, at
   most 32 sizes); `facehall serve` warms all of them up at start-up (PR 5.3).
 - The REST API has no authentication (D13). Bound to another address than 127.0.0.1, anyone
@@ -2052,6 +2112,12 @@ docker run --rm --gpus all -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
 uv run python scripts/smoke_image.py --image facehall:cpu --models models   # end-to-end check
 uv run python scripts/smoke_image.py --image facehall:gpu --models models --gpu
 uv run python scripts/smoke_image.py --image facehall:cpu --tiny   # a tiny random model (CI)
+uv run python scripts/compare_backends.py scenes --scale 4   # the benchmark's scenes (and --scale 8)
+uv run python scripts/benchmark_images.py --image facehall:cpu --label docker-cpu   # ~3 min
+uv run python scripts/benchmark_images.py --image facehall:gpu --gpu --label docker-gpu
+uv run python scripts/benchmark_images.py --image facehall:cpu --cpuset 0-3 --label docker-cpu-4
+uv run python scripts/benchmark_images.py --local .venv/bin/facehall --label local-cpu
+uv run python scripts/benchmark_images.py --stages --label stages-cpu   # parts of a request
 ```
 
 REST API (PR 5.3):

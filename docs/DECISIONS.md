@@ -2218,3 +2218,110 @@ store; base digests `python:3.12.14-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f
 This settles the open points of D35: the GPU image runs on the CUDA provider in a container;
 it installs `onnxruntime-gpu` alone, so the two `onnxruntime` packages never meet; and the CUDA
 provider runs without TF32 (PR 5.2).
+
+### Latency and memory of the service images (PR 5.5)
+**Decision** (defaults taken without a separate question, 2026-11-27): `scripts/benchmark_images.py`
+measures the REST API as a user of it sees it.
+- **Targets:**
+  - the CPU and GPU images, run as documented (read-only, port on 127.0.0.1);
+  - the CPU image limited to 4 cores (`--cpuset-cpus 0-3`), for a smaller machine;
+  - the same service without Docker, to separate the container's cost: the image's torch-free
+    environment on CPU and the `onnxruntime-gpu` environment of PR 5.2 on CUDA.
+- **A fresh service per scale and workload,** serving that scale only, so each start and each
+  memory peak belongs to one workload.
+- **Requests one at a time:** the service has one worker by design (PR 5.3), so concurrent
+  requests only wait in the queue.
+- **Measures:**
+  - the start to the first healthy `/health` (model load and warm-up included);
+  - the client-side latency: the first request, then the median, p95 and maximum of the others;
+  - the peak resident memory of the service process (`VmHWM`), and for containers the cgroup's
+    peak;
+  - the GPU memory of the process (`nvidia-smi`, every 0.1 s).
+- **Workloads** from the synthetic CelebA scenes of `compare_backends.py` (local, D19):
+  - `single`: 100 scenes with one face (about 100 × 120 px at ×4, 50 × 60 at ×8);
+  - `mosaic`: 5 mosaics of 64 faces (about 1,340 px at ×4, 670 px at ×8), each sent 3 times;
+  - `frame`: 5 frames of 1920 × 1080 with 8 faces on a grey canvas, sent as JPEG (quality 95),
+    each answered once as PNG and once as JPEG.
+- **`--stages`:** the work of one request (decode, detect, restore, background and paste-back,
+  mark and encode), timed in-process with the same functions as `POST /enhance`.
+
+**Run** on 2026-11-27 from commit `de0cb67`: Ryzen 9 9950X (16 cores, 32 threads), RTX 6000 Ada,
+images `facehall:cpu` `sha256:232a59333597…` and `facehall:gpu` `sha256:ee9f36466dcc…`. All five
+targets took 14 min.
+
+Median latency in seconds (p95 in brackets):
+
+| Scale | Request | CPU image | CPU image, 4 cores | GPU image | CPU, no Docker | CUDA, no Docker |
+|---|---|---|---|---|---|---|
+| ×4 | one face | 0.018 (0.025) | 0.019 (0.024) | 0.012 (0.024) | 0.019 (0.024) | 0.012 (0.024) |
+| ×4 | 64 faces | 2.299 (2.316) | 2.468 (2.498) | 2.017 (2.037) | 2.346 (2.370) | 2.009 (2.038) |
+| ×4 | frame, PNG | 2.633 (2.637) | 2.630 (2.640) | 2.642 (2.657) | 2.655 (2.666) | 2.627 (2.654) |
+| ×4 | frame, JPEG | 2.241 (2.259) | 2.239 (2.268) | 2.230 (2.249) | 2.236 (2.242) | 2.230 (2.237) |
+| ×8 | one face | 0.018 (0.023) | 0.018 (0.023) | 0.012 (0.023) | 0.018 (0.024) | 0.012 (0.022) |
+| ×8 | 64 faces | 2.348 (2.406) | 2.408 (2.456) | 2.005 (2.044) | 2.328 (2.393) | 2.027 (2.059) |
+| ×8 | frame, PNG | 6.864 (7.073) | 7.117 (7.156) | 7.071 (7.124) | 7.036 (7.079) | 7.057 (7.099) |
+| ×8 | frame, JPEG | 5.413 (5.671) | 5.552 (5.595) | 5.663 (5.675) | 5.628 (5.692) | 5.605 (5.632) |
+
+- **First request** after the start, against the median: for one face 4–8 ms slower on CPU
+  and 26–29 ms on CUDA; for the larger requests 0.1–0.3 s slower.
+- **Start** to a healthy service: 0.55–0.63 s for the CPU image (0.26–0.31 s without Docker),
+  1.93–2.11 s for the GPU image (1.21–1.37 s without Docker).
+- **Memory:** peak resident memory in GB:
+
+  | Request | CPU image | GPU image |
+  |---|---|---|
+  | one face | 0.31 | 1.30–1.33 |
+  | 64 faces | 2.35 | 2.52–2.54 |
+  | ×4 / ×8 frame | 1.71 / 2.30 | 2.52 / 3.12 |
+
+  - The cgroup peaks are 0.03–0.36 GB lower.
+  - GPU memory is 1.48 GiB in every workload. It is set by the warm-up of batch sizes 1–32
+    (PR 5.3), so it does not grow with the request.
+  - The 4-core container and the services without Docker use the same memory as their images.
+- **Faces:** every frame request restored 8 faces, and every mosaic 63–64 of its 64.
+
+Parts of a request (`--stages`, added to the script after that run, with the same facehall
+code; median seconds on CPU, CUDA in brackets where it differs):
+
+| Scale | Request | Decode | Detect | Restore | Background, paste | Mark, encode | Total |
+|---|---|---|---|---|---|---|---|
+| ×4 | one face | 0.000 | 0.004 | 0.007 (CUDA 0.001) | 0.000 | 0.006 | 0.017 (0.011) |
+| ×4 | 64 faces | 0.015 | 1.402 | 0.394 (0.013) | 0.026 | 0.520 | 2.344 (1.998) |
+| ×4 | frame, PNG | 0.004 | 2.091 | 0.052 (0.002) | 0.015 | 0.457 | 2.622 (2.607) |
+| ×4 | frame, JPEG | 0.004 | 2.098 | 0.049 (0.002) | 0.014 | 0.064 | 2.226 (2.226) |
+| ×8 | one face | 0.000 | 0.003 | 0.007 (0.001) | 0.000 | 0.007 | 0.018 (0.011) |
+| ×8 | 64 faces | 0.003 | 1.398 | 0.366 (0.013) | 0.025 | 0.558 | 2.310 (2.016) |
+| ×8 | frame, PNG | 0.004 | 5.212 | 0.043 (0.002) | 0.048 | 1.703 | 7.016 (7.019) |
+| ×8 | frame, JPEG | 0.004 | 5.210 | 0.040 (0.002) | 0.037 | 0.251 | 5.547 (5.603) |
+
+- **Detection threads:** measured separately on 3 frames with `cv2.setNumThreads`. One thread
+  took 3.65 s (×4) and 9.04 s (×8), against 2.12 s and 5.13 s on the default 32. In the 4-core
+  container, OpenCV sees the 4 CPUs and uses 4 threads.
+
+**Observations:**
+- **Docker costs nothing measurable per request:** the services without Docker are within
+  ±3%, both ways. The container adds 0.3 s (CPU) and 0.7 s (GPU) to the start.
+- **HTTP costs about 1 ms per request:** one face takes 17–18 ms in-process and 18–19 ms
+  through the API on CPU.
+- **The GPU saves only the restoration:** 0.35–0.38 s of a 64-face request, 6 ms of a single
+  face, and nothing on the frames, whose 8 faces take 0.05 s on the CPU.
+- **Face detection takes most of the time** of every larger request: 60% of a 64-face mosaic,
+  80% of an ×4 frame and 74% of an ×8 frame. It is YuNet on the bicubic upscale by the model
+  scale (D31): 33 MP for an ×4 frame and 133 MP for an ×8 one, in tiles above 16 MP (PR 4.4).
+  It runs on the CPU in both images (OpenCV), and gains only 1.7–1.8× from 32 threads. So 4
+  cores serve within 8% of the full machine.
+- **Encoding:** a 133 MP PNG takes 1.7 s against 0.25 s as JPEG (quality 95). On these flat
+  synthetic frames the PNG is only 1.6 MB; real photos compress worse, so they would take longer.
+
+**Consequences:**
+- The Phase 5 "done when" criterion is met: `docker run` and `curl` return an enhanced image
+  (PR 5.4), and the latency is documented here.
+- A smaller machine without a GPU serves these requests almost as fast as this one. A GPU
+  pays off only for many faces per photo.
+- Faster detection is the lever for larger photos (proposals, not tested):
+  - detect on a smaller upscale when the faces are large enough;
+  - YuNet through ONNX Runtime, on CUDA in the GPU image;
+  - tiles in parallel.
+
+**Not measured:** real photos; other machines, including the 8 GB laptop; concurrent clients
+(the queue of PR 5.3).

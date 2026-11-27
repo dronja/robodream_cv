@@ -88,6 +88,8 @@ def test_onnx_restorer_matches_the_checkpoint(models: tuple[Path, Path]) -> None
     assert {k: info[k] for k in reference.info} == reference.info  # the same source model
     assert info["format"] == "onnx" and len(info["onnx_sha256"]) == 64
     assert info["runtime"].startswith("onnxruntime ") and info["runtime"].endswith(CPU)
+    options = exported.session.get_session_options()
+    assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"
 
 
 def test_load_restorer_picks_the_backend_by_suffix(models: tuple[Path, Path]) -> None:

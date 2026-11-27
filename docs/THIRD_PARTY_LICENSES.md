@@ -178,6 +178,18 @@ The GPU image therefore holds NVIDIA proprietary libraries, and both hold the FF
 bundled in the OpenCV wheel (LGPL-2.1, §4.1). Their redistribution terms must be reviewed before
 any image is published. The images contain no ffmpeg program (§4.4).
 
+### 4.6 Web interface
+
+The page of `facehall ui` (D41, `src/facehall/ui/static/`) loads nothing from other sites and
+bundles no font, framework or script library. It contains:
+
+| Component | License | Notes |
+|---|---|---|
+| Material Icons (Google), the SVG paths of 27 icons inlined in `index.html` | Apache-2.0 (the `LICENSE` of `google/material-design-icons`, checked through the GitHub API on 2026-11-27) | The source is named in a comment next to the icons |
+| Material Design 3 (m3.material.io): the baseline colour values, the type scale and the component measurements | *Needs verification:* the terms of the guidelines themselves were not reviewed | Written by hand as CSS; no file of Google's is copied |
+
+The page uses the system fonts; Roboto is named first in the font list but is not shipped.
+
 ## 5. How to update
 
 ```bash

@@ -51,13 +51,15 @@ def plan(
     suffix: str = ".png",
     video_suffix: str = ".mp4",
     overwrite: bool = False,
+    exclude: Path | None = None,
 ) -> list[Job]:
     """Input and output path pairs.
 
     One input file and an output with a suffix of the same kind (image or video) give one
     output file. Otherwise ``output`` is a folder: an input file ``a/b.jpg`` goes to
     ``output/b<suffix>`` (videos: ``video_suffix``), and the images and videos of an input
-    folder go to the same relative paths under ``output``.
+    folder go to the same relative paths under ``output``. Files of an input folder that lie
+    under ``exclude`` are left out (``facehall ui``: earlier outputs inside an input folder).
     """
     marking.output_format(Path("x" + suffix))
     if video_suffix not in video.OUTPUT_SUFFIXES:
@@ -68,6 +70,11 @@ def plan(
 
     def target_suffix(path: Path) -> str:
         return video_suffix if video.is_video(path) else suffix
+
+    excluded = exclude.resolve() if exclude is not None else None
+
+    def kept(path: Path) -> bool:
+        return excluded is None or not path.resolve().is_relative_to(excluded)
 
     kind = output.suffix.lower()
     if (
@@ -88,6 +95,7 @@ def plan(
                 jobs += [
                     Job(item, (output / item.relative_to(path)).with_suffix(target_suffix(item)))
                     for item in find_media(path)
+                    if kept(item)
                 ]
             else:
                 jobs.append(Job(path, output / (path.stem + target_suffix(path))))
@@ -162,9 +170,18 @@ def parameters(config: PipelineConfig) -> dict[str, Any]:
     values = asdict(config)
     values.pop("models")
     values.pop("serve")
+    values.pop("ui")
     weights = values["detector"].pop("weights")
     values["detector"]["weights_file"] = Path(weights).name if weights else None
     return values
+
+
+@dataclass(frozen=True)
+class Written:
+    """One enhanced input, written with its marks: the record and the face counts."""
+
+    record: dict[str, Any]
+    summary: str
 
 
 def summary(faces: Sequence[Any]) -> str:
@@ -198,44 +215,75 @@ def enhance_files(
     settings = parameters(enhancer.config)
     failures: list[tuple[Path, str]] = []
     for job in jobs:
-        if video.is_video(job.source):
-            try:
-                stats = video.enhance_video(
-                    enhancer,
-                    job.source,
-                    job.target,
-                    parameters=settings,
-                    visible_mark=visible_mark,
-                    report=report,
-                )
-            except (OSError, ValueError) as error:
-                failures.append((job.source, str(error)))
-                report(f"{job.source}: failed: {error}")
-                continue
-            report(f"{job.source} -> {job.target}: {stats.summary()}")
-            continue
         try:
-            image, digest = load_image(job.source)
-            result = enhancer.enhance(image, landmarks=landmarks, boxes=boxes)
-            out, rec = marked(
+            written = enhance_one(
                 enhancer,
-                image,
-                result,
-                digest=digest,
-                faces_from=faces_from,
-                visible_mark=visible_mark,
+                job,
                 settings=settings,
+                faces_from=faces_from,
+                landmarks=landmarks,
+                boxes=boxes,
+                visible_mark=visible_mark,
+                quality=quality,
+                report=report,
             )
-            job.target.parent.mkdir(parents=True, exist_ok=True)
-            partial = job.target.with_name(job.target.name + ".partial" + job.target.suffix)
-            marking.save(partial, out, rec, quality=quality)
-            partial.replace(job.target)
         except (OSError, ValueError, Image.DecompressionBombError) as error:
             failures.append((job.source, str(error)))
             report(f"{job.source}: failed: {error}")
             continue
-        report(f"{job.source} -> {job.target}: {summary(result.faces)}")
+        report(f"{job.source} -> {job.target}: {written.summary}")
     return failures
+
+
+def enhance_one(
+    enhancer: Enhancer,
+    job: Job,
+    *,
+    settings: dict[str, Any],
+    faces_from: str = "detector",
+    landmarks: Sequence[Sequence[float]] | None = None,
+    boxes: Sequence[Box] | None = None,
+    visible_mark: bool = False,
+    quality: int = 95,
+    report: Callable[[str], None] = print,
+    progress: Callable[[int, int], None] | None = None,
+) -> Written:
+    """Enhance one image or video and write its marked output to ``job.target``.
+
+    ``settings`` are the pipeline parameters of the record (``parameters``). For a video,
+    ``progress`` gets the frames done and the frames the container states after every frame;
+    an exception it raises stops the video, and nothing is written.
+    """
+    if video.is_video(job.source):
+        stats = video.enhance_video(
+            enhancer,
+            job.source,
+            job.target,
+            parameters=settings,
+            visible_mark=visible_mark,
+            report=report,
+            progress=progress,
+        )
+        return Written(stats.record, stats.summary())
+    image, digest = load_image(job.source)
+    result = enhancer.enhance(image, landmarks=landmarks, boxes=boxes)
+    out, rec = marked(
+        enhancer,
+        image,
+        result,
+        digest=digest,
+        faces_from=faces_from,
+        visible_mark=visible_mark,
+        settings=settings,
+    )
+    job.target.parent.mkdir(parents=True, exist_ok=True)
+    partial = job.target.with_name(job.target.name + ".partial" + job.target.suffix)
+    try:
+        marking.save(partial, out, rec, quality=quality)
+        partial.replace(job.target)
+    finally:
+        partial.unlink(missing_ok=True)
+    return Written(rec, summary(result.faces))
 
 
 def numbers(text: str, count: int, what: str) -> list[float]:

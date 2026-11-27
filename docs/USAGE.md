@@ -1,7 +1,8 @@
 # Using facehall
 
-> A practical guide to facehall 0.1.0: installation, models, photos, videos, the REST API, the
-> Docker images, configuration and troubleshooting. Last updated: **2026-11-27**.
+> A practical guide to facehall 0.1.0 and the `main` branch after it: installation, models,
+> photos, videos, the web interface, the REST API, the Docker images, configuration and
+> troubleshooting. Last updated: **2026-11-27**.
 >
 > - What the models are, how well they work and their limits: [`MODEL_CARD.md`](MODEL_CARD.md).
 > - Training, evaluation and every command of the project: [`PROJECT.md`](PROJECT.md) §12.
@@ -18,11 +19,12 @@ AI-enhanced. Use is limited to non-commercial research (`MODEL_CARD.md` §2–3)
 3. [Get the models](#3-get-the-models)
 4. [Photos](#4-photos)
 5. [Videos](#5-videos)
-6. [Reading the marks](#6-reading-the-marks)
-7. [The REST API](#7-the-rest-api)
-8. [Docker](#8-docker)
-9. [Configuration](#9-configuration)
-10. [Troubleshooting](#10-troubleshooting)
+6. [The web interface](#6-the-web-interface)
+7. [Reading the marks](#7-reading-the-marks)
+8. [The REST API](#8-the-rest-api)
+9. [Docker](#9-docker)
+10. [Configuration](#10-configuration)
+11. [Troubleshooting](#11-troubleshooting)
 
 ## 1. What you need
 
@@ -198,7 +200,7 @@ uv run facehall enhance photo.jpg -o out.png --scale 4 --landmarks 124,88,132,88
 | `--set detector.score_threshold=0.9` | fewer false faces, but more faces missed (default 0.8) |
 | `--set models.backend=onnx` | use `models/x4.onnx` / `x8.onnx` instead of the checkpoints (no PyTorch) |
 | `--ckpt FILE` | any model: a checkpoint (`.safetensors`) or an ONNX export (`.onnx`) |
-| `--pipeline FILE` | your own pipeline config ([§9](#9-configuration)) |
+| `--pipeline FILE` | your own pipeline config ([§10](#10-configuration)) |
 
 On ONNX, `--device cuda` needs `onnxruntime-gpu` instead of `onnxruntime` in the environment.
 
@@ -209,7 +211,7 @@ Look at every output before you use it:
   especially at ×8.
 - **False faces:** a face may be drawn on a texture (a tie, a button, printed letters). On real
   photos, about 3% (×4) and 15% (×8) of the restored detections were not faces.
-- **The record** lists each restored region ([§6](#6-reading-the-marks)).
+- **The record** lists each restored region ([§7](#7-reading-the-marks)).
 
 ### 4.6 Speed
 
@@ -236,10 +238,80 @@ uv run facehall enhance videos/ -o out/ --scale 8 --video-format mkv
 - **Expect flicker:** the restored faces flicker more than the input, even with perfect
   landmarks.
 - **Speed:** about 8 frames/s for 640 × 360 at ×4 with about 60 faces per frame (RTX 6000 Ada).
-- **Settings:** `video` in the pipeline config ([§9](#9-configuration)), for example
+- **Settings:** `video` in the pipeline config ([§10](#10-configuration)), for example
   `--set video.crf=23` for smaller files or `--set video.audio=false`.
 
-## 6. Reading the marks
+## 6. The web interface
+
+*New after release 0.1.0: on the `main` branch, not yet released.*
+
+```bash
+uv run facehall ui                         # opens http://127.0.0.1:8100/#token=... in the browser
+uv run facehall ui --no-browser --port 8200 --set models.backend=onnx
+```
+
+A page in the browser for the same work as `facehall enhance`: choose photos, videos or folders
+on this computer, enhance them and look at the results next to the originals. It runs on this
+computer only; nothing is uploaded anywhere.
+
+**On the page:**
+
+1. **Photos and videos:** *Choose files* or *Choose a folder* opens a file dialog of this
+   computer, with shortcuts to the home, Pictures, Videos and Downloads folders. A folder
+   brings every photo and video in it, subfolders included. Earlier outputs inside the chosen
+   folder are skipped.
+2. **Settings:**
+   - the scale (×4 or ×8, [§4.2](#42-which-scale));
+   - the output folder;
+   - a new subfolder per run, named like `2026-11-27_15-02-14_x4` (on by default), so earlier
+     results are kept;
+   - replace existing outputs (only without a subfolder);
+   - the photo format (PNG, JPEG or WebP, with a quality slider) and the video format;
+   - the visible "AI-enhanced" mark.
+
+   The page remembers the settings in the browser.
+3. **Enhance** starts a run. Runs wait in a queue and go one at a time. Each run shows its
+   progress, a tile per file and the folder it writes to. *Cancel* stops a run between files and
+   within a video; a cancelled video is not written.
+4. **Results:** a click on a tile opens the viewer:
+   - **Compare:** the original and the result with a slider, the restored faces outlined. The
+     original is shown as pixels or as a bicubic upscale, so you see what the model added;
+   - **Faces:** each face before and after, enlarged;
+   - **Details:** the files, sizes, model, time and the input's sha256;
+   - videos play as the result or the original;
+   - *Download*, and the arrow keys or buttons for the previous and next result.
+
+   The folder button of a run opens its output folder in the file manager.
+
+**Details:**
+
+- **Outputs** are the same files, with the same marks ([§7](#7-reading-the-marks)), as those of
+  `facehall enhance`. The default folder is `Pictures/facehall` in your home folder (`ui.output`
+  in [§10](#10-configuration)).
+- **Models:** those of `facehall enhance` ([§3](#3-get-the-models)): the checkpoints by default,
+  or the ONNX exports with `--set models.backend=onnx`. A scale without a model is greyed out.
+  A model is loaded when a run first needs it and then kept, so the first run of a scale starts
+  a little later (about a second for the ×4 checkpoint on a GPU).
+- **Videos** need `ffmpeg`, as in [§5](#5-videos).
+- **Languages:** English and Ukrainian, chosen from the browser's language and switched with the
+  button in the top bar. Light and dark themes follow the system or the theme button.
+- **Access:** only from this computer. The address holds a session key (`#token=...`); without
+  it the page asks for the address that `facehall ui` printed. A new start makes a new key.
+- **What it can read:** any photo or video your user can read, through the page with the key.
+  It writes only the outputs you ask for.
+- **Memory:** the list of runs lives only while `facehall ui` runs; the files stay. Previews
+  keep up to 1 GB of decoded images in memory (`ui.cache_mb`).
+- **Privacy:** the log holds one line per request (method, path, status, time), without file
+  names, paths or pixels.
+
+| Option | Meaning |
+|---|---|
+| `--host`, `--port` | the address, `127.0.0.1:8100` by default (`ui.host`, `ui.port`) |
+| `--device` | `auto`, `cpu` or `cuda`, as in [§4.4](#44-options) |
+| `--no-browser` | only print the address |
+| `--pipeline FILE`, `--set KEY=VALUE` | the pipeline config and changes to it ([§10](#10-configuration)) |
+
+## 7. Reading the marks
 
 Every output says that it is AI-enhanced:
 
@@ -270,7 +342,7 @@ print(json.dumps(marking.read_record(sys.argv[1]), indent=1))" out.png
 The `model.sha256` and `model.onnx_sha256` values identify the model version
 (`MODEL_CARD.md` §12). Re-encoding the image in another program may drop the marks.
 
-## 7. The REST API
+## 8. The REST API
 
 ```bash
 uv run facehall serve                      # http://127.0.0.1:8000, both scales, ONNX models
@@ -283,7 +355,7 @@ uv run facehall serve --scale 4 --port 9000 --device cpu
   it can send photos, and the service only logs a warning.
 - **Try it by hand:** at `http://127.0.0.1:8000/docs`. That page loads its script from a CDN.
 
-### 7.1 Endpoints
+### 8.1 Endpoints
 
 | Endpoint | Answer |
 |---|---|
@@ -347,7 +419,7 @@ The limits are in `serve` of the pipeline config, for example `--set serve.queue
   boxes or face positions.
 - ONNX Runtime's and FastAPI's telemetry are off.
 
-## 8. Docker
+## 9. Docker
 
 Two images run the REST API without PyTorch: `facehall:cpu` (about 0.7 GB) and `facehall:gpu`
 (about 4.6 GB, CUDA through ONNX Runtime). They hold no weights: you mount them.
@@ -368,7 +440,7 @@ docker run --rm --gpus all -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
 
 - **Ports:** always publish the port on `127.0.0.1`, as above. Inside the container the service
   listens on all addresses, and it has no authentication.
-- **Use:** the same `curl` commands as in [§7](#7-the-rest-api), about a second (CPU) or two
+- **Use:** the same `curl` commands as in [§8](#8-the-rest-api), about a second (CPU) or two
   (GPU) after the start. Docker's own health check runs every 30 s, so `docker ps` shows
   `healthy` after the first check.
 - **GPU image:** needs `--gpus all` and the NVIDIA Container Toolkit. Without a GPU it stops at
@@ -378,7 +450,7 @@ docker run --rm --gpus all -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
 - **Self-check:** `uv run python scripts/smoke_image.py --image facehall:cpu --models models`.
   It checks the answer, the marks, the user and the logs.
 
-## 9. Configuration
+## 10. Configuration
 
 All settings are in `configs/pipeline/default.yaml`. Change one per command with
 `--set KEY=VALUE` (repeatable), or copy the file and pass `--pipeline my.yaml`.
@@ -395,6 +467,7 @@ All settings are in `configs/pipeline/default.yaml`. Change one per command with
 | `models.onnx_x4`, `models.onnx_x8` | `models/x4.onnx`, `models/x8.onnx` | ONNX files for `--scale` and `serve` |
 | `video.*` | see the file | tracking, codec (`libx264`, `libx265`), `crf`, `preset`, `audio` |
 | `serve.*` | see the file | host, port, scales, upload and output limits, queue, timeout |
+| `ui.*` | see the file | `facehall ui`: host, port, default output folder, preview sizes, `cache_mb` |
 
 Environment variables:
 
@@ -406,7 +479,7 @@ Environment variables:
 | `FACEHALL_DATA` | `/mnt/storage/AI/Face` | datasets, for training and evaluation |
 | `ORT_DISABLE_TELEMETRY` | set to `1` by facehall | ONNX Runtime telemetry; an explicit value is kept |
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
@@ -420,5 +493,8 @@ Environment variables:
 | API answers 415 | Send the bytes: `curl --data-binary @photo.jpg`, not `-F` |
 | API answers 413 | A smaller photo, a smaller scale, or a higher `serve.max_output_pixels` (more memory) |
 | API answers 503 | Busy; retry later, or raise `serve.queue` |
-| Container: `Permission denied: /models/...` | Make the mounted files readable by uid 10001 ([§8](#8-docker)) |
+| Container: `Permission denied: /models/...` | Make the mounted files readable by uid 10001 ([§9](#9-docker)) |
 | GPU container stops at start | Run it with `--gpus all`; check the NVIDIA Container Toolkit |
+| Web page: "Open the address that facehall ui printed" | The address lacks the session key, or `facehall ui` was started again: open the address it printed last |
+| `facehall ui`: `address already in use` | Another `facehall ui` runs, or the port is taken: stop it or use `--port` |
+| Web page: a scale is greyed out | No model of that scale is found: [§3](#3-get-the-models) |

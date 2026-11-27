@@ -214,6 +214,37 @@ def build_parser() -> argparse.ArgumentParser:
         "(the checkpoints, with PyTorch) (repeatable)",
     )
     serve.add_argument("--device", default="auto", help="auto, cpu or cuda (default: auto)")
+
+    ui = commands.add_parser(
+        "ui",
+        help="local web interface: choose photos, videos or folders, enhance, view the results",
+        description="Open the web interface in the browser: choose photos, videos or folders on "
+        "this computer, enhance them with the models of 'facehall enhance' and look at the "
+        "results, which are written to an output folder. It serves on 127.0.0.1 and needs the "
+        "session address it prints. The restored faces are a plausible reconstruction, not a "
+        "recovery of the real details: do not use them to identify a person or as evidence.",
+    )
+    ui.add_argument("--host", help="address to bind (default: ui.host, 127.0.0.1)")
+    ui.add_argument("--port", type=int, help="port (default: ui.port, 8100)")
+    ui.add_argument(
+        "--pipeline",
+        type=Path,
+        default=Path("configs/pipeline/default.yaml"),
+        help="pipeline config with the models and the ui settings (default: %(default)s)",
+    )
+    ui.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="override a pipeline value, e.g. --set models.backend=onnx or --set "
+        "ui.output=/data/enhanced (repeatable)",
+    )
+    ui.add_argument("--device", default="auto", help="auto, cpu or cuda (default: auto)")
+    ui.add_argument(
+        "--no-browser", action="store_true", help="print the address without opening a browser"
+    )
     return parser
 
 
@@ -298,4 +329,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except (OSError, ValueError, RuntimeError) as error:
             parser.exit(2, f"facehall serve: error: {error}\n")
+    elif args.command == "ui":
+        from facehall.ui import run_ui
+
+        try:
+            return run_ui(
+                pipeline=args.pipeline,
+                overrides=args.overrides,
+                host=args.host,
+                port=args.port,
+                device=args.device,
+                browser=not args.no_browser,
+            )
+        except (OSError, ValueError) as error:
+            parser.exit(2, f"facehall ui: error: {error}\n")
     return 0

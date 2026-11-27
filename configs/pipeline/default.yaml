@@ -42,6 +42,13 @@ serve:                       # facehall serve, the REST API (PR 5.3); its models
   queue: 8                   # requests that may wait while one is enhanced
   timeout: 120               # seconds per request, waiting included
   warmup: true               # run the models once per batch size at start-up
+ui:                          # facehall ui, the local web interface (D41); its models: models.*
+  host: 127.0.0.1            # local use only (D13); a session token guards the API
+  port: 8100
+  output: ""                 # default output folder; empty: <Pictures>/facehall
+  thumbnail_size: 160        # px, the longest side of the thumbnails in lists
+  preview_size: 1600         # px, the longest side of a whole-image preview
+  cache_mb: 1024             # decoded images kept for previews and face crops
 max_downscale: 2.0           # faces more than 2x the model input size are left to the background
 max_upscale: 2.0             # so are faces more than 2x smaller (mostly false detections)
 max_output_pixels: 200000000 # larger outputs are refused (3 bytes per pixel)

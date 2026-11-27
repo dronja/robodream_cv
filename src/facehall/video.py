@@ -319,6 +319,7 @@ class VideoStats:
     frames_with_faces: int = 0
     faces: int = 0
     restored: int = 0
+    record: dict[str, Any] = field(default_factory=dict)  # the marks of the written output
 
     def summary(self) -> str:
         return (
@@ -335,8 +336,13 @@ def enhance_video(
     parameters: dict[str, Any],
     visible_mark: bool = False,
     report: Callable[[str], None] = print,
+    progress: Callable[[int, int], None] | None = None,
 ) -> VideoStats:
-    """Restore the faces of every frame of ``source`` and write ``target`` with its marks."""
+    """Restore the faces of every frame of ``source`` and write ``target`` with its marks.
+
+    ``progress`` gets the frames done and the frames the container states (maybe approximate)
+    after every frame. An exception it raises stops the video: nothing is written.
+    """
     if target.suffix.lower() not in OUTPUT_SUFFIXES:
         raise ValueError(f"{target}: unsupported video format; use one of {OUTPUT_SUFFIXES}")
     config = enhancer.config.video
@@ -359,6 +365,8 @@ def enhance_video(
             stats.restored += sum(f.restored for f in result.faces)
             if stats.frames % 250 == 0:
                 report(f"{source}: {stats.frames} of about {info.frames} frames")
+            if progress is not None:
+                progress(stats.frames, info.frames)
             yield out.tobytes()
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -388,4 +396,5 @@ def enhance_video(
         audio = source if config.audio else None
         run(mux_command(encoded, partial, audio_from=audio, tags=marking.video_tags(rec)))
         partial.replace(target)
+    stats.record = rec
     return stats

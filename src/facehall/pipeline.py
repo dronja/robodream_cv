@@ -182,12 +182,31 @@ class ServeConfig:
 
 
 @dataclass
+class UiConfig:
+    """The local web interface (``facehall ui``, D41): address, previews and memory."""
+
+    host: str = "127.0.0.1"  # local use only (D13); a session token guards the API
+    port: int = 8100
+    output: str = ""  # default output folder; empty: <Pictures>/facehall
+    thumbnail_size: int = 160  # px, the longest side of the thumbnails in lists
+    preview_size: int = 1600  # px, the longest side of a whole-image preview
+    cache_mb: int = 1024  # decoded images kept for previews and face crops
+
+    def __post_init__(self) -> None:
+        if not 0 < self.port < 65536:
+            raise ValueError(f"ui port must be in [1, 65535], got {self.port}")
+        if min(self.thumbnail_size, self.preview_size, self.cache_mb) < 1:
+            raise ValueError("ui thumbnail_size, preview_size and cache_mb must be positive")
+
+
+@dataclass
 class PipelineConfig:
     detector: DetectorConfig = field(default_factory=DetectorConfig)
     mask: MaskConfig = field(default_factory=MaskConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     serve: ServeConfig = field(default_factory=ServeConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
     max_downscale: float = 2.0  # larger faces are left to the background
     max_upscale: float = 2.0  # so are faces this many times smaller than the model input
     max_output_pixels: int = 200_000_000  # larger outputs are refused (memory: 3 bytes each)

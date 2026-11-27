@@ -61,26 +61,30 @@ uv run pytest
 uv run facehall --version
 ```
 
-### Enhancing photos
+### Enhancing photos and videos
 
-`facehall enhance` detects the faces of a photo, restores each one with a model and pastes it
-back into a bicubic upscale of the photo:
+`facehall enhance` detects the faces of a photo or of every video frame, restores each one with
+a model and pastes it back into a bicubic upscale:
 
 ```bash
 uv run facehall enhance photo.jpg -o out.png --scale 4          # one photo
 uv run facehall enhance photos/ -o enhanced/ --scale 8 --watermark   # a folder, visible mark
 uv run facehall enhance photo.jpg -o out.png --box 120,80,18,22  # a face the detector misses
 uv run facehall enhance photo.jpg -o out.png --ckpt runs/<id>/best.safetensors
+uv run facehall enhance clip.mp4 -o clip_x4.mp4 --scale 4        # a video (needs ffmpeg)
 ```
 
 - **Face sizes:** the models restore small faces: about 8 px between the eyes at ×4 and 4 px at
   ×8. Faces more than twice as large or as small are left to the bicubic background.
 - **Marks:** every output is marked as AI-enhanced:
   - PNG text, XMP (IPTC digital source type `compositeWithTrainedAlgorithmicMedia`) and EXIF;
+  - videos: container tags (MP4, MOV, MKV);
   - the model, its checksum, the parameters and the sha256 of the input;
   - no file names and no landmarks.
 
   `--watermark` adds a visible mark.
+- **Videos** are H.264 MP4 by default, with the input's audio. Each frame is restored on its own,
+  so the restored faces flicker more than the input does (see `docs/PROJECT.md`).
 
 ---
 

@@ -127,6 +127,15 @@ marked with †.
 | triton | 3.9.0 | MIT |
 | typing-extensions | 4.16.0 | PSF-2.0 |
 
+### 4.4 External programs
+
+These are not Python dependencies: they are found on `PATH` and run as separate processes, and
+nothing is linked against them or distributed (D13).
+
+| Program | Used for | Version checked | License |
+|---|---|---|---|
+| `ffmpeg`, `ffprobe` | Videos only (`facehall.video`, PR 4.5): encoding the restored frames (libx264 or libx265), copying the audio and writing the marks; `ffprobe` reads the marks back | Ubuntu package `7:8.0.1-3ubuntu2` | FFmpeg is LGPL-2.1+, but this build is configured with `--enable-gpl` and links libx264 and libx265 (both GPL-2.0+), so the program as built is GPL. That matters for distributing it, which is not planned; a Docker image with it (Phase 5) would need this reviewed |
+
 ## 5. How to update
 
 ```bash

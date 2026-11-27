@@ -244,7 +244,7 @@ def test_enhance_input_checks() -> None:
     model = enhancer(Bicubic(4), max_output_pixels=256 * 256 - 1)
     with pytest.raises(ValueError, match="MP"):
         model.enhance(photo())  # 64 x 64 at x4 is 256 x 256
-    with pytest.raises(ValueError, match="not both"):
+    with pytest.raises(ValueError, match="not more than one"):
         enhancer(Bicubic(4)).enhance(photo(), landmarks=[FACE], boxes=[(0, 0, 10, 10)])
     with pytest.raises(ValueError, match="positive size"):
         enhancer(Bicubic(4)).enhance(photo(), boxes=[(0, 0, 0, 10)])

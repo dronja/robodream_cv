@@ -1620,3 +1620,180 @@ degraded at 0.6 → 0.8:
   ×8; even at 0.8, about one restorable ×8 detection in seven is not a face.
 - The PR 4.2 and PR 4.3 end-to-end numbers (`detected` variant) were measured at 0.6.
 - D31's measurements (detection rate, alignment error, templates) are unchanged.
+
+### Video: frame by frame, face tracks and the flicker measure (PR 4.5)
+**Decision** (defaults taken without a separate question, 2026-11-26; the face-track settings
+were chosen by rules set before the runs, one of them amended as described below):
+`facehall enhance` also takes videos. Each frame is restored on its own by the PR 4.2
+pipeline. The faces are tracked from frame to frame with an alpha-beta filter (alpha 0.5,
+beta 0.1) and a detection-score hysteresis (a track begins at 0.8, D33, and continues down to
+0.3). The output is encoded by the system `ffmpeg`, keeps the input's audio and carries the
+marks as container tags.
+
+- **Interface:** video files (`.mp4 .mov .mkv .avi .webm .m4v`) are inputs like images, also
+  inside folders.
+  - **Outputs:** MP4 by default; `--video-format mkv|mov` in an output folder, or the suffix of a
+    single output file. The output must be of the input's kind.
+  - **Faces given by hand:** `--landmarks` and `--box` are refused for videos.
+  - **Errors:** a failing video does not stop the other inputs, as for images.
+- **Reading:** OpenCV `VideoCapture` (the FFmpeg backend of `opencv-python-headless`).
+  - A rotation stored in the file is applied, so the frames are upright, and the output carries
+    no rotation (tested with `-display_rotation 90`).
+  - The frame rate is OpenCV's `CAP_PROP_FPS`, and the output is written at that constant rate.
+    For variable-rate inputs this is *needs verification*: no such input was tried.
+- **Encoding:** the restored RGB frames go to `ffmpeg` through a pipe: libx264 (or libx265),
+  CRF 18, preset `medium`, `yuv420p` (`video.codec`, `crf`, `preset`). A second `ffmpeg` pass
+  copies that stream, adds the input's audio (`video.audio`) and writes the tags.
+  - **Audio:** copied into MKV; re-encoded to AAC in MP4 and MOV, which accept few audio codecs.
+  - **Why ffmpeg:** the pip build of OpenCV writes no H.264 here (`avc1` and `H264` fail; it has
+    MPEG-4 part 2, MJPG, FFV1 and VP9), no audio and no tags. The system `ffmpeg` 8.0.1 has
+    libx264, libx265 and AAC.
+  - `ffmpeg` is a separate program on `PATH`, needed for videos only; its license is noted in
+    `THIRD_PARTY_LICENSES.md` §4.4 (the Ubuntu build is GPL).
+- **Marks** (`facehall.marking.video_tags`): container tags `ai_enhanced`, `comment` and
+  `description` (the notice), `digital_source_type` (the IPTC term of PR 4.4) and `facehall`
+  (the record).
+  - MP4 and MOV keep custom keys only with `-movflags +use_metadata_tags`; checked with
+    `ffprobe`.
+  - **The record** holds the model, the parameters, the input sha256, the frame rate and count,
+    and face counts over all frames instead of one entry per face.
+  - No XMP in videos, and C2PA stays deferred (PR 4.4).
+- **Face tracks** (`facehall.video.FaceTracker`):
+  - **Matching:** detections are matched to the predicted tracks greedily by box IoU ≥ 0.3.
+  - **Filter:** each track's five landmarks and box go through an alpha-beta filter. A new
+    track starts with zero velocity. In the first version, the second detection set the
+    velocity; its jitter (a box growing by 1 px) pushed a profile face over the face-size limit
+    for several frames.
+  - **Hysteresis:** YuNet runs at 0.3 (`video.track_threshold`). A detection at the pipeline's
+    threshold (0.8, D33) may begin a track; a weaker one may only continue one, and is dropped
+    otherwise.
+    - The detections at or above 0.8 from the 0.3 run equal those of a 0.8 run: 960 of 960
+      frames identical at both scales (NMS keeps the higher-scoring box).
+  - **No face without a detection:** `video.hold` can keep restoring a track that has no
+    detection at all at its predicted place. It is off by default: after a cut, or when a person
+    turns away, it would draw a face on whatever is there. The synthetic clips cannot show
+    this, because they always contain a face.
+
+**Flicker measure** (`facehall.eval.temporal`, `scripts/measure_temporal.py`):
+- **Clips:** an aligned CelebA image as a small LR scene over 24 frames, with the face at the
+  model input size (8 px between the eyes at ×4, 4 px at ×8). Each frame is rendered from the
+  source: padded with its mean colour, shifted (bicubic) at the source resolution, then area
+  downscaled. The degradation is that of D31 (blur 0.5, noise 3, JPEG 70), drawn anew per frame.
+- **Conditions:**
+  - `static_degraded`: no motion;
+  - `drift_clean` and `drift_degraded`: (0.37, 0.13) LR px per frame;
+  - `sway_degraded`: a sideways sine, 2 LR px amplitude, 16-frame period;
+  - `fast_degraded`: (1.5, 0.5) LR px per frame (added as described below).
+- **Flicker:** the face crops of consecutive frames, each aligned by the frame's true landmarks
+  so that the motion cancels. The measure is the mean absolute luma difference inside the
+  paste-back mask, in 8-bit levels, averaged over frame pairs. The HR clip, rendered the same
+  way at ×scale, gives the floor: 0 when static, 0.7–1.3 when moving.
+- **Also measured:** PSNR-Y of each crop against the frame's HR crop, and the fraction of frames
+  in which the face was restored (NME below 0.5, as in D31).
+- **Variants:** bicubic; `annotated` (true landmarks in every frame); `detected` (YuNet at 0.8
+  in every frame); `track:<alpha>,<beta>,<hold>[,<low>]`.
+- **Data:** 100 val clips for the selection and 100 test clips for the report; the two gate
+  references (D25, D29).
+
+**Round 1, smoothing** (val, commit `780193f`; the ×4 run's tree differed from it only in tests
+and the README):
+- **Rule** (set before the runs): a setting qualifies if, at both scales and in every condition,
+  its PSNR-Y is at most 0.05 dB below `detected`'s and its restored fraction is not lower. Of
+  those, the lowest mean flicker over all cells wins. If none qualifies, tracking stays off.
+- **Mean flicker** over 2 scales × 4 conditions (`fast_degraded` came later): `detected` 5.982,
+  `annotated` 5.339.
+
+  | alpha, beta, hold | Mean flicker | Rule |
+  |---|---|---|
+  | 1, 0, 2 | 5.926 | qualifies |
+  | 0.5, 0.1, 2 | 5.561 | qualifies |
+  | 0.3, 0.05, 2 | 5.479 | qualifies |
+  | 0.2, 0.02, 2 | 5.425 | fails: restored ×8 sway 0.849 < 0.886 |
+  | 0.5, 0, 2 | 5.556 | qualifies |
+  | **0.3, 0, 2** | **5.418** | **qualifies, lowest** |
+  | 0.3, 0.05, 0 | 5.545 | fails: restored ×8 sway 0.863 < 0.886 |
+
+- **Amendment** (made after these results and before the next runs): with beta 0 the filter has
+  no velocity. It trails a face moving at speed v by (1 − alpha) / alpha · v, 2.3 v at
+  alpha 0.3. The four conditions move at most 0.79 LR px per frame, so they cannot show this,
+  but a 16 px face crossing a frame easily moves 2 px per frame.
+  - So `fast_degraded` was added, and the rule now also requires the winner to qualify there.
+    Otherwise the next setting by flicker that does is taken.
+  - A first `fast_degraded` run is void: at ×8 the face left its scene, which was padded by one
+    image size (18 LR px). The fast scene is now padded by three.
+- **`fast_degraded`** (val, commit `2969305`), restored fraction and PSNR-Y against `detected`.
+  `detected` restored 0.867 at ×8 and 0.998 at ×4:
+
+  | alpha, beta, hold | ×8 restored | ×8 PSNR-Y Δ | ×4 restored | ×4 PSNR-Y Δ | Rule |
+  |---|---|---|---|---|---|
+  | 1, 0, 2 | 0.907 | +0.02 | 1.000 | 0.00 | qualifies |
+  | **0.5, 0.1, 2** | **0.905** | **+0.02** | **1.000** | **0.00** | **qualifies; the winner** |
+  | 0.3, 0.05, 2 | 0.753 | −0.04 | 0.999 | −0.01 | fails |
+  | 0.2, 0.02, 2 | 0.512 | −0.16 | 0.883 | −0.06 | fails |
+  | 0.5, 0, 2 | 0.846 | −0.08 | 1.000 | −0.02 | fails |
+  | 0.3, 0, 2 | 0.534 | −0.15 | 0.909 | −0.08 | fails |
+  | 0.3, 0.05, 0 | 0.727 | −0.06 | 0.997 | −0.01 | fails |
+
+  The strong filters trail the face: the crop is then off the face, and the face-size and
+  alignment checks leave it bicubic.
+
+**Round 2, hysteresis instead of hold** (val, commit `e9b3224`, all five conditions):
+- **Rule** (set before the runs): the round-1 rule against `detected`, for candidates without
+  hold (hysteresis down to 0.3 or 0.5, alpha 0.5, beta 0.1); of those that qualify, the lower
+  mean flicker wins. If neither qualifies, the round-1 winner with hold 2 stays. The hold
+  variants are shown for comparison.
+
+  | Variant | Mean flicker | ×8 restored: static / drift / sway / fast | Rule |
+  |---|---|---|---|
+  | `detected` | 6.274 | 0.884 / 0.884 / 0.886 / 0.867 | — |
+  | `annotated` | 5.647 | 1 / 1 / 1 / 1 | — |
+  | 0.5, 0.1, hold 2 (round 1) | 5.859 | 0.922 / 0.940 / 0.926 / 0.905 | qualifies |
+  | 0.5, 0.1, no hold, no hysteresis | 5.929 | 0.886 / 0.890 / 0.884 / 0.863 | fails: restored |
+  | **0.5, 0.1, hysteresis 0.3** | **5.865** | **0.953 / 0.977 / 0.954 / 0.963** | **qualifies; the winner** |
+  | 0.5, 0.1, hysteresis 0.5 | 5.873 | 0.949 / 0.965 / 0.948 / 0.956 | qualifies |
+  | 0.5, 0.1, hold 2, hysteresis 0.3 | 5.862 | 0.953 / 0.980 / 0.954 / 0.965 | (has hold) |
+
+  ("Drift" is `drift_degraded`.) At ×4 every tracked variant restores 0.995–1.000 of the frames.
+  Hysteresis flickers about as little as hold and restores more faces, without restoring any
+  face that is not detected in its frame.
+
+**Test** (100 test clips per condition, commit `132cc0a`). The tracker with the defaults
+(alpha 0.5, beta 0.1, hysteresis 0.3, no hold) against per-frame detection. Flicker in levels /
+PSNR-Y in dB / restored fraction:
+
+| Scale, condition | bicubic | `annotated` | `detected` | tracked (defaults) |
+|---|---|---|---|---|
+| ×4 static_degraded | 3.12 / 24.85 / — | 3.51 / 25.82 / 1 | 4.03 / 25.77 / 0.992 | 3.71 / 25.78 / 0.995 |
+| ×4 drift_clean | 3.55 / 27.40 / — | 4.31 / 27.99 / 1 | 4.66 / 27.96 / 1.000 | 4.43 / 27.97 / 1.000 |
+| ×4 drift_degraded | 4.63 / 24.79 / — | 4.97 / 25.74 / 1 | 5.29 / 25.71 / 0.993 | 5.12 / 25.71 / 0.993 |
+| ×4 sway_degraded | 4.39 / 24.83 / — | 4.72 / 25.78 / 1 | 5.08 / 25.75 / 0.991 | 4.93 / 25.75 / 0.990 |
+| ×4 fast_degraded | 5.33 / 24.79 / — | 5.62 / 25.75 / 1 | 5.85 / 25.72 / 0.991 | 5.71 / 25.72 / 0.993 |
+| ×8 static_degraded | 3.53 / 21.20 / — | 4.55 / 22.05 / 1 | 5.75 / 21.85 / 0.869 | 4.84 / 21.88 / 0.922 |
+| ×8 drift_clean | 5.35 / 22.97 / — | 6.44 / 23.60 / 1 | 6.86 / 23.55 / 0.985 | 6.45 / 23.57 / 0.990 |
+| ×8 drift_degraded | 5.79 / 21.14 / — | 7.11 / 22.01 / 1 | 8.07 / 21.79 / 0.873 | 7.41 / 21.85 / 0.956 |
+| ×8 sway_degraded | 5.40 / 21.17 / — | 6.66 / 22.03 / 1 | 7.57 / 21.82 / 0.863 | 7.01 / 21.85 / 0.933 |
+| ×8 fast_degraded | 6.70 / 21.14 / — | 8.07 / 22.02 / 1 | 8.97 / 21.80 / 0.868 | 8.34 / 21.84 / 0.949 |
+
+The HR floor is 0 when static and 0.73–1.23 when moving. The one cell where tracking restores
+fewer frames than per-frame detection is ×4 sway_degraded, 0.990 against 0.991 (about 2 of
+2,400 frames).
+
+**Observations:**
+- **The model flickers more than bicubic, even with perfect landmarks:** ×8 static 4.55
+  against 3.53, ×4 3.51 against 3.12. Each frame is restored on its own, and the model
+  amplifies the frame-to-frame noise, compression and sub-pixel changes into changing detail.
+  Tracking cannot remove this.
+- **Detection jitter adds flicker on top:** `detected` against `annotated`, +0.5 at ×4 and
+  +1.2 at ×8 on static faces. The tracker removes most of it (×8 static 5.75 → 4.84) and
+  restores the face in more frames (×8 0.87 → 0.92–0.96), at equal or better PSNR-Y.
+- **A strong filter trails a moving face:** see the `fast_degraded` check above. The defaults
+  keep a velocity (beta 0.1), so they follow constant motion.
+- **Real video** (a 10 s pan over a WIDER group photo, local): six consecutive ×4 frames show
+  the same faces without jumps or dropouts, with small changes in the eyes and mouths (seen, not
+  measured).
+- **Speed** (RTX 6000 Ada, about 62 faces per frame): 250 frames of 640 × 360 at ×4 (output
+  2560 × 1440) took 30.1 s end to end, 8.3 frames/s; 320 × 180 at ×8 took 29.1 s. Peak memory
+  was 2.4 GB in both cases.
+
+**Next steps** (proposals, not decided): a temporal model, or blending each face's restored
+crop over time in the template frame; cut detection; a real video set for the measure.

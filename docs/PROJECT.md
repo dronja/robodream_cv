@@ -106,11 +106,15 @@ As of 2026-11-26:
     Result: no fine-tuned variant beats the references end to end on val; the references stay.
     The LR-alignment cost is mostly information lost in the resampling, not a mismatch with
     training (§9).
-  - In review: PR 4.4 (`facehall enhance` for photos and folders, face boxes, tiled detection,
-    output marking; branch `feat/enhance-cli`). An arbitrary photo with several faces is now
-    processed end to end from the command line, with marked outputs (§9).
+  - Merged: PR 4.4 (`facehall enhance` for photos and folders, face boxes, tiled detection,
+    output marking; PR #31, `13606a0`). An arbitrary photo with several faces is now processed
+    end to end from the command line, with marked outputs (§9). This is the Phase 4 "done
+    when" criterion.
   - Decided: detector threshold 0.8 in the pipeline (D33). At D31's 0.6, about half the small
     detections at ×8 on real photos were not faces, and the model drew faces on them.
+  - In review: PR 4.5 (videos frame by frame, face tracks, flicker measure; branch
+    `feat/video`). Face tracking lowers the flicker that detection jitter adds, but the
+    restored faces still flicker more than a bicubic upscale (§9). It is the last Phase 4 item.
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -160,10 +164,12 @@ robodream_cv/
 │   │                          # gate.py (quality gate, D23, D26, D28),
 │   │                          # spectrum.py (periodic-pattern check, D28),
 │   │                          # detection.py (detection and alignment measures, D31),
-│   │                          # endtoend.py (pipeline on synthetic scenes, PR 4.2)
+│   │                          # endtoend.py (pipeline on synthetic scenes, PR 4.2),
+│   │                          # temporal.py (flicker on synthetic clips, PR 4.5)
 │   ├── pipeline.py            # end-to-end inference: detect, align, restore, paste back (PR 4.2)
-│   ├── enhance.py             # `facehall enhance`: files and folders, outputs (PR 4.4)
-│   ├── marking.py             # output marks: PNG text, XMP, EXIF, visible mark (PR 4.4)
+│   ├── enhance.py             # `facehall enhance`: files and folders, outputs (PR 4.4, 4.5)
+│   ├── video.py               # videos: face tracks, frames through ffmpeg, marks (PR 4.5)
+│   ├── marking.py             # output marks: PNG text, XMP, EXIF, video tags, visible mark
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py,
 │                              # warp.py (warp, inverse warp, resample_crop),
@@ -175,14 +181,15 @@ robodream_cv/
 │                              # download_weights.py, make_results.py, reproduce_phase1.sh,
 │                              # preview_degradations.py, protocol_digest.py,
 │                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
-│                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2)
+│                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2),
+│                              # measure_temporal.py (PR 4.5)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
 │                              # degradation matching, quality gate, losses, spectrum,
-│                              # face detection, inference pipeline
+│                              # face detection, inference pipeline, enhance, video
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -217,6 +224,7 @@ robodream_cv/
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
 | Docker | not installed (needed in Phase 5) |
+| FFmpeg | system `ffmpeg` / `ffprobe` 8.0.1 (Ubuntu package `7:8.0.1-3ubuntu2`, with libx264, libx265 and AAC), needed for videos only (PR 4.5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
 | Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2), `facenet_vggface2/20180402-114759-vggface2.pt` (identity loss, PR 3.3), `yunet/face_detection_yunet_2026may.onnx` (face detector, D31). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
 | Remote | `https://github.com/dronja/robodream_cv` (public), default branch `main` |
@@ -1270,7 +1278,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
 
 ### Phase 4
 
-- **Face detection (PR 4.1, in review).** Decision, measurements and reasons in
+- **Face detection (PR 4.1, done).** Decision, measurements and reasons in
   `DECISIONS.md` (D31).
   - **Code:**
     - `facehall.align.detect.YuNet`: OpenCV Zoo YuNet through `cv2.FaceDetectorYN`, on a
@@ -1377,7 +1385,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - detector-matched jitter helps only on ×8 degraded scenes (+0.004 ID).
   - **Result:** the references stay (D25, D29). Not tested: training the L1 start from scratch
     on scene crops.
-- **`facehall enhance` and output marking (PR 4.4, in review).** Interface, measurements and
+- **`facehall enhance` and output marking (PR 4.4, done).** Interface, measurements and
   reasons in `DECISIONS.md` ("`facehall enhance` and output marking (PR 4.4)").
   - **Command:** `facehall enhance INPUT… -o OUTPUT [--scale 4|8 | --ckpt CKPT]`
     (`facehall.enhance`):
@@ -1424,6 +1432,47 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - On synthetic CelebA scenes 0.8 costs little: ×8 degraded 0.950 → 0.900 detected, ×4
       0.993 → 0.987.
     - A team photo at ×4: 66 faces restored, all real (seen, not measured).
+- **Videos (PR 4.5, in review).** Interface, measurements, selection rules and reasons in
+  `DECISIONS.md` ("Video: frame by frame, face tracks and the flicker measure (PR 4.5)").
+  - **Command:** `facehall enhance` takes video files (`.mp4 .mov .mkv .avi .webm .m4v`) like
+    images, also in folders. The output is MP4 by default (`--video-format mkv|mov`).
+  - **Processing:** each frame is restored on its own by the pipeline.
+    - **Reading:** OpenCV, with any stored rotation applied.
+    - **Encoding:** the system `ffmpeg` (H.264, CRF 18). The pip OpenCV has no H.264, audio or
+      tags.
+    - **Audio:** the input's is kept (AAC in MP4 and MOV).
+    - **Marks:** container tags (`ai_enhanced`, the notice, the IPTC digital source type and the
+      record with face counts).
+  - **Face tracks** (`facehall.video.FaceTracker`, `video` in `configs/pipeline/default.yaml`):
+    - an alpha-beta filter of each face's landmarks and box (alpha 0.5, beta 0.1);
+    - hysteresis: a track begins at the pipeline's threshold 0.8 (D33) and continues with
+      detections down to 0.3;
+    - no face is restored in a frame without a detection there (`hold` 0).
+  - **Flicker measure** (`facehall.eval.temporal`, `scripts/measure_temporal.py`): synthetic
+    CelebA clips (a still face, moved and degraded per frame). The measure is the mean absolute
+    luma change between consecutive aligned face crops, in 8-bit levels. The settings were
+    chosen on 100 val clips by two rules set before the runs. Test, flicker / restored fraction:
+
+    | Scale, condition | bicubic | true landmarks | per-frame detection | tracked |
+    |---|---|---|---|---|
+    | ×4 static, degraded | 3.12 | 3.51 | 4.03 / 0.992 | 3.71 / 0.995 |
+    | ×4 fast, degraded | 5.33 | 5.62 | 5.85 / 0.991 | 5.71 / 0.993 |
+    | ×8 static, degraded | 3.53 | 4.55 | 5.75 / 0.869 | 4.84 / 0.922 |
+    | ×8 drift, degraded | 5.79 | 7.11 | 8.07 / 0.873 | 7.41 / 0.956 |
+    | ×8 fast, degraded | 6.70 | 8.07 | 8.97 / 0.868 | 8.34 / 0.949 |
+
+  - **Observations:**
+    - **Tracking:** it removes most of the flicker that detection jitter adds, and restores the
+      face in more frames, at equal or better PSNR-Y.
+    - **The model itself:** even with true landmarks, the restored faces flicker more than a
+      bicubic upscale. Each frame is restored on its own.
+    - **Strong smoothing** (alpha 0.3 or less, or no velocity) trailed fast faces. The first
+      rule's winner failed the added fast-motion check (`DECISIONS.md`).
+    - **Hold, rejected for safety:** restoring a face for a few frames without any detection
+      flickered about as little, but it would draw faces after cuts. Hysteresis also restored
+      more faces.
+  - **Speed** (RTX 6000 Ada, about 62 faces per frame): 640 × 360 at ×4 runs at 8.3 frames/s
+    end to end, and 320 × 180 at ×8 at 8.6 frames/s; peak memory 2.4 GB.
 
 ## 10. Roadmap and progress
 
@@ -1547,7 +1596,10 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       marking: PNG text, XMP with the IPTC digital source type, EXIF (`AI-enhanced`, model,
       version, parameters, input sha256); optional visible watermark; C2PA considered and
       deferred (§9)
-- [ ] **PR 4.5** Video (per frame; check flicker between frames)
+- [x] **PR 4.5** `feat(video):` videos frame by frame through `facehall enhance` (system
+      `ffmpeg`: H.264, audio kept, marks as container tags); face tracks with an alpha-beta
+      filter and detection-score hysteresis; flicker measured on synthetic CelebA clips
+      (`scripts/measure_temporal.py`) (§9)
 
 **Done when** an arbitrary photo with several faces is processed end to end.
 
@@ -1632,6 +1684,16 @@ by D32.
 - `facehall enhance` reads the reference checkpoints from the local `runs/` folder (or
   `FACEHALL_RUNS`). The weights are not published (D7, D13), so on another machine the command
   needs `--ckpt` or a copy of the runs.
+- Restored faces in videos flicker more than a bicubic upscale, even with perfect landmarks
+  (PR 4.5). Each frame is restored on its own, and the model amplifies the noise, compression
+  and sub-pixel changes between frames. Face tracking removes only the flicker that detection
+  jitter adds. A temporal model or temporal blending would be needed for more.
+- The flicker measure uses synthetic clips: a still CelebA face that is moved and degraded per
+  frame. There is no real video set. Expressions, head turns, lighting changes, occlusion and
+  scene cuts are not measured. There is no cut detection: a track continues across a cut only
+  if a detection overlaps its predicted box there.
+- Videos need the system `ffmpeg`; tests that encode video are skipped without it. Inputs with
+  a variable frame rate are written at OpenCV's frame rate, which is not verified (PR 4.5).
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -1693,6 +1755,10 @@ uv run facehall eval --config configs/eval/celeba128_x4.yaml --ckpt runs/<id>/be
 uv run facehall enhance photo.jpg -o out.png --scale 4   # restore the faces; marked output
 uv run facehall enhance photos/ -o enhanced/ --scale 8 --watermark   # a folder, visible mark
 uv run facehall enhance photo.jpg -o out.png --box 120,80,18,22   # a face the detector misses
+uv run facehall enhance clip.mp4 -o clip_x4.mp4 --scale 4   # a video (system ffmpeg), audio kept
+uv run facehall enhance videos/ -o out/ --scale 8 --video-format mkv   # a folder of videos
+uv run python scripts/measure_temporal.py --ckpt runs/<id>/best.safetensors \
+    --tracking 0.5,0.1,0,0.3                   # flicker on synthetic clips (PR 4.5), ~5 min
 uv run python scripts/measure_detection.py --parts box   # box landmarks and their error (PR 4.4)
 uv run python scripts/measure_detection.py --parts wider # false faces on WIDER photos (D33), ~15 min
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/

@@ -290,7 +290,7 @@ class Enhancer:
     def from_checkpoint(
         cls, path: Path, config: PipelineConfig, device: torch.device | str = "cpu"
     ) -> "Enhancer":
-        from facehall.train.checkpoint import load_checkpoint
+        from facehall.train.checkpoint import load_checkpoint, model_record
         from facehall.train.config import experiment_from_dict
 
         model, info = load_checkpoint(path, device)
@@ -298,13 +298,7 @@ class Enhancer:
         enhancer = cls(
             model, experiment.scale, config, hr_size=experiment.data.hr_size, device=device
         )
-        enhancer.info = {
-            "name": info.get("run") or path.parent.name,
-            "checkpoint": path.name,
-            "sha256": info.get("sha256"),
-            "architecture": experiment.model.name,
-            "scale": experiment.scale,
-        }
+        enhancer.info = model_record(path, info)
         return enhancer
 
     def _yunet(self, threshold: float) -> YuNet:

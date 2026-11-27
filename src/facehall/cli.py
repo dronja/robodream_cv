@@ -8,7 +8,7 @@ from pathlib import Path
 from facehall import __version__
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="facehall", description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -138,6 +138,44 @@ def main(argv: Sequence[str] | None = None) -> int:
     enhance.add_argument("--overwrite", action="store_true", help="replace existing outputs")
     enhance.add_argument("--device", default="auto", help="auto, cpu or cuda (default: auto)")
 
+    export = commands.add_parser(
+        "export",
+        help="export a restoration model for inference without PyTorch",
+        description="Export a restoration model for inference without PyTorch.",
+    )
+    formats = export.add_subparsers(dest="format", metavar="FORMAT", required=True)
+    onnx = formats.add_parser(
+        "onnx",
+        help="ONNX, checked against PyTorch",
+        description="Export a restoration checkpoint to ONNX (dynamic batch, the model record in "
+        "the metadata). The export is checked against PyTorch on a seeded batch and nothing is "
+        "written if the outputs differ by more than the tolerance.",
+    )
+    source_model = onnx.add_mutually_exclusive_group(required=True)
+    source_model.add_argument("--ckpt", type=Path, help="restoration checkpoint (.safetensors)")
+    source_model.add_argument(
+        "--scale", type=int, choices=(4, 8), help="the reference model of the pipeline config"
+    )
+    onnx.add_argument("-o", "--out", type=Path, required=True, help="output file (.onnx)")
+    onnx.add_argument(
+        "--pipeline",
+        type=Path,
+        default=Path("configs/pipeline/default.yaml"),
+        help="pipeline config with the reference models (default: %(default)s)",
+    )
+    onnx.add_argument("--opset", type=int, default=20, help="ONNX opset (default: %(default)s)")
+    onnx.add_argument(
+        "--tolerance",
+        type=float,
+        default=1e-3,
+        help="largest allowed difference from PyTorch (default: %(default)s)",
+    )
+    onnx.add_argument("--overwrite", action="store_true", help="replace an existing output")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -183,4 +221,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except (OSError, ValueError) as error:
             parser.exit(2, f"facehall enhance: error: {error}\n")
+    elif args.command == "export":
+        from facehall.config import load_config
+        from facehall.export import describe, export_checkpoint
+        from facehall.pipeline import PipelineConfig
+
+        try:
+            checkpoint = args.ckpt
+            if checkpoint is None:
+                pipeline = load_config(args.pipeline, PipelineConfig)
+                checkpoint = Path(pipeline.models.checkpoint(args.scale))
+            exported = export_checkpoint(
+                checkpoint,
+                args.out,
+                opset=args.opset,
+                tolerance=args.tolerance,
+                overwrite=args.overwrite,
+            )
+        except (OSError, ValueError) as error:
+            parser.exit(2, f"facehall export: error: {error}\n")
+        print(describe(exported))
     return 0

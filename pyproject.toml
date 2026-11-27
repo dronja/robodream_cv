@@ -9,7 +9,9 @@ license = { file = "LICENSE" }
 dependencies = [
     "numpy>=2.5",
     "omegaconf>=2.4",
+    "onnx>=1.23.2",
     "onnxruntime>=1.32.0",
+    "onnxscript>=0.7.2",
     "opencv-python-headless>=5.1",
     "pillow>=13.0",
     "pyarrow>=26.0",

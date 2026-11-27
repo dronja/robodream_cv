@@ -6,6 +6,7 @@ the checkpoint alone, and the sha256 of the weights file, which is checked on lo
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -73,3 +74,15 @@ def load_checkpoint(
     model = build_model(config.model, config.scale, config.data.hr_size // config.scale)
     model.load_state_dict(load_file(path))
     return model.to(device).eval(), info
+
+
+def model_record(path: Path, info: Mapping[str, Any]) -> dict[str, Any]:
+    """The model provenance of checkpoint ``path`` that output marks record (``marking``)."""
+    config = experiment_from_dict(dict(info["config"]))
+    return {
+        "name": info.get("run") or path.parent.name,
+        "checkpoint": path.name,
+        "sha256": info.get("sha256"),
+        "architecture": config.model.name,
+        "scale": config.scale,
+    }

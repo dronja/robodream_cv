@@ -2401,3 +2401,8 @@ The notebook shrinks from 456 KB to 127 KB. Git history is not rewritten (D7).
   - `THIRD_PARTY_LICENSES.md`: the generated table matches `uv.lock` (only the rows corrected by
     hand differ); the stale references to Q2, Q3 and a Docker image with ffmpeg are updated.
   - `DATA.md`: unchanged data; the use of CelebA in Phases 4–5 added.
+
+### Tag v0.1.0
+**Decision** (the user, 2026-11-27): the annotated tag `v0.1.0` marks release 0.1.0 on the merge
+commit of PR 6.3 (`03b79a1`), after CI passed on it. No GitHub release is made, and no weights
+are attached (D39).

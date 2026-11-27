@@ -50,9 +50,10 @@ a person or as evidence; at most they are a hint, to be shown next to the origin
 
 The repository is being turned into a product-ready package `facehall`. The current state and
 the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`; metrics are in
-`docs/RESULTS.md`. Phases 0–3 (repository hygiene, reproducible baseline, realistic
-degradations, model quality) are done; Phase 4 (inference pipeline) is in progress. The original
-notebook and weights live in `legacy/` and are read only. The trained weights are not published.
+`docs/RESULTS.md`. Phases 0–4 (repository hygiene, reproducible baseline, realistic
+degradations, model quality, inference pipeline) are done; Phase 5 (ONNX models, a local REST API
+and Docker images) is in progress. The original notebook and weights live in `legacy/` and are
+read only. The trained weights are not published.
 
 ```bash
 uv sync                  # PyTorch from PyPI (CUDA build on Linux)
@@ -85,6 +86,16 @@ uv run facehall enhance clip.mp4 -o clip_x4.mp4 --scale 4        # a video (need
   `--watermark` adds a visible mark.
 - **Videos** are H.264 MP4 by default, with the input's audio. Each frame is restored on its own,
   so the restored faces flicker more than the input does (see `docs/PROJECT.md`).
+
+### Exporting a model to ONNX
+
+```bash
+uv run facehall export onnx --scale 4 -o models/x4.onnx   # the x4 reference
+uv run facehall export onnx --ckpt runs/<id>/best.safetensors -o models/<name>.onnx
+```
+
+The export is checked against PyTorch and refused if the outputs differ by more than 1e-3. The
+ONNX file records its source model and checksum in its metadata.
 
 ---
 

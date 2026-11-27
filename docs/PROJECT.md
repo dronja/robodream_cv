@@ -139,8 +139,8 @@ As of 2026-11-27:
   - Found in PR 5.4: ONNX Runtime sends telemetry to Microsoft by default, also on Linux. facehall
     now turns it off on import, and so do the images (`DECISIONS.md`, "ONNX Runtime telemetry
     off").
-- **Phase 6 (release): done** with PR 6.3 (release 0.1.0); publishing the weights is excluded
-  (D39).
+- **Phase 6 (release): done** on 2026-11-27: release 0.1.0, tag `v0.1.0`. Publishing the
+  weights is excluded (D39).
   - Decided: the legacy dataset link and the face figures leave README (D38, closes Q3); the
     trained weights stay local (D39). Plan: PRs 6.1–6.3 (§10).
   - Merged: PR 6.1 (README with the measured results; PR #39, `625c45c`).
@@ -149,8 +149,12 @@ As of 2026-11-27:
   - Merged: PR 6.2 (`docs/MODEL_CARD.md`; PR #41, `54e2dca`). New finding from its subgroup
     tables: against a bicubic upscale, both models lose more ID on `Young` = 0 and on `Male` = 1
     faces, at every level.
-  - In review: PR 6.3 (release 0.1.0: package and model versions, checksums, `CHANGELOG.md`;
-    branch `release/v0.1.0`). No git tag yet: it needs a separate confirmation.
+  - Merged: PR 6.3 (release 0.1.0: package and model versions, checksums, `CHANGELOG.md`;
+    PR #42, `03b79a1`). The annotated tag `v0.1.0` on that commit was pushed with the user's
+    confirmation; there is no GitHub release.
+- **All phases of the plan are done.** What remains is optional: the rest of Phase 3
+  (prior-guided model, NME, skin tone; D30), H.264/H.265 degradations (Phase 2), the Gradio demo
+  (D37), and the detection speed-ups proposed in §11.
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -1912,7 +1916,8 @@ Plan and defaults: `DECISIONS.md`, "Phase 6 plan and defaults". The weights stay
 - [x] **PR 6.3** versions: semver for the package (0.1.0), a version and checksums for each
       model (`docs/models.sha256`); `CHANGELOG.md`; `DATA.md` and `THIRD_PARTY_LICENSES.md`
       reviewed
-- [ ] *(needs confirmation)* git tag `v0.1.0` on the merge commit; no GitHub release (D39)
+- [x] git tag `v0.1.0` on the merge commit of PR 6.3 (confirmed by the user); no GitHub
+      release (D39)
 
 ## 11. Open questions, risks, tech debt
 

@@ -277,8 +277,8 @@ frame, mostly spent finding the faces.
 
 **The original research** (`legacy/FH.ipynb`, read only) compared four approaches on small crops
 of the earlier dataset (24×24 → 96×96 for the trained models). PULSE gave realistic faces of other
-people; the SRGAN generator
-did poorly; a simplified SRResNet (FNet) did best; a simplified C-Face (CNet) slightly worse.
+people; the SRGAN generator did poorly; a simplified SRResNet (FNet) did best; a simplified C-Face
+(CNet) slightly worse.
 Those results are not comparable with the protocol above. FNet and CNet were re-trained on it as
 baselines (`docs/RESULTS.md`), and the SRGAN result most likely came from its training recipe
 (no L1 pretraining, few epochs), not from the approach.

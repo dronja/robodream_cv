@@ -4,6 +4,7 @@
     uv run python scripts/benchmark_images.py --image facehall:gpu --gpu --label docker-gpu
     uv run python scripts/benchmark_images.py --image facehall:cpu --cpuset 0-3 --label docker-cpu-4
     uv run python scripts/benchmark_images.py --local .venv/bin/facehall --label local-cpu
+    uv run python scripts/benchmark_images.py --stages --label stages-cpu   # where the time goes
 
 For every scale and workload a fresh service is started, serving that scale only, and the script
 measures:
@@ -22,6 +23,11 @@ Workloads, from the synthetic CelebA scenes of ``compare_backends.py scenes`` (l
 - ``mosaic``: the mosaics of 64 faces, each sent ``--repeat`` times, PNG output;
 - ``frame``: ``--frames`` 1920 x 1080 frames with 8 faces (single scenes on a grey canvas, sent
   as JPEG with quality 95), each sent once with PNG and once with JPEG output.
+
+With ``--stages``, no service is started: the work of one request (decoding, the pipeline's
+detection, restoration and background with paste-back, then marking and encoding) runs in this
+process, with the ONNX models of the pipeline config, and each part is timed. Run it with the
+Python of the environment to measure (on CUDA, one with onnxruntime-gpu).
 
 Writes ``<out>/<label>.json`` and prints a table.
 """
@@ -79,6 +85,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--image", help="service image, e.g. facehall:cpu")
     target.add_argument("--local", type=Path, help="a facehall executable, run without Docker")
+    target.add_argument("--stages", action="store_true", help="time the parts of a request")
     parser.add_argument("--label", required=True, help="name of the result file")
     parser.add_argument("--gpu", action="store_true", help="serve on cuda (--gpus all)")
     parser.add_argument("--cpuset", help="CPUs of the container, e.g. 0-3 (docker --cpuset-cpus)")
@@ -308,6 +315,69 @@ def run_workload(args: argparse.Namespace, scale: int, work: Workload, port: int
         service.stop()
 
 
+STAGES = ("decode", "detect", "restore", "paste", "encode", "total")
+
+
+def stage_times(args: argparse.Namespace, scale: int, work: Workload) -> dict[str, Any]:
+    """The parts of ``POST /enhance`` (``facehall.serve.app``), timed in this process."""
+    from facehall import marking
+    from facehall.config import load_config
+    from facehall.enhance import decode_image, marked, parameters
+    from facehall.pipeline import PipelineConfig
+    from facehall.serve import load_enhancers, warm_up
+
+    pipeline = Path("configs/pipeline/default.yaml")
+    config = load_config(pipeline, PipelineConfig, ["models.backend=onnx"])
+    device = "cuda" if args.gpu else "cpu"
+    enhancer = load_enhancers(config, [scale], pipeline, device)[scale]
+    warm_up(enhancer)
+    settings = parameters(enhancer.config)
+    kind = "JPEG" if "jpeg" in work.query else "PNG"
+    times: dict[str, list[float]] = {stage: [] for stage in STAGES}
+    for _ in range(work.repeat):
+        for upload in work.uploads:
+            start = time.perf_counter()
+            image, digest = decode_image(upload)
+            decoded = time.perf_counter()
+            result = enhancer.enhance(image)
+            enhanced = time.perf_counter()
+            out, rec = marked(
+                enhancer,
+                image,
+                result,
+                digest=digest,
+                faces_from="detector",
+                visible_mark=False,
+                settings=settings,
+            )
+            marking.encode(out, rec, kind, quality=95)
+            done = time.perf_counter()
+            times["decode"].append(decoded - start)
+            for stage in ("detect", "restore", "paste"):
+                times[stage].append(result.seconds[stage])
+            times["encode"].append(done - enhanced)
+            times["total"].append(done - start)
+    return {
+        "workload": work.name,
+        "output": kind.lower(),
+        "scale": scale,
+        "device": enhancer.device,
+        "median_seconds": {k: statistics.median(v[1:] or v) for k, v in times.items()},
+        "n": len(times["total"]),
+    }
+
+
+def stage_table(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "| Scale | Workload | Output | " + " | ".join(f"{s} (s)" for s in STAGES) + " |",
+        "|---|---|---|" + "---|" * len(STAGES),
+    ]
+    for r in rows:
+        values = " | ".join(f"{r['median_seconds'][s]:.3f}" for s in STAGES)
+        lines.append(f"| x{r['scale']} | {r['workload']} | {r['output']} | {values} |")
+    return "\n".join(lines)
+
+
 def table(rows: list[dict[str, Any]]) -> str:
     lines = [
         "| Scale | Workload | Output | Start (s) | First (s) | Median (s) | p95 (s) | "
@@ -332,12 +402,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     rows: list[dict[str, Any]] = []
     port = args.port
+    show = stage_table if args.stages else table
     for scale in map(int, args.scales.split(",")):
         for work in workloads(args, scale):
-            rows.append(run_workload(args, scale, work, port))
-            port += 1
-            print(table(rows[-1:]).splitlines()[-1], flush=True)
+            if args.stages:
+                rows.append(stage_times(args, scale, work))
+            else:
+                rows.append(run_workload(args, scale, work, port))
+                port += 1
+            print(show(rows[-1:]).splitlines()[-1], flush=True)
     target: dict[str, Any] = {"image": args.image} if args.image else {"local": str(args.local)}
+    if args.stages:
+        target = {"stages": sys.executable}
     if args.image:
         inspect = docker(args.docker, "image", "inspect", "-f", "{{.Id}}", args.image)
         target["image_id"] = inspect.stdout.strip()
@@ -352,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / f"{args.label}.json").write_text(json.dumps(result, indent=2) + "\n")
-    print(table(rows))
+    print(show(rows))
     return 0
 
 

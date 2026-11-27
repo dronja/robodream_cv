@@ -141,8 +141,9 @@ As of 2026-11-27:
 - **Phase 6 (release): in progress.**
   - Decided: the legacy dataset link and the face figures leave README (D38, closes Q3); the
     trained weights stay local (D39). Plan: PRs 6.1–6.3 (§10).
-  - In review: PR 6.1 (README with the measured results; branch `docs/readme-release`).
-  - Open: Q16, the face images in the outputs of the legacy notebook (§11).
+  - Merged: PR 6.1 (README with the measured results; PR #39, `625c45c`).
+  - In review: the image outputs of the legacy notebook removed (D40, closes Q16; branch
+    `chore/legacy-notebook-outputs`).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -234,7 +235,8 @@ robodream_cv/
 │                              # restoration backends, REST API (one test each runs with PyTorch
 │                              # imports blocked)
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
-└── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
+└── legacy/                    # read only: FH.ipynb (image outputs removed, D40), FNet_24.keras,
+                               # CNet_24.keras, SRgan_20.pth
 ```
 
 - Package `facehall` 0.0.0, Python ≥ 3.12. Runtime dependencies: fastapi, numpy, omegaconf,
@@ -288,14 +290,14 @@ robodream_cv/
 
 | File | What it is | Notes |
 |---|---|---|
-| `FH.ipynb` (456 KB) | All code: TF/Keras FNet and CNet, PyTorch SRGAN generator, training, visualisation | Cells were run out of order; SRGAN training (discriminator, loop) is missing |
+| `FH.ipynb` (127 KB) | All code: TF/Keras FNet and CNet, PyTorch SRGAN generator, training, visualisation | Cells were run out of order; SRGAN training (discriminator, loop) is missing. Its two figure outputs showed a real person's face and were removed (D40); the text outputs (model summaries, training logs) are kept |
 | `FNet_24.keras` (9.0 MB) | "Simplified SRResNet": 24×24 → 96×96 (×4), 5 residual blocks with BN, PixelShuffle via `Lambda(depth_to_space)`, sigmoid, MSE | Best legacy result. Keras 3.9.2, contains optimizer state, loading needs `safe_mode=False` |
 | `CNet_24.keras` (10.3 MB) | "Simplified C-Face": Conv + `UpSampling2D`, no residual blocks, MSE | Slightly worse than FNet |
 | `SRgan_20.pth` (3.0 MB) | PyTorch SRGAN generator `state_dict` | Same layer sequence as FNet, but with one shared PReLU alpha (`nn.PReLU()`) instead of one per channel and a linear output (no sigmoid, no clamp). The notebook loads `best_generator_20.pth` (name mismatch) |
 
 - **Legacy dataset:** 209,813 faces, 89×109 px, "FFHQ 2" + CelebA + Internet images; the exact
-  composition is undocumented. README linked it on GDrive until PR 6.1 (D38). 89×109 is exactly half of CelebA
-  aligned (178×218).
+  composition is undocumented. README linked it on GDrive until PR 6.1 (D38). 89×109 is exactly
+  half of CelebA aligned (178×218).
 - **Legacy timing:** one epoch on the RTX 4070 Laptop took ≈4 min for FNet and ≈2 min for CNet
   (≈168k images, batch 16).
 - **Comparability:** legacy numbers are not comparable with the new protocol and are not reused.
@@ -1904,17 +1906,19 @@ Plan and defaults: `DECISIONS.md`, "Phase 6 plan and defaults". The weights stay
 
 ### Open questions
 
-Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
-with CelebA faces) by D19, Q3 (the legacy dataset link and figures) by D38, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
-weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
-by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
-D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28, Q13 (the PR 3.8 ×4 model as reference) by D29, Q14
-(Phase 4 or the rest of Phase 3 first) by D30, Q15 (fine-tune on pipeline-like LR crops first)
-by D32.
+Ask the user before the PR that needs the answer. None is open at the moment.
 
-| # | Question | Needed by | Proposal |
-|---|---|---|---|
-| Q16 | `legacy/FH.ipynb` holds two image outputs that show the face of a real person from the legacy dataset (D38). `legacy/` is read only | before PR 6.3 | Clear the notebook's outputs in one commit, as an exception to "read only" |
+Closed:
+- Q1 (manifest in git) by D14; Q2 (grids with CelebA faces) by D19;
+- Q3 (the legacy dataset link and figures) by D38;
+- Q4 (`Blurry` images) by D15; Q5 (padding) by D16; Q6 (Inception weights) by D21;
+- Q7 (×8 training mix for Phase 3) by D22;
+- Q8, Q9, Q11, Q13 (the PR 3.3 ×8, PR 3.4 ×8, PR 3.6 ×4 and PR 3.8 ×4 models as references) by
+  D24, D25, D27 and D29;
+- Q10 (an artifact check in the gate) by D26; Q12 (a spectral check in the gate) by D28;
+- Q14 (Phase 4 or the rest of Phase 3 first) by D30;
+- Q15 (fine-tune on pipeline-like LR crops first) by D32;
+- Q16 (the face images in the legacy notebook's outputs) by D40.
 
 ### Risks
 

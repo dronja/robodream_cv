@@ -47,6 +47,19 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+# The service images (docker/, PR 5.4): inference only, without PyTorch (D34). The Dockerfiles
+# install one of the image groups from uv.lock (`uv sync --only-group image-cpu`), then facehall
+# itself without its dependencies.
+inference = [
+    "fastapi>=0.165.0",
+    "numpy>=2.5",
+    "omegaconf>=2.4",
+    "opencv-python-headless>=5.1",
+    "pillow>=13.0",
+    "uvicorn>=0.54.0",
+]
+image-cpu = [{ include-group = "inference" }, "onnxruntime>=1.32.0"]
+image-gpu = [{ include-group = "inference" }, "onnxruntime-gpu[cuda,cudnn]>=1.32.0"]  # D35
 
 [build-system]
 requires = ["hatchling"]

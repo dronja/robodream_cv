@@ -1,0 +1,55 @@
+# facehall REST API, CPU image: ONNX Runtime on the CPU (Phase 5, PR 5.4).
+# No PyTorch (D34) and no weights: the ONNX models and the YuNet detector are mounted read-only.
+#
+#   docker build -f docker/Dockerfile.cpu -t facehall:cpu .
+#   docker run --rm -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
+#       -v "$PWD/models:/models:ro" -v "$FACEHALL_WEIGHTS/yunet:/weights/yunet:ro" facehall:cpu
+#   curl --data-binary @photo.jpg "http://127.0.0.1:8000/enhance?scale=4" -o enhanced.png
+#
+# For local use only (D13): the API has no authentication, so publish the port on 127.0.0.1.
+# The mounted files must be readable by the container's user (uid 10001).
+
+ARG PYTHON_IMAGE=python:3.12.14-slim
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5
+
+FROM ${UV_IMAGE} AS uv
+
+# The dependencies: the image group alone, with the versions and hashes of uv.lock.
+FROM ${PYTHON_IMAGE} AS deps
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_PROJECT_ENVIRONMENT=/opt/facehall UV_PYTHON_DOWNLOADS=never UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+WORKDIR /src
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --only-group image-cpu --python /usr/local/bin/python3.12
+
+# facehall itself, as a wheel; it is installed without its dependencies, which include PyTorch
+# (for training).
+FROM deps AS wheel
+COPY README.md LICENSE ./
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv uv build --wheel --out-dir /wheels
+
+FROM ${PYTHON_IMAGE}
+# The mount points exist in the image, so a read-only container changes nothing in its root.
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin facehall \
+    && mkdir -p /models /weights/yunet
+COPY --from=deps /opt/facehall /opt/facehall
+# A layer of its own, so a code change does not copy the environment again; uv is not kept.
+RUN --mount=from=uv,source=/uv,target=/usr/local/bin/uv \
+    --mount=from=wheel,source=/wheels,target=/wheels \
+    uv pip install --python /opt/facehall/bin/python --no-deps --no-cache --compile-bytecode \
+        /wheels/facehall-*.whl
+WORKDIR /app
+COPY configs/pipeline/default.yaml configs/pipeline/default.yaml
+# ONNX Runtime sends telemetry to Microsoft by default (its Privacy.md); facehall turns it off on
+# import, and the image sets it for any other process too.
+ENV PATH=/opt/facehall/bin:$PATH PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    FACEHALL_MODELS=/models FACEHALL_WEIGHTS=/weights ORT_DISABLE_TELEMETRY=1
+USER facehall
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+# 0.0.0.0 inside the container; the host publishes it on 127.0.0.1 only (see above).
+CMD ["facehall", "serve", "--host", "0.0.0.0", "--port", "8000", "--device", "cpu"]

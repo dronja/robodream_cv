@@ -1,0 +1,10 @@
+# Build context of docker/Dockerfile.{cpu,gpu}: the package and its pipeline config only.
+# Nothing else is sent to the builder: no data, runs, outputs, models or weights (D7, D14).
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!configs/pipeline/default.yaml
+**/__pycache__

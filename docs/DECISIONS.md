@@ -2084,3 +2084,137 @@ set the scope): `facehall serve` (`facehall.serve`), FastAPI on uvicorn.
   them with checksums, is open.
 - *Needs verification:* the file picker for the binary body on the `/docs` page was not
   checked in a browser; the OpenAPI schema declares it (`type: string, format: binary`).
+
+### ONNX Runtime telemetry off (PR 5.4)
+**Decision** (default taken without a separate question, 2026-11-27): facehall sets
+`ORT_DISABLE_TELEMETRY=1` on import (`facehall/__init__.py`, an explicit value in the
+environment is kept), and both service images set it too.
+
+**Facts** (`Privacy.md` in the onnxruntime 1.32.0 and onnxruntime-gpu 1.32.0 wheels, the same
+file in both):
+- "Telemetry is turned **ON** by default in the official builds". Linux uses "the
+  cross-platform 1DS telemetry SDK", which sends "trace events to Microsoft's telemetry backend
+  over HTTPS".
+- "Set `ORT_DISABLE_TELEMETRY=1` before ONNX Runtime initializes. [...] this prevents the
+  uploader, events, and persistent device identifier from being created for the process
+  lifetime."
+- The API (`onnxruntime.disable_telemetry_events()`) only suppresses "non-essential telemetry",
+  and "ONNX Runtime may already have emitted a minimal initialization event before the API can
+  be called".
+- "Custom ONNX model metadata (`modelMetaData`) is not uploaded through 1DS", so the model record
+  of our exports (PR 5.1) is not sent. What the events do contain is not documented there and
+  was not checked.
+
+**Measured** on 2026-11-27 (`strace -f -e trace=connect`, one session of `models/x4.onnx` and
+one run on CPU, then 12–15 s idle):
+- without the variable: DNS lookups and HTTPS connections (port 443) to Microsoft addresses;
+  also from `facehall serve` before this change (start, three requests);
+- `disable_telemetry_events()` before the session: still one HTTPS connection;
+- the variable set before `import onnxruntime`: no connection, and no
+  `~/.cache/Microsoft/DeveloperTools/.onnxruntime/` folder;
+- the variable set after `import onnxruntime`: the connections and the folder as without it;
+- `facehall serve` after this change, with the variable unset in the shell: no connection other
+  than local sockets, no folder.
+
+**Why:** the product is local (D13), and §11 of `CLAUDE.md` asks that the service sends and keeps
+nothing about the photos. Usage events to a third party, unannounced, do not fit that, even
+without image data.
+
+**Consequences:**
+- every facehall process sets the variable before any facehall module imports ONNX Runtime;
+  a program that imports `onnxruntime` before `facehall` must set it itself;
+- tests check that a facehall process creates no device id and keeps an explicit value;
+- the smoke check of the images (`scripts/smoke_image.py`) checks the variable in the container;
+- before this change, the development runs on this machine sent these events: every evaluation
+  since PR 1.7 (ArcFace through ONNX Runtime) and the ONNX runs of PR 5.1–5.3. They cannot be
+  recalled. The folder on this machine holds a device id and an event queue
+  (`onnxruntime.db`), which was empty on 2026-11-27; its device id file dates from 2026-10-02,
+  before this project.
+
+### Docker images (PR 5.4)
+**Decision** (defaults taken without a separate question, 2026-11-27; D13, D34, D35 and the
+Phase 5 plan set the scope): `docker/Dockerfile.cpu` and `docker/Dockerfile.gpu`, built locally
+and not published.
+- **Base:** `python:3.12.14-slim` (Debian 13), the project's Python; uv 0.13.5 from
+  `ghcr.io/astral-sh/uv:0.13.5` in the build stage only. Pinned by tag; the digests of the
+  measured builds are recorded below.
+- **Dependencies:** the dependency groups `image-cpu` and `image-gpu` in `pyproject.toml`, so the
+  images get the versions and hashes of `uv.lock` (`uv sync --frozen --only-group`). Then
+  facehall itself with `--no-deps`, because the package's dependencies include PyTorch for
+  training.
+  - The groups hold fastapi, numpy, omegaconf, opencv-python-headless, pillow and uvicorn, plus
+    `onnxruntime` (CPU) or `onnxruntime-gpu[cuda,cudnn]` (GPU, D35) instead of it. The two
+    `onnxruntime` packages are never installed together.
+  - A test keeps the groups' bounds equal to the package's; another runs the service with every
+    left-out runtime dependency blocked from importing (torch, torchvision, torchmetrics, onnx,
+    onnxscript, pyarrow, safetensors).
+  - No ffmpeg: the API takes photos only (D36), so the GPL question of the ffmpeg build
+    (`THIRD_PARTY_LICENSES.md` §4.4) does not reach the images.
+- **No weights in the images:** the ONNX models are mounted at `/models` (`FACEHALL_MODELS`) and
+  the YuNet folder at `/weights/yunet` (`FACEHALL_WEIGHTS=/weights`), both read-only. The
+  mounted files must be readable by the container's user, uid 10001.
+- **Running:**
+  - a non-root user (uid 10001);
+  - documented with a read-only root and `/tmp` in memory;
+  - `facehall serve` on 0.0.0.0 inside, the port published on the host's 127.0.0.1 only
+    (`-p 127.0.0.1:8000:8000`);
+  - a `HEALTHCHECK` on `/health`;
+  - the CPU image serves on `cpu`; the GPU image on `cuda`, so without a GPU it fails at start
+    instead of serving on the CPU unnoticed;
+  - ONNX Runtime telemetry off (above).
+- **Build context:** `.dockerignore` sends only `pyproject.toml`, `uv.lock`, `README.md`,
+  `LICENSE`, `src/` and the pipeline config, so no data, runs, outputs or weights can reach an
+  image. A BuildKit cache keeps the uv downloads between builds.
+- **CI:** a second job builds the CPU image and checks it with `scripts/smoke_image.py --tiny`
+  (a tiny random model and the YuNet weights, 230 kB, pinned sha256). The GPU image is not built
+  in CI: 4.6 GB and no GPU on the runner.
+
+**Measured** (2026-11-27, this machine, Docker 29.1.3 from Ubuntu with the containerd image
+store; base digests `python:3.12.14-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f`,
+`uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff`):
+
+| Image | Cold build | After a code change | Environment (`/opt/facehall`) | Compressed | On disk |
+|---|---|---|---|---|---|
+| CPU | 39 s (28 s downloading 23 packages) | 2.6 s | 370 MB | 176 MB | 0.70 GB |
+| GPU | 8 min 22 s (7 min 31 s downloading 30 packages) | 1.2 s | 2.6 GB | 1.72 GB | 4.62 GB |
+
+- **Cold build:** `docker build --no-cache` with the base images present. With BuildKit,
+  `--no-cache` also starts the uv cache mount empty, so every package is downloaded again
+  (tested). A normal build after a change of `uv.lock` reuses the downloads. The download time
+  depends on the network: the first GPU build took 6 min 43 s, 5 min 49 s of it downloading.
+- **After a code change:** facehall is installed as a wheel in its own layer, and the
+  environment layer stays cached. With the environment and facehall in one layer (the first
+  layout of this PR), a code change took 9.5 s and 48.6 s, most of it copying and exporting the
+  2.6 GB environment again.
+- **On disk:** as `docker image ls` reports it with the containerd image store, the compressed
+  layers plus the unpacked files.
+- **One transient error:** a GPU rebuild right after another failed once with "failed to prepare
+  extraction snapshot … parent snapshot … does not exist" (containerd), and the same command
+  passed on retry.
+
+- **`scripts/smoke_image.py`** passes on both images with the reference models: `/version`,
+  a marked answer, a readable 415, a non-root user, no PyTorch, nothing written outside `/tmp`,
+  no face boxes or telemetry messages in the logs. The GPU image was checked in CPU mode, and its
+  ONNX Runtime lists the CUDA and TensorRT providers.
+- **Output:** the CPU container's answers are bit-identical to the development service's
+  (PR 5.3) for the ×4 and ×8 grids of 16 CelebA faces, about 0.22 s per request.
+- **Start:** about 1 s to a healthy `/health` on CPU.
+
+- **GPU image on CUDA,** with the NVIDIA Container Toolkit 1.20.2 (`--gpus all`, RTX 6000 Ada,
+  driver 595.99):
+  - the check passes on the CUDA provider;
+  - warm-up of both scales 1.6 s; an ×8 mosaic of 64 faces 2.0 s per request; a single face
+    12 ms (the first 36 ms); 2.2 GiB of memory. That is the speed of the torch-free CUDA service
+    outside a container (PR 5.3);
+  - its answers differ from the CPU service's by at most 1 level, in at most 4.3e-06 of the
+    values (×4 and ×8 grids), as ONNX Runtime on CUDA does outside a container (PR 5.2);
+  - without `--gpus` it stops at start (exit code 2, "ONNX Runtime could not start the CUDA
+    provider").
+- **What the NVIDIA runtime adds:** it injects the driver files (`libcuda`, `nvidia-smi`,
+  firmware) into the container's root and rebuilds the `ldconfig` cache. `docker diff` lists
+  them, so the check compares the service's container with the same container running `true`
+  and counts only the difference.
+
+This settles the open points of D35: the GPU image runs on the CUDA provider in a container;
+it installs `onnxruntime-gpu` alone, so the two `onnxruntime` packages never meet; and the CUDA
+provider runs without TF32 (PR 5.2).

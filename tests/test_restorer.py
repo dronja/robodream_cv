@@ -92,6 +92,43 @@ def test_onnx_restorer_matches_the_checkpoint(models: tuple[Path, Path]) -> None
     assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"
 
 
+TELEMETRY_PROBE = """
+import os, sys
+import numpy as np
+from facehall.restorer import OnnxRestorer
+from pathlib import Path
+restorer = OnnxRestorer(Path(sys.argv[1]))
+restorer(np.zeros((1, 3, 32, 32), np.float32))
+print(os.environ["ORT_DISABLE_TELEMETRY"])
+"""
+
+
+def test_onnx_runtime_telemetry_is_off(models: tuple[Path, Path], tmp_path: Path) -> None:
+    """ONNX Runtime sends telemetry by default unless ORT_DISABLE_TELEMETRY is set before it is
+    imported; facehall sets it, so no persistent device id is created either."""
+    env = {k: v for k, v in os.environ.items() if k != "ORT_DISABLE_TELEMETRY"}
+    env.update(HOME=str(tmp_path), XDG_CACHE_HOME=str(tmp_path / ".cache"))
+    result = subprocess.run(
+        [sys.executable, "-c", TELEMETRY_PROBE, str(models[1])],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip() == "1"
+    assert not list(tmp_path.rglob("*Microsoft*")), "ONNX Runtime created its device id"
+
+
+def test_an_explicit_telemetry_setting_is_kept() -> None:
+    code = "import os, facehall; print(os.environ['ORT_DISABLE_TELEMETRY'])"
+    env = {**os.environ, "ORT_DISABLE_TELEMETRY": "0"}
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=env, check=True
+    )
+    assert result.stdout.strip() == "0"
+
+
 def test_load_restorer_picks_the_backend_by_suffix(models: tuple[Path, Path]) -> None:
     checkpoint, onnx = models
     assert isinstance(load_restorer(onnx, "cpu"), OnnxRestorer)

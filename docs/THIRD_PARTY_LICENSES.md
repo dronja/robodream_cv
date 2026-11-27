@@ -56,7 +56,7 @@ Dev-only tools (ruff, mypy, pytest, pre-commit) are not distributed and are not 
 | numpy | 2.5.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | |
 | omegaconf | 2.4.0 | BSD License | From classifiers |
 | onnx | 1.23.2 | Apache-2.0 | Exporting models to ONNX only (`facehall export onnx`, PR 5.1); adds ml-dtypes (Apache-2.0). Inference reads ONNX files with onnxruntime alone (D34) |
-| onnxruntime | 1.32.0 | MIT License | Runs the recognition model (PR 1.7) and the ONNX restoration models (PR 5.2). Adds flatbuffers and protobuf. CPU build; [PyPI](https://pypi.org/project/onnxruntime/) also states MIT |
+| onnxruntime | 1.32.0 | MIT License | Runs the recognition model (PR 1.7) and the ONNX restoration models (PR 5.2). Adds flatbuffers and protobuf. CPU build; [PyPI](https://pypi.org/project/onnxruntime/) also states MIT. Its `Privacy.md`: the official builds collect telemetry and send it to Microsoft, on by default, Linux included; facehall turns it off (`ORT_DISABLE_TELEMETRY=1`, PR 5.4, `DECISIONS.md`) |
 | onnxscript | 0.7.2 | MIT License | Needed by PyTorch's dynamo ONNX exporter (PR 5.1); adds onnx-ir (Apache-2.0) |
 | opencv-python-headless | 5.1.0.95 | Apache 2.0 | The wheel bundles OpenCV (Apache-2.0), packaging code (MIT), libvpx (BSD-style) and **FFmpeg (LGPL-2.1)**; see `LICENSE-3RD-PARTY.txt` in the wheel. The LGPL obligations apply to distribution; none is planned (D13, local use only) |
 | pillow | 13.0.0 | MIT-CMU | |
@@ -157,6 +157,24 @@ nothing is linked against them or distributed (D13).
 | Program | Used for | Version checked | License |
 |---|---|---|---|
 | `ffmpeg`, `ffprobe` | Videos only (`facehall.video`, PR 4.5): encoding the restored frames (libx264 or libx265), copying the audio and writing the marks; `ffprobe` reads the marks back. CI installs the same Ubuntu package on its runner for the video tests (PR #33) | Ubuntu package `7:8.0.1-3ubuntu2` (here and on the CI runner) | FFmpeg is LGPL-2.1+, but this build is configured with `--enable-gpl` and links libx264 and libx265 (both GPL-2.0+), so the program as built is GPL. That matters for distributing it, which is not planned; a Docker image with it (Phase 5) would need this reviewed |
+
+### 4.5 Service images
+
+The Docker images of PR 5.4 (`docker/`) are built locally and not published (D13). Besides the
+packages of their dependency group (`image-cpu` or `image-gpu`, the versions of `uv.lock`, all
+listed above), they contain:
+
+| Component | Version | License | Notes |
+|---|---|---|---|
+| Base image `python:3.12.14-slim` | Debian 13 (trixie), Python 3.12.14 | Python: PSF-2.0. The 87 Debian packages carry their own licenses, *not reviewed* | Pinned by tag; the digest of each measured build is in `DECISIONS.md` |
+| onnxruntime-gpu | 1.32.0 | MIT License | GPU image only, instead of onnxruntime; the same `Privacy.md`, telemetry turned off as above |
+| nvidia-curand | 10.4.5.25 | LicenseRef-NVIDIA-Proprietary | GPU image only (`onnxruntime-gpu[cuda]`). The GPU image also holds nvidia-cublas, nvidia-cuda-nvrtc, nvidia-cuda-runtime, nvidia-cudnn-cu13, nvidia-cufft and nvidia-nvjitlink in the versions of §4.3 |
+| uv | 0.13.5 | MIT OR Apache-2.0 (PyPI) | Build stages only, not in the images |
+| hatchling | not pinned (latest at build time; 1.33.0 on PyPI on 2026-11-27) | MIT (PyPI) | Builds the facehall wheel in a build stage only, not in the images |
+
+The GPU image therefore holds NVIDIA proprietary libraries, and both hold the FFmpeg libraries
+bundled in the OpenCV wheel (LGPL-2.1, §4.1). Their redistribution terms must be reviewed before
+any image is published. The images contain no ffmpeg program (§4.4).
 
 ## 5. How to update
 

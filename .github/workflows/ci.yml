@@ -32,3 +32,27 @@ jobs:
         run: uv run mypy
       - name: Test
         run: uv run pytest
+
+  image:
+    # The CPU service image (docker/Dockerfile.cpu, PR 5.4): built and checked end to end with a
+    # tiny random model. The GPU image is not built here (4.6 GB, no GPU on the runner).
+    runs-on: ubuntu-latest
+    env:
+      UV_NO_SYNC: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies (CPU-only PyTorch)
+        run: uv sync --locked --extra cpu
+      - name: Download the face detector (YuNet, 230 kB, pinned sha256)
+        env:
+          FACEHALL_WEIGHTS: ${{ runner.temp }}/weights
+        run: uv run python scripts/download_weights.py yunet
+      - name: Build the CPU image
+        run: docker build -f docker/Dockerfile.cpu -t facehall:cpu .
+      - name: Check the image end to end
+        env:
+          FACEHALL_WEIGHTS: ${{ runner.temp }}/weights
+        run: uv run python scripts/smoke_image.py --image facehall:cpu --tiny

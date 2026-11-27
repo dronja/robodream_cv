@@ -7,12 +7,15 @@ the torch-free tests use a tiny ONNX export.
 import asyncio
 import hashlib
 import io
+import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import threading
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -329,20 +332,55 @@ def test_cli_says_how_to_get_a_missing_model(
     assert "facehall export onnx --scale 8" in capsys.readouterr().err
 
 
-SERVE_WITHOUT_TORCH = """
-import importlib.abc, io, sys
+def requirement_name(requirement: str) -> str:
+    match = re.match(r"[A-Za-z0-9_.-]+", requirement)
+    assert match is not None, requirement
+    return match.group(0).lower()
+
+
+def image_groups() -> tuple[list[str], dict[str, list[str]]]:
+    """The runtime dependencies of the package, and the packages of each image group."""
+    project = tomllib.loads(Path("pyproject.toml").read_text())
+    groups = project["dependency-groups"]
+
+    def resolve(name: str) -> list[str]:
+        out: list[str] = []
+        for item in groups[name]:
+            out += resolve(item["include-group"]) if isinstance(item, dict) else [item]
+        return out
+
+    return project["project"]["dependencies"], {g: resolve(g) for g in ("image-cpu", "image-gpu")}
+
+
+def test_the_image_groups_follow_the_package_dependencies() -> None:
+    dependencies, groups = image_groups()
+    bounds = {requirement_name(d): d for d in dependencies}
+    for group, requirements in groups.items():
+        for requirement in requirements:
+            name = requirement_name(requirement)
+            if name == "onnxruntime-gpu":  # instead of onnxruntime, with the same version (D35)
+                assert requirement.endswith(bounds["onnxruntime"].removeprefix("onnxruntime"))
+                continue
+            assert bounds.get(name) == requirement, (group, requirement)
+
+
+SERVE_WITH_THE_IMAGE_PACKAGES = """
+import importlib.abc, io, json, sys
 from pathlib import Path
 
-class BlockTorch(importlib.abc.MetaPathFinder):
+BLOCKED = set(json.loads(sys.argv[1]))
+
+class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path=None, target=None):
-        if name == "torch" or name.startswith("torch."):
-            raise ImportError(f"{name} is blocked: this path must run without PyTorch")
+        if name.split(".")[0] in BLOCKED:
+            raise ImportError(f"{name} is not in the service images")
         return None
 
-sys.meta_path.insert(0, BlockTorch())
+sys.meta_path.insert(0, Block())
 import numpy as np
 from fastapi.testclient import TestClient
 from facehall.align import CELEBA_TEMPLATE, Face
+from facehall.cli import build_parser
 from facehall.config import load_config
 from facehall.pipeline import PipelineConfig
 from facehall.serve import create_app, load_enhancers
@@ -351,6 +389,7 @@ class Stub:
     def detect(self, image):
         return [Face((16.0, 16.0, 32.0, 32.0), CELEBA_TEMPLATE * 32 - 0.5 + 16.0, 0.9)]
 
+build_parser().parse_args(["serve", "--scale", "4"])
 pipeline = Path("configs/pipeline/default.yaml")
 config = load_config(pipeline, PipelineConfig, ["models.backend=onnx"])
 enhancers = load_enhancers(config, [4], pipeline, "cpu")
@@ -359,14 +398,24 @@ with TestClient(create_app(enhancers, config.serve)) as api:
     response = api.post("/enhance", content=sys.stdin.buffer.read())
 assert response.status_code == 200, response.text
 assert response.headers["x-facehall-faces"] == "1 face, 1 restored", response.headers
-loaded = sorted(m for m in sys.modules if m == "torch" or m.startswith("torch."))
+loaded = sorted(m for m in sys.modules if m.split(".")[0] in BLOCKED)
 assert not loaded, loaded
 """
 
 
-def test_the_service_runs_without_pytorch(onnx_x4: Path) -> None:
+def test_the_service_runs_with_the_image_packages_only(onnx_x4: Path) -> None:
+    """The service imports none of the package's runtime dependencies that the images leave
+    out (PyTorch, the ONNX exporter, pyarrow, safetensors, …)."""
+    dependencies, groups = image_groups()
+    image = {requirement_name(r) for r in groups["image-cpu"]}
+    blocked = sorted(
+        requirement_name(d).replace("-", "_")
+        for d in dependencies
+        if requirement_name(d) not in image
+    )
+    assert {"torch", "torchvision", "onnx", "onnxscript", "pyarrow", "safetensors"} <= set(blocked)
     result = subprocess.run(
-        [sys.executable, "-c", SERVE_WITHOUT_TORCH],
+        [sys.executable, "-c", SERVE_WITH_THE_IMAGE_PACKAGES, json.dumps(blocked)],
         input=encoded(photo()),
         capture_output=True,
         env={**os.environ, "FACEHALL_MODELS": str(onnx_x4.parent)},

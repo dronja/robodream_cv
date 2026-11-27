@@ -67,7 +67,8 @@ def run_serve(
     if host not in LOOPBACK:
         logger.warning(
             "serving on %s: the API has no authentication, so anyone who can reach this "
-            "address can use it (meant for local use only, D13)",
+            "address can use it (meant for local use only, D13; in Docker, publish the port on "
+            "127.0.0.1 only: -p 127.0.0.1:8000:8000)",
             host,
         )
     uvicorn.run(

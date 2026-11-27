@@ -10,31 +10,12 @@ Low-resolution face images are a common issue in many fields, such as video surv
 
 Transform blurry or low-quality face images into high-resolution ones using knowledge about typical facial features — while **preserving the identity** of the person.
 
-Typical input resolution: `32×24` or `16×12`
-Target resolution: `96×96` or higher
+- **×4:** an aligned 32×32 face crop becomes 128×128 (about 8 px between the eyes in the input).
+- **×8:** an aligned 16×16 face crop becomes 128×128 (about 4 px between the eyes).
+- **In photos and videos,** `facehall` finds such small faces, restores each one and pastes it
+  back into an upscale of the whole image.
+
 > 🔥 **Main challenge:** identity and realism preservation
-
----
-
-## 🛠️ Common Methods
-
-- Traditional interpolation
-- Bayesian-based approaches
-- Convolutional Neural Networks (CNNs)
-- Generative Adversarial Networks (GANs)
-
----
-
-## 📐 Network Architectures
-
-| Model | Description | Link |
-|-------|-------------|------|
-| **SRGAN** | Super-Resolution Generative Adversarial Network | [arXiv:1609.04802](https://arxiv.org/abs/1609.04802) |
-| **Real-ESRGAN** | Enhanced SRGAN with real-world degradation handling | [arXiv:2107.10833](https://arxiv.org/abs/2107.10833) |
-| **PULSE** | Self-Supervised Upsampling via Latent Space | [GitHub](https://github.com/alex-damian/pulse) |
-| **Attention-FH** | Attention-Aware Face Hallucination | [arXiv:1708.03132](https://arxiv.org/abs/1708.03132) |
-| **SRResNet** | Residual-based Super-Resolution network | [arXiv:1609.04802](https://arxiv.org/abs/1609.04802) |
-| **C-Face** | Identity-aware face hallucination with a face-recognition (compare-face) loss; the "shape control" wording in earlier README versions needs verification | [JAIR 2022, doi:10.1613/JAIR.1.13816](https://doi.org/10.1613/JAIR.1.13816) |
 
 ---
 
@@ -44,16 +25,27 @@ The output is a **plausible reconstruction, not a recovery of real details**. Th
 (especially ×8 from 16 px), the more detail is invented. The results must not be used to identify
 a person or as evidence; at most they are a hint, to be shown next to the original.
 
+- **Invented details:** the models make older people look younger, can drop glasses, and at ×8
+  can draw a whole face from a dark blur (seen in the evaluation grids, see
+  [Limitations](#limitations)).
+- **Every output is marked** as AI-enhanced in its metadata, and `--watermark` adds a visible
+  mark.
+- **Use:** non-commercial research only, because of the training data and the third-party models
+  ([Licenses](#-licenses)).
+
 ---
 
 ## 🚧 Project status
 
-The repository is being turned into a product-ready package `facehall`. The current state and
-the plan are in `docs/PROJECT.md`; decisions are in `docs/DECISIONS.md`; metrics are in
-`docs/RESULTS.md`. Phases 0–4 (repository hygiene, reproducible baseline, realistic
-degradations, model quality, inference pipeline) are done; Phase 5 (ONNX models, a local REST API
-and Docker images) is in progress. The original notebook and weights live in `legacy/` and are
-read only. The trained weights are not published.
+The research notebook of this repository has become the package `facehall`: training,
+evaluation, a command-line tool, ONNX models, a local REST API and Docker images. Phases 0–5 of
+the plan are done; Phase 6 (release documentation) is in progress. The current state and the plan
+are in [`docs/PROJECT.md`](docs/PROJECT.md), decisions in [`docs/DECISIONS.md`](docs/DECISIONS.md)
+and all metrics in [`docs/RESULTS.md`](docs/RESULTS.md).
+
+**The trained weights are not published.** They are derived from CelebA, whose terms allow
+non-commercial research only, so they stay local. To use the tools, train the models yourself
+(`docs/PROJECT.md` §12) on a copy of CelebA obtained under its terms.
 
 ```bash
 uv sync                  # PyTorch from PyPI (CUDA build on Linux)
@@ -61,6 +53,10 @@ uv sync --extra cpu      # or: CPU-only PyTorch (then use `uv run --extra cpu ..
 uv run pytest
 uv run facehall --version
 ```
+
+---
+
+## 🚀 Usage
 
 ### Enhancing photos and videos
 
@@ -162,52 +158,139 @@ docker run --rm -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
 
 ---
 
-## 📂 Dataset
-
-🗃️ Download: [GDrive](https://drive.google.com/file/d/1Qv2c8UN87Wq2qGlyQnPEMh9kj6n87oL8/view?usp=sharing)
-Collected from **FFHQ 2**, **CelebA**, and Internet sources
-- `209,813` face images
-- Size: `89×109` pixels
-
----
-
 ## 📊 Results
 
-### 🌀 PULSE
+Numbers from real runs only; every table below is in [`docs/RESULTS.md`](docs/RESULTS.md) or in
+[`docs/PROJECT.md`](docs/PROJECT.md) §9 with its full context.
 
-Generated realistic but **identity-inconsistent** results:
+### Models
 
-![PULSE](images/PULSE.png)
+| Scale | Model | Parameters | Training |
+|---|---|---:|---|
+| ×4 | SRResNet without BatchNorm, 16 residual blocks | 1,517,571 | L1, then fine-tuned with an identity loss and a perceptual loss, both made robust to pixel patterns |
+| ×8 | the same architecture | 1,665,283 | L1, then fine-tuned with the robust identity loss |
+
+Both were trained on the CelebA train split with realistic degradations: blur, resizing,
+noise, JPEG and a second degradation stage, as in Real-ESRGAN.
+
+### Synthetic test set
+
+The frozen CelebA test split (19,961 faces of identities never seen in training), degraded at
+three levels. **PSNR-Y** (dB, higher is better) / **LPIPS** (lower is better) / **ID similarity**
+(cosine of ArcFace embeddings of the output and the original, higher is better):
+
+| Input | ×4 bicubic upscale | ×4 facehall | ×8 bicubic upscale | ×8 facehall |
+|---|---|---|---|---|
+| clean (bicubic downscale) | 27.25 / 0.341 / 0.711 | 29.18 / 0.141 / 0.682 | 23.42 / 0.546 / 0.316 | 25.37 / 0.262 / 0.312 |
+| light | 26.24 / 0.437 / 0.547 | 27.83 / 0.179 / 0.477 | 22.74 / 0.642 / 0.192 | 24.39 / 0.294 / 0.197 |
+| medium | 24.57 / 0.548 / 0.358 | 26.25 / 0.222 / 0.313 | 21.38 / 0.689 / 0.088 | 23.05 / 0.333 / 0.119 |
+| heavy | 22.83 / 0.630 / 0.198 | 24.55 / 0.261 / 0.196 | 19.89 / 0.716 / 0.043 | 21.48 / 0.381 / 0.073 |
+
+- **Sharper and closer to the original:** much better LPIPS and better PSNR-Y than a bicubic
+  upscale on every level.
+- **Identity is the hard part:** at ×4 the ID similarity stays below a bicubic upscale on every
+  level (within 0.002 on heavy inputs). At ×8 it is above it from light inputs on, but low in
+  absolute terms: the output face is mostly invented.
+
+### End to end in a picture
+
+In a real photo, the face must first be found and aligned at the low resolution. On 1,000
+synthetic scenes (CelebA validation faces placed in a larger image; degraded: blur, noise, JPEG
+70) the whole pipeline with detected faces gives **ID similarity / LPIPS**:
+
+| Scale, input | Bicubic upscale of the image | facehall |
+|---|---|---|
+| ×4 clean | 0.712 / 0.326 | 0.613 / 0.217 |
+| ×4 degraded | 0.438 / 0.505 | 0.367 / 0.292 |
+| ×8 clean | 0.340 / 0.544 | 0.261 / 0.347 |
+| ×8 degraded | 0.129 / 0.684 | 0.128 / 0.421 |
+
+Cutting the face out at low resolution costs about 0.06 ID at both scales, compared with crops
+on the template's pixel grid like those of the test set above. Most of it is information lost in
+the resampling. So the faces look much better (LPIPS),
+but **they are less like the person than a plain bicubic upscale**, except at ×8 on degraded
+inputs, where both are equally low.
+
+### Real low-resolution photos
+
+On 8,645 (×4) and 2,172 (×8) faces from WIDER FACE photos that are natively that small, there
+is no reference. FID / KID ×10³ against real CelebA faces (lower is closer to real faces):
+
+| Scale | Bicubic upscale | facehall |
+|---|---|---|
+| ×4 | 201.2 / 206.8 | 65.8 / 61.9 |
+| ×8 | 317.3 / 379.4 | 105.0 / 98.4 |
+
+These metrics reward realistic faces whether or not they are the right person, so they do not
+measure faithfulness.
+
+### Speed
+
+See [Docker](#docker): 18 ms for a small photo with one face on the CPU, 2–7 s for a Full HD
+frame, mostly spent finding the faces.
+
+### Limitations
+
+- **Invented details:** older people look younger, glasses can disappear, and at ×8 whole faces
+  can be drawn from near-featureless inputs (seen in the evaluation grids, not measured).
+- **False faces:** the detector also fires on textures. On real photos, 3% (×4) and 15% (×8) of
+  the restored detections were not faces, and only 52% / 29% of the small faces were found. Both
+  numbers are optimistic: the detector was trained on those photos.
+- **Videos** flicker more than the input, because each frame is restored on its own.
+- **Subgroups:** ID similarity is lower for faces annotated `Male` = 0 than `Male` = 1 (CelebA's
+  binary attribute) on every test level, bicubic upscale included. Skin tone is not measured: CelebA has no such annotation.
+- **Training data:** CelebA celebrities, near-frontal and well lit, with JPEG artifacts in the
+  targets.
 
 ---
 
-### ❌ SRGAN
+## 📂 Data
 
-Performed **very poorly**, not suitable for this task:
-
-![SRGAN](images/SRgan.png)
-
----
-
-### ✅ SRResNet (simplified)
-
-Showed **the best result**. Used:
-- Residual connections
-- PixelShuffle (DepthToSpace)
-
-![SRResNet](images/FNET.png)
+- **Training and synthetic test:** [CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html)
+  aligned, with its official identity-disjoint split; non-commercial research only, not
+  redistributed. The repository holds the code that prepares it and the checksums
+  ([`docs/DATA.md`](docs/DATA.md)), no images or annotations.
+- **Real-world test:** native small faces from the WIDER FACE training photos with the
+  RetinaFace landmarks; also non-commercial, kept local.
+- **The earlier dataset** of this repository (CelebA images mixed with Internet images of unknown
+  origin) is not used and no longer linked.
 
 ---
 
-### ⚙️ C-Face (simplified)
+## 📐 Background
 
-Simple encoder-decoder, no residual connections.
-Performed **slightly worse** than SRResNet.
+| Model | Description | Link |
+|-------|-------------|------|
+| **SRGAN** | Super-Resolution Generative Adversarial Network | [arXiv:1609.04802](https://arxiv.org/abs/1609.04802) |
+| **SRResNet** | Residual-based Super-Resolution network | [arXiv:1609.04802](https://arxiv.org/abs/1609.04802) |
+| **EDSR** | Residual SR without BatchNorm | [arXiv:1707.02921](https://arxiv.org/abs/1707.02921) |
+| **ESRGAN** | Perceptual and relativistic adversarial losses for SR | [arXiv:1809.00219](https://arxiv.org/abs/1809.00219) |
+| **Real-ESRGAN** | Enhanced SRGAN with real-world degradation handling | [arXiv:2107.10833](https://arxiv.org/abs/2107.10833) |
+| **FSRNet** | Face SR with facial priors | [arXiv:1711.10703](https://arxiv.org/abs/1711.10703) |
+| **PULSE** | Self-Supervised Upsampling via Latent Space | [GitHub](https://github.com/alex-damian/pulse) |
+| **Attention-FH** | Attention-Aware Face Hallucination | [arXiv:1708.03132](https://arxiv.org/abs/1708.03132) |
+| **C-Face** | Identity-aware face hallucination with a face-recognition (compare-face) loss; the "shape control" wording in earlier README versions needs verification | [JAIR 2022, doi:10.1613/JAIR.1.13816](https://doi.org/10.1613/JAIR.1.13816) |
 
-![CNET](images/CNET.png)
+**The original research** (`legacy/FH.ipynb`, read only) compared four approaches on small crops
+of the earlier dataset (24×24 → 96×96 for the trained models). PULSE gave realistic faces of other people; the SRGAN generator
+did poorly; a simplified SRResNet (FNet) did best; a simplified C-Face (CNet) slightly worse.
+Those results are not comparable with the protocol above. FNet and CNet were re-trained on it as
+baselines (`docs/RESULTS.md`), and the SRGAN result most likely came from its training recipe
+(no L1 pretraining, few epochs), not from the approach.
 
 ---
 
 ## 📌 Plans
 
-🧬 **Combine SRResNet and C-Face** to leverage both residual learning and explicit shape control.
+- A prior-guided model (coarse SR → facial landmarks or parsing → fine SR, as in FSRNet), for
+  better identity at ×8.
+- A landmark error metric (NME) and a skin-tone subgroup.
+- Faster face detection, which takes most of the time of a larger photo.
+
+---
+
+## 📜 Licenses
+
+- **Code:** Apache-2.0 ([`LICENSE`](LICENSE)).
+- **Data, weights and third-party models** have their own terms, most of them non-commercial:
+  [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md).

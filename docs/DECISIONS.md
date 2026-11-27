@@ -2325,3 +2325,44 @@ code; median seconds on CPU, CUDA in brackets where it differs):
 
 **Not measured:** real photos; other machines, including the 8 GB laptop; concurrent clients
 (the queue of PR 5.3).
+
+### D38 — The legacy dataset link and the legacy figures are removed (closes Q3)
+**Decision** (the user, 2026-11-27): README no longer links the legacy dataset on GDrive, and the
+four figures in `images/` (PULSE, SRgan, FNET, CNET) are deleted from HEAD with their README
+section. Git history is not rewritten (D7), so older commits still hold them.
+
+**Why:**
+- the legacy dataset mixes CelebA images, whose terms forbid redistribution, with Internet
+  images of unknown origin and consent (`PROJECT.md` §5, D9);
+- each figure shows the face of one real person from that dataset (the same person in all four,
+  seen on 2026-11-27).
+
+**Consequences:**
+- The README "Results" section now holds measured numbers only, without faces (PR 6.1).
+- Access to the GDrive file itself can be restricted only by its owner; the link stays in the
+  history of this public repository.
+- `legacy/FH.ipynb` (read only) also holds two image outputs that show the same face. They are
+  not changed here (Q16).
+
+### D39 — The trained weights stay local
+**Decision** (the user, 2026-11-27): Phase 6 does not publish the trained weights. They are
+versioned and recorded by checksum in the documentation, and the files stay local. The legacy
+weights stay in `legacy/` (D7: they leave HEAD only after a publication, which is not planned).
+
+**Why:**
+- the models are derived from CelebA (non-commercial research only, D14);
+- the identity loss used facenet weights whose license is unknown (PR 3.3);
+- the product is used locally (D13).
+
+**Consequences:** the README says that the tools need models trained by the user. Publishing
+would need a separate decision and a review of the CelebA, VGGFace2 and facenet terms.
+
+### Phase 6 plan and defaults
+**Decision** (defaults taken without a separate question, 2026-11-27):
+- **PR 6.1:** README with the measured results, the limitations and the data; D38.
+- **PR 6.2:** `docs/MODEL_CARD.md` for both reference models: intended use, out of scope, data,
+  training, metrics with subgroups, limitations.
+- **PR 6.3:** versions and `CHANGELOG.md`:
+  - semver for the package;
+  - a version for each released model, with the checksums of its weights and ONNX file;
+  - a review of `docs/DATA.md` and `docs/THIRD_PARTY_LICENSES.md`.

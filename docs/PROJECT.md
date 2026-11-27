@@ -116,7 +116,7 @@ As of 2026-11-27:
     Face tracking lowers the flicker that detection jitter adds, but the restored faces still
     flicker more than a bicubic upscale (§9). It was the last Phase 4 item.
 - **CI** installs `ffmpeg`, so the video tests run there too (PR #33, `b9df9b2`).
-- **Phase 5 (product): in progress.**
+- **Phase 5 (product): done** on 2026-11-27. The Gradio demo stays deferred (D37).
   - Decided (D34–D37):
     - inference without PyTorch: the service images carry ONNX Runtime only;
     - the GPU image uses ONNX Runtime's CUDA provider;
@@ -132,13 +132,17 @@ As of 2026-11-27:
   - Merged: PR 5.3 (the REST API, `facehall serve`; PR #36, `ec21d30`).
   - Merged: PR 5.4 (Docker CPU and GPU images; PR #37, `d407dfe`). Both images pass the
     end-to-end check, the GPU image on the CUDA provider in a container too (§9).
-  - In review: PR 5.5 (latency and memory of the images; branch `perf/image-benchmark`).
-    Result: Docker adds no latency. A GPU saves only the restoration, while face detection on the
-    CPU takes most of the time on larger photos (§9). With it, the Phase 5 "done when" criterion
-    is met; the Gradio demo stays deferred (D37).
+  - Merged: PR 5.5 (latency and memory of the images; PR #38, `7b0afb8`). Result: Docker adds no
+    latency. A GPU saves only the restoration, while face detection on the CPU takes most of the
+    time on larger photos (§9). With it, the Phase 5 "done when" criterion is met.
   - Found in PR 5.4: ONNX Runtime sends telemetry to Microsoft by default, also on Linux. facehall
     now turns it off on import, and so do the images (`DECISIONS.md`, "ONNX Runtime telemetry
     off").
+- **Phase 6 (release): in progress.**
+  - Decided: the legacy dataset link and the face figures leave README (D38, closes Q3); the
+    trained weights stay local (D39). Plan: PRs 6.1–6.3 (§10).
+  - In review: PR 6.1 (README with the measured results; branch `docs/readme-release`).
+  - Open: Q16, the face images in the outputs of the legacy notebook (§11).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -230,7 +234,6 @@ robodream_cv/
 │                              # restoration backends, REST API (one test each runs with PyTorch
 │                              # imports blocked)
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
-├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
 ```
 
@@ -290,8 +293,8 @@ robodream_cv/
 | `CNet_24.keras` (10.3 MB) | "Simplified C-Face": Conv + `UpSampling2D`, no residual blocks, MSE | Slightly worse than FNet |
 | `SRgan_20.pth` (3.0 MB) | PyTorch SRGAN generator `state_dict` | Same layer sequence as FNet, but with one shared PReLU alpha (`nn.PReLU()`) instead of one per channel and a linear output (no sigmoid, no clamp). The notebook loads `best_generator_20.pth` (name mismatch) |
 
-- **Legacy dataset:** 209,813 faces, 89×109 px, "FFHQ 2" + CelebA + Internet images; download link
-  (GDrive) in README; the exact composition is undocumented. 89×109 is exactly half of CelebA
+- **Legacy dataset:** 209,813 faces, 89×109 px, "FFHQ 2" + CelebA + Internet images; the exact
+  composition is undocumented. README linked it on GDrive until PR 6.1 (D38). 89×109 is exactly half of CelebA
   aligned (178×218).
 - **Legacy timing:** one epoch on the RTX 4070 Laptop took ≈4 min for FNet and ≈2 min for CNet
   (≈168k images, batch 16).
@@ -492,7 +495,7 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | onnxruntime | MIT (PR 1.7) |
 | onnx, onnxscript (ONNX export, PR 5.1) | Apache-2.0 and MIT; they add onnx-ir and ml-dtypes (both Apache-2.0) |
 | NVIDIA CUDA libraries (proprietary) and FFmpeg in OpenCV (LGPL-2.1) | Local use only, nothing is distributed (D13). Review the redistribution terms if that changes |
-| Legacy dataset on GDrive (linked from README) | Contains CelebA images and Internet images of unknown origin (Q3) |
+| Legacy dataset on GDrive | Contains CelebA images and Internet images of unknown origin. No longer linked from README (D38); access to the file is up to its owner |
 | WIDER FACE and the RetinaFace annotations (D20) | Done in PR 2.3: CC BY-NC-ND 4.0 and non-commercial research only (`docs/THIRD_PARTY_LICENSES.md` §2) |
 | VGG19 weights for the perceptual loss (torchvision) | Approved and downloaded on 2026-11-25 (PR 3.2). Terms follow the ImageNet training data, *needs verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 | facenet weights for the identity loss (facenet-pytorch, VGGFace2) | Approved and downloaded on 2026-11-25 (PR 3.3) with the weight license unknown: the code of facenet-pytorch and of David Sandberg's facenet is MIT, the weights state no license, and the VGGFace2 terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3). Not to be distributed without a separate review |
@@ -1692,7 +1695,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     over HTTPS by default, Linux included (its `Privacy.md`; seen with strace).
     `ORT_DISABLE_TELEMETRY=1` stops it only if set before `import onnxruntime`, so
     `facehall/__init__.py` sets it.
-- **Latency and memory of the images (PR 5.5, in review).** Method, full tables and reasons in
+- **Latency and memory of the images (PR 5.5, done).** Method, full tables and reasons in
   `DECISIONS.md` ("Latency and memory of the service images (PR 5.5)").
   - **Script:** `scripts/benchmark_images.py`. It starts a fresh service per scale and workload,
     in an image or as a local process, and sends one request at a time. It measures:
@@ -1889,17 +1892,20 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 
 ### Phase 6 — release
 
-- [ ] `MODEL_CARD.md`, `DATA.md`, `THIRD_PARTY_LICENSES.md`, README with real results
-- [ ] Versioned weights with checksums. Publishing them (GitHub Releases, Hugging Face Hub) needs
-      a separate confirmation (D7, D13). Semver for the package and the models
-- [ ] `CHANGELOG.md`
+Plan and defaults: `DECISIONS.md`, "Phase 6 plan and defaults". The weights stay local (D39).
+
+- [x] **PR 6.1** `docs:` README with the measured results, limitations and data; the legacy
+      dataset link and the face figures removed (D38)
+- [ ] **PR 6.2** `docs:` `MODEL_CARD.md` for both reference models
+- [ ] **PR 6.3** versions: semver for the package, a version and checksums for each model;
+      `CHANGELOG.md`; `DATA.md` and `THIRD_PARTY_LICENSES.md` reviewed
 
 ## 11. Open questions, risks, tech debt
 
 ### Open questions
 
 Ask the user before the PR that needs the answer. Closed: Q1 (manifest in git) by D14, Q2 (grids
-with CelebA faces) by D19, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
+with CelebA faces) by D19, Q3 (the legacy dataset link and figures) by D38, Q4 (`Blurry` images) by D15, Q5 (padding) by D16, Q6 (Inception
 weights) by D21, Q7 (×8 training mix for Phase 3) by D22, Q8 (the PR 3.3 ×8 model as reference)
 by D24, Q9 (the PR 3.4 ×8 model as reference) by D25, Q10 (an artifact check in the gate) by
 D26, Q11 (the PR 3.6 ×4 model as reference) by D27, Q12 (a spectral check in the gate) by D28, Q13 (the PR 3.8 ×4 model as reference) by D29, Q14
@@ -1908,7 +1914,7 @@ by D32.
 
 | # | Question | Needed by | Proposal |
 |---|---|---|---|
-| Q3 | README links the legacy dataset on GDrive (CelebA images + Internet images of unknown origin); `images/*.png` may also show dataset faces | before Phase 6 | Remove the link or restrict access to it; check the figures |
+| Q16 | `legacy/FH.ipynb` holds two image outputs that show the face of a real person from the legacy dataset (D38). `legacy/` is read only | before PR 6.3 | Clear the notebook's outputs in one commit, as an exception to "read only" |
 
 ### Risks
 

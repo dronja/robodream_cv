@@ -1918,3 +1918,82 @@ The export check itself (noise) gave 3.6e-07 at both scales.
     - the pixel shuffle as Reshape and Transpose, or merged with its convolution into a
       transposed convolution, was slower.
   - Not adopted here: PR 5.2 measures the end-to-end cost first.
+
+### ONNX Runtime in the pipeline (PR 5.2)
+**Decision** (defaults taken without a separate question, 2026-11-27):
+- **Restorers** (`facehall.restorer`): the pipeline restores faces through a restorer, chosen by
+  the model file's suffix:
+  - `TorchRestorer` for a checkpoint (`.safetensors`);
+  - `OnnxRestorer` for an export (`.onnx`), in ONNX Runtime on the CPU or the CUDA provider.
+- **No PyTorch in `facehall.pipeline`** (D34): batch preparation and the colour correction are
+  numpy; the bicubic upsampling of the colour correction is a fixed matrix equal to PyTorch's
+  (within 1e-5, tested). A test runs `facehall enhance` with an ONNX model while every `torch`
+  import fails.
+- **Model selection:** `--ckpt` takes either file. `models.backend: torch | onnx` picks the
+  reference checkpoints or their exports, `models.onnx_x4` and `onnx_x8` under
+  `${FACEHALL_MODELS:-models}`.
+- **`facehall enhance` keeps `backend: torch` by default.** The project's `onnxruntime` from
+  PyPI runs on CPU only, so with the ONNX default a GPU machine would restore on CPU. The service
+  and its images (PR 5.3, 5.4) use the ONNX models.
+- **CUDA provider: TF32 off** (`use_tf32=0`). On 512 heavy test crops, against PyTorch on CPU
+  (max abs diff), and the time of a batch of 32:
+
+  | Scale | TF32 on (ORT default) | TF32 off |
+  |---|---|---|
+  | ×4 | 2.4e-04, 4.15 ms | 1.1e-06, 4.77 ms |
+  | ×8 | 5.1e-04, 3.05 ms | 1.3e-06, 4.24 ms |
+
+  With it off, a GPU gives the CPU's output, for about 1 ms more per 32 faces.
+- **ONNX Runtime's threads sleep after each run** (`session.intra_op.allow_spinning=0`). With
+  spinning, YuNet (OpenCV) between the restorations took 9.0 ms instead of 3.5 ms per
+  single-face scene on CPU, which made the ONNX pipeline look 1.8× slower than PyTorch's.
+- **cuDNN algorithm search:** ORT's default (exhaustive) is kept. It costs about 20 ms once per
+  new batch size and session (at most 32 sizes at `batch_size: 32`); the heuristic search costs
+  the same per size, and no search (`DEFAULT`) is slower in the steady state (7–10 against 4–7 ms
+  for 32 crops at ×8). A warm-up at service start-up is for PR 5.3.
+- **Output marks** of ONNX models also carry the ONNX file's sha256 and the runtime
+  (`onnxruntime 1.32.0, CUDAExecutionProvider`).
+- **`Enhanced.seconds`:** the wall time of detection, restoration and paste-back per image.
+- **The bicubic skip as MatMuls (PR 5.1) is not adopted:** end to end, detection dominates on
+  CPU (below), and the rewrite would save about 0.1 s of 1.8 s on 64 faces.
+
+**D35 checked on this machine** (outside a container): a torch-free environment with
+`onnxruntime-gpu[cuda,cudnn]` 1.32.0 and the pipeline's dependencies is 2.7 GB, almost all of it
+the NVIDIA libraries from pip (cuBLAS 13.10, cuDNN 9.28, CUDA runtime 13.5). `ort.preload_dlls()`
+loads them; the providers are TensorRT, CUDA and CPU, and `facehall enhance --device cuda`
+restores with the CUDA provider without PyTorch. The driver (595.99, CUDA 13.2) runs the CUDA
+13.5 runtime. Still to check in PR 5.4: the same in a container, and whether `onnxruntime` and
+`onnxruntime-gpu` conflict when both are installed.
+
+**Measured** (`scripts/compare_backends.py`, commit `c462750`, Ryzen 9 9950X and RTX 6000 Ada):
+synthetic CelebA `val` scenes per scale: 100 single-face scenes (50 clean, 50 degraded) and 5
+mosaics of 8 × 8 scenes (1,464 px square at ×4, 744 px at ×8). Each backend ran the whole
+pipeline with YuNet detection; the outputs are compared with PyTorch on CPU. Medians per scene:
+
+| Scale, backend | Single face: detect / restore / total (ms) | 64 faces: detect / restore / total (s) | Restore per face (ms) | Outputs vs PyTorch CPU: max level, values changed |
+|---|---|---|---|---|
+| ×4 PyTorch CPU | 3.5 / 5.9 / 10.1 | 1.36 / 0.17 / 1.56 | 2.55 | — |
+| ×4 ONNX Runtime CPU | 3.4 / 6.6 / 10.5 | 1.40 / 0.39 / 1.82 | 6.10 | 1, 1.3e-07 |
+| ×4 PyTorch CUDA | 3.2 / 1.3 / 4.9 | 1.39 / 0.013 / 1.43 | 0.20 | 1, 7.2e-05 |
+| ×4 ONNX Runtime CUDA | 3.3 / 0.9 / 4.5 | 1.38 / 0.013 / 1.42 | 0.26 | 1, 1.4e-07 |
+| ×8 PyTorch CPU | 3.5 / 5.3 / 9.4 | 1.36 / 0.13 / 1.51 | 2.13 | — |
+| ×8 ONNX Runtime CPU | 3.5 / 6.4 / 10.5 | 1.38 / 0.37 / 1.78 | 5.84 | 1, 1.6e-07 |
+| ×8 PyTorch CUDA | 3.1 / 1.4 / 4.9 | 1.38 / 0.011 / 1.42 | 0.18 | 1, 8.4e-05 |
+| ×8 ONNX Runtime CUDA | 3.2 / 0.9 / 4.5 | 1.39 / 0.032 / 1.45 | 0.41 | 1, 1.9e-07 |
+
+- **Same faces everywhere:** in every scene, every backend restored the same faces (95 of 98
+  detected faces at ×4, 86 of 88 at ×8; 319 of 320 and 304 of 304 in the mosaics).
+- **Outputs:** ONNX Runtime on either device differs from PyTorch on CPU by at most 1 level in
+  1.3–1.9e-07 of the values; PyTorch on CUDA (TF32) changes about 500 times more values.
+- **Speed:**
+  - on CPU, ONNX Runtime restores 2.4–2.7× slower per face than PyTorch, but end to end that is
+    +4% (×4) and +12% (×8) on a single face and +17% on 64 faces;
+  - on CUDA the two backends are equal end to end. The ×8 mosaics restore in 32 ms instead of
+    13 ms because three of them had new batch sizes (19, 31 and 30 faces in the last batch),
+    each paying the cuDNN search once.
+- **Detection dominates many faces:** YuNet on the ×4 upscale of a 1,464 px mosaic (5,856 px,
+  tiled) takes 1.4 s of 1.4–1.8 s on any backend.
+- **First call:** 1.5–1.9 s (detector and session start-up). Peak resident memory is 2.3–2.8 GB
+  in every run, mostly the mosaics' upscaled images; the torch-free CUDA run peaked at 2.5–2.6 GB.
+- **The PyTorch backend is unchanged by the refactor:** on a grid of 16 faces at each scale (on
+  CUDA), its outputs are bit-identical to those of the PR 5.1 code.

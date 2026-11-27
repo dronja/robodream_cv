@@ -145,6 +145,21 @@ docker run --rm -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
   and it has no authentication.
 - **The GPU image** runs with `--gpus all`, and it stops at start if it finds no GPU.
 
+**Speed** on the development machine (Ryzen 9 9950X, RTX 6000 Ada), one request at a time:
+
+| Request | CPU image | GPU image |
+|---|---|---|
+| A small photo with one face | 18 ms | 12 ms |
+| A photo with 64 small faces | 2.3 s | 2.0 s |
+| 1920 × 1080 with 8 faces, ×4, PNG | 2.6 s | 2.6 s |
+| 1920 × 1080 with 8 faces, ×8, PNG | 6.9 s | 7.1 s |
+
+- **Detection sets the speed:** most of the time goes to finding the faces, which runs on the
+  CPU in both images. The GPU only speeds up the restoration itself.
+- **Smaller machines:** limited to 4 cores, the CPU image is at most 8% slower.
+- **Method and full numbers:** [`docs/DECISIONS.md`](docs/DECISIONS.md), "Latency and memory of
+  the service images (PR 5.5)". The test images were synthetic.
+
 ---
 
 ## 📂 Dataset

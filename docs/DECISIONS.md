@@ -2200,5 +2200,21 @@ store; base digests `python:3.12.14-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f
   (PR 5.3) for the ×4 and ×8 grids of 16 CelebA faces, about 0.22 s per request.
 - **Start:** about 1 s to a healthy `/health` on CPU.
 
-*Needs verification:* the GPU image on the CUDA provider in a container, which needs the NVIDIA
-Container Toolkit on the host.
+- **GPU image on CUDA,** with the NVIDIA Container Toolkit 1.20.2 (`--gpus all`, RTX 6000 Ada,
+  driver 595.99):
+  - the check passes on the CUDA provider;
+  - warm-up of both scales 1.6 s; an ×8 mosaic of 64 faces 2.0 s per request; a single face
+    12 ms (the first 36 ms); 2.2 GiB of memory. That is the speed of the torch-free CUDA service
+    outside a container (PR 5.3);
+  - its answers differ from the CPU service's by at most 1 level, in at most 4.3e-06 of the
+    values (×4 and ×8 grids), as ONNX Runtime on CUDA does outside a container (PR 5.2);
+  - without `--gpus` it stops at start (exit code 2, "ONNX Runtime could not start the CUDA
+    provider").
+- **What the NVIDIA runtime adds:** it injects the driver files (`libcuda`, `nvidia-smi`,
+  firmware) into the container's root and rebuilds the `ldconfig` cache. `docker diff` lists
+  them, so the check compares the service's container with the same container running `true`
+  and counts only the difference.
+
+This settles the open points of D35: the GPU image runs on the CUDA provider in a container;
+it installs `onnxruntime-gpu` alone, so the two `onnxruntime` packages never meet; and the CUDA
+provider runs without TF32 (PR 5.2).

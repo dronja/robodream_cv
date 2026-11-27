@@ -130,9 +130,8 @@ As of 2026-11-27:
     Runtime gives PyTorch's CPU output on CPU and CUDA; end to end it is as fast as PyTorch on
     CUDA and 4–17% slower on CPU (§9).
   - Merged: PR 5.3 (the REST API, `facehall serve`; PR #36, `ec21d30`).
-  - In review: PR 5.4 (Docker CPU and GPU images; branch `build/docker`). The CPU image and the
-    GPU image in CPU mode pass the end-to-end check; CUDA in a container waits for the NVIDIA
-    Container Toolkit (§11).
+  - In review: PR 5.4 (Docker CPU and GPU images; PR #37, branch `build/docker`). Both images
+    pass the end-to-end check, the GPU image on the CUDA provider in a container too (§9).
   - Found in PR 5.4: ONNX Runtime sends telemetry to Microsoft by default, also on Linux. facehall
     now turns it off on import, and so do the images (`DECISIONS.md`, "ONNX Runtime telemetry
     off").
@@ -268,7 +267,7 @@ robodream_cv/
 | Locked dev tools | ruff 0.17.2, mypy 2.4.0, pytest 9.1.1 |
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
-| Docker | Ubuntu `docker.io` 29.1.3 and `docker-buildx` 0.30.1, installed 2026-11-27, with the containerd image store; data in `/var/lib/docker` on `/`. The user is in the `docker` group (in this session: `sg docker -c "…"`). NVIDIA Container Toolkit: not installed yet (PR 5.4) |
+| Docker | Ubuntu `docker.io` 29.1.3 and `docker-buildx` 0.30.1, installed 2026-11-27, with the containerd image store; data in `/var/lib/docker` on `/`. The user is in the `docker` group (in this session: `sg docker -c "…"`). NVIDIA Container Toolkit 1.20.2 (NVIDIA's apt repository), installed 2026-11-27, registered as the Docker runtime `nvidia` (`/etc/docker/daemon.json`) |
 | FFmpeg | system `ffmpeg` / `ffprobe` 8.0.1 (Ubuntu package `7:8.0.1-3ubuntu2`, with libx264, libx265 and AAC), needed for videos only (PR 4.5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
 | Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2), `facenet_vggface2/20180402-114759-vggface2.pt` (identity loss, PR 3.3), `yunet/face_detection_yunet_2026may.onnx` (face detector, D31). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
@@ -1675,8 +1674,15 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - **Builds:** cold 39 s and 8 min 22 s, most of the GPU time the download of the CUDA
       libraries; after a code change 2.6 s and 1.2 s.
     - **Results:** the CPU container's answers are bit-identical to the development service's,
-      and it is healthy about 1 s after start. Both images pass the check, the GPU image in CPU
-      mode.
+      and it is healthy about 1 s after start. Both images pass the check.
+    - **GPU image on CUDA** (`--gpus all`, the RTX 6000 Ada): the same speed as the torch-free
+      CUDA service outside a container (PR 5.3).
+      - Warm-up of both scales: 1.6 s.
+      - An ×8 mosaic of 64 faces: 2.0 s per request. A single face: 12 ms (the first 36 ms).
+      - 2.2 GiB of memory.
+      - Its answers differ from the CPU service's by at most 1 level, in under 5e-06 of the
+        values.
+      - Without `--gpus` it stops at start with "could not start the CUDA provider".
   - **ONNX Runtime telemetry** (found here): its official builds send usage events to Microsoft
     over HTTPS by default, Linux included (its `Privacy.md`; seen with strace).
     `ORT_DISABLE_TELEMETRY=1` stops it only if set before `import onnxruntime`, so
@@ -1824,8 +1830,8 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
       images or faces; `facehall serve` (§9)
 - [x] **PR 5.4** `build(docker):` CPU and GPU images for local use, not published (D13, D35);
       weights mounted read-only; dependency groups from `uv.lock`; `scripts/smoke_image.py`; the
-      CPU image built and checked in CI; ONNX Runtime telemetry off (§9). CUDA in a container is
-      still to be checked (§11)
+      CPU image built and checked in CI; ONNX Runtime telemetry off; the GPU image checked on
+      CUDA in a container (§9)
 - [ ] **PR 5.5** latency and memory benchmark of the images
 - [ ] Gradio demo (optional; deferred, D37)
 
@@ -1878,8 +1884,11 @@ by D32.
   the published ID numbers must be recomputed.
 - ID similarity is computed with a model that was itself trained on face photos; it measures
   closeness to the reference, not identity "recovery", and it may be biased across subgroups.
-- CI time: about 1.4 min per run on 2026-11-27 (PR #33): 29 s of tests (352), 19 s to install
-  ffmpeg, the rest setup and checks. Watch it as the tests grow.
+- CI time on 2026-11-27 (PR #37), as two parallel jobs:
+  - `check`: 86 s, of it 38 s of tests (395) and the ffmpeg install;
+  - `image`: 61 s, building and checking the CPU image.
+
+  Watch it as the tests grow.
 - DataLoader workers use `fork`, the Linux default. Python 3.12 warns that forking a
   multi-threaded process may deadlock (seen in the tests). The one deadlock found so far is the
   OpenCV one (§9), and the trainer avoids it. Python 3.14 changes the default to `forkserver`;
@@ -1916,8 +1925,8 @@ by D32.
 - ONNX Runtime on CPU restores a face 2.4–2.7× slower than PyTorch on CPU. End to end the CPU
   image is therefore 4–17% slower than `facehall enhance` with PyTorch, the most on photos with
   many faces (PR 5.2). The GPU path (`onnxruntime-gpu` with CUDA libraries from pip, D35) works
-  on this machine outside a container. The GPU image passes its check in CPU mode, but CUDA in a
-  container is not verified until the NVIDIA Container Toolkit is installed (PR 5.4).
+  on this machine outside a container and in the GPU image (PR 5.4). Both are checked only
+  on this machine (driver 595.99, CUDA 13.2), not on the 8 GB laptop.
 - ONNX Runtime's telemetry is off only in processes that import `facehall` before
   `onnxruntime`, or that have `ORT_DISABLE_TELEMETRY=1` set; other programs on the machine keep
   ONNX Runtime's default (on). Before PR 5.4 the project's own runs sent its events: every

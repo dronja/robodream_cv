@@ -2406,3 +2406,72 @@ The notebook shrinks from 456 KB to 127 KB. Git history is not rewritten (D7).
 **Decision** (the user, 2026-11-27): the annotated tag `v0.1.0` marks release 0.1.0 on the merge
 commit of PR 6.3 (`03b79a1`), after CI passed on it. No GitHub release is made, and no weights
 are attached (D39).
+
+### D41 — A local web interface, `facehall ui` (amends D37)
+**Decision** (the user, 2026-11-27): a web interface in Material Design 3 for choosing photos,
+videos or a folder of media, running the enhancement, and showing and saving the results. The
+user chose:
+- a page served by facehall on this computer that reads local paths, rather than uploads or a
+  desktop application;
+- English and Ukrainian, with a language switch.
+
+**Defaults** (taken without a separate question):
+- **Command:** `facehall ui [--host] [--port] [--device] [--pipeline] [--set …] [--no-browser]`
+  prints the address and opens it in the browser. Port 8100, so that `facehall serve` (8000) can
+  run beside it. Settings under `ui` in `configs/pipeline/default.yaml`.
+- **Page:** Material Design 3 written by hand as plain CSS and JavaScript:
+  - the baseline colour scheme, light and dark;
+  - the type scale and the components it needs;
+  - no framework, no build step, no CDN, no new Python dependency (FastAPI and uvicorn are
+    already used by `facehall serve`);
+  - the Material Icons (Apache-2.0) inlined as SVG;
+  - the system fonts (Roboto is not bundled);
+  - strings in `i18n.json`, with plural forms; the language from the browser by default.
+- **Access** (local use only, D13):
+  - bound to 127.0.0.1;
+  - a random session key per start, in the fragment of the address (`#token=…`), which the
+    browser never sends to a server; the page keeps it for the tab and sends it with every API
+    request;
+  - requests whose `Host` is not a loopback name are refused (against DNS rebinding);
+  - a strict content security policy (the page's own files only, no inline code or styles);
+  - no OpenAPI pages;
+  - the "open folder" action only for the output folders of the session.
+- **Files:** the service reads any photo or video the user's account can read, given its absolute
+  path. Folder listings show only folders and media files, without hidden ones. Previews and face
+  crops are made in memory (`ui.cache_mb`, 1 GB of decoded images); nothing is written but the
+  outputs.
+- **Runs:**
+  - one worker thread runs one run at a time, in order;
+  - a model is loaded when a run first needs its scale, and kept;
+  - *Cancel* takes effect between files and between the frames of a video; a cancelled video
+    is not written.
+- **Outputs:**
+  - the files and marks of `facehall enhance`; the `ui` settings stay out of the record;
+  - by default under `<Pictures>/facehall` (the XDG folder, else `~/Pictures`, else the home
+    folder), in a new subfolder per run (`2026-11-27_15-02-14_x4`);
+  - earlier outputs inside an input folder are skipped.
+- **Models:** those of `facehall enhance` (`models.backend`: the checkpoints by default), not the
+  ONNX models of `facehall serve`: the interface runs where `facehall enhance` runs.
+- **Log:** method, path, status and time per request, never the query string, which holds file
+  paths.
+- **D36 stays:** the REST API takes photos only. Its reason, uploads kept on disk during a long
+  video, does not apply here: the interface reads files that are already on the disk, so videos
+  run as background work.
+- **D37 is amended:** this page is the interface. Gradio stays unused.
+
+**Why:**
+- **Local paths:** large photos and videos are not copied through the browser, the results go
+  straight into a folder, and no uploads are stored (`CLAUDE.md` §11).
+- **No framework or CDN:** the page works offline, pulls no third-party code into a service that
+  can read the user's files, and adds no dependency to review.
+- **The session key:** any web page open in the same browser can send requests to 127.0.0.1. Without
+  the key, one could list folders or read photos through the service. In the fragment, the key
+  stays out of server logs and `Referer` headers.
+
+**Checked:**
+- 28 tests (`tests/test_ui.py`): the key and the `Host` check, the page's policy, folder
+  listings, previews and crops, file ranges, runs, options, cancelling (also within a video),
+  failures, the open-folder restriction, and the two languages having the same strings;
+- the whole flow in a headless Chrome on synthetic CelebA scenes and a synthetic clip
+  (×4 and ×8, a folder, a video, an error, both languages, both themes, 1440 and 390 px wide).
+  The screenshots stay local (D19).

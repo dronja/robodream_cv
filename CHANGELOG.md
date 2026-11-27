@@ -8,6 +8,17 @@ change the command line, the API and the model contract. Model versions and thei
 
 ## [Unreleased]
 
+### Added
+
+- **`facehall ui`:** a local web interface in Material Design 3, in English and Ukrainian.
+  Photos, videos and folders are chosen on this computer and read from the disk, without
+  uploads. Runs wait in a queue, show their progress and can be cancelled. A viewer compares each
+  result with its original (a slider, the faces enlarged, the details), and the outputs, marked
+  like those of `facehall enhance`, go to a new folder per run. It binds to 127.0.0.1 and needs a
+  session key (D41).
+- `ui` settings in `configs/pipeline/default.yaml`. The records in the marks of the outputs do
+  not include them, so `facehall enhance` writes the same records as before.
+
 ## [0.1.0] - 2026-11-27
 
 The first release of the package. The research notebook (now in `legacy/`) became a package with

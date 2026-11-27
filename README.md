@@ -38,9 +38,10 @@ a person or as evidence; at most they are a hint, to be shown next to the origin
 ## 🚧 Project status
 
 The research notebook of this repository has become the package `facehall`: training,
-evaluation, a command-line tool, ONNX models, a local REST API and Docker images. The current
-release is **0.1.0** ([`CHANGELOG.md`](CHANGELOG.md)), with the reference models `facehall-x4`
-and `facehall-x8` 0.1.0 ([`docs/MODEL_CARD.md`](docs/MODEL_CARD.md)). The current state and the
+evaluation, a command-line tool, ONNX models, a local REST API and Docker images; a local web
+interface followed after the release (not released yet). The current release is **0.1.0**
+([`CHANGELOG.md`](CHANGELOG.md)), with the reference models `facehall-x4` and `facehall-x8` 0.1.0
+([`docs/MODEL_CARD.md`](docs/MODEL_CARD.md)). The current state and the
 plan are in [`docs/PROJECT.md`](docs/PROJECT.md), decisions in
 [`docs/DECISIONS.md`](docs/DECISIONS.md) and all metrics in [`docs/RESULTS.md`](docs/RESULTS.md).
 
@@ -85,6 +86,20 @@ uv run facehall enhance clip.mp4 -o clip_x4.mp4 --scale 4        # a video (need
   `--watermark` adds a visible mark.
 - **Videos** are H.264 MP4 by default, with the input's audio. Each frame is restored on its own,
   so the restored faces flicker more than the input does (see `docs/PROJECT.md`).
+
+### A web interface
+
+`facehall ui` opens a page in the browser (Material Design 3, English and Ukrainian) for the same
+work without the command line: choose photos, videos or folders on this computer, enhance them,
+compare each result with its original and keep the outputs in a folder.
+
+```bash
+uv run facehall ui                         # http://127.0.0.1:8100, opened in the browser
+```
+
+It runs locally only: the files are read from the disk, nothing is uploaded, and the address
+holds a session key. The page repeats that the faces are a plausible reconstruction
+([`docs/USAGE.md`](docs/USAGE.md) §6).
 
 ### Exporting a model to ONNX
 

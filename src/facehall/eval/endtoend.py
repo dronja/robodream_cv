@@ -87,7 +87,7 @@ def face_crop(
     return np.asarray(warp(frame, matrix, size, border="reflect"), dtype=np.uint8)
 
 
-def to_tensor(images: Sequence[npt.NDArray[np.uint8]], device: torch.device) -> torch.Tensor:
+def to_tensor(images: Sequence[npt.NDArray[np.uint8]], device: torch.device | str) -> torch.Tensor:
     return torch.from_numpy(np.stack(images)).permute(0, 3, 1, 2).float().div(255.0).to(device)
 
 

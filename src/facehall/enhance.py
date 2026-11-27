@@ -211,14 +211,6 @@ def to_box(values: Sequence[float]) -> Box:
     return left, top, width, height
 
 
-def select_device(name: str) -> str:
-    if name != "auto":
-        return name
-    import torch
-
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-
 def run_enhance(
     inputs: Sequence[Path],
     output: Path,
@@ -246,13 +238,17 @@ def run_enhance(
     points = [numbers(t, 10, "--landmarks") for t in landmarks] or None
     face_boxes = [to_box(numbers(t, 4, "--box")) for t in boxes] or None
     jobs = plan(inputs, output, suffix=suffix, video_suffix=video_suffix, overwrite=overwrite)
-    path = checkpoint if checkpoint is not None else Path(config.models.checkpoint(scale or 4))
+    path = checkpoint if checkpoint is not None else Path(config.models.path(scale or 4))
     if not path.is_file():
-        raise FileNotFoundError(
-            f"{path}: no checkpoint; pass --ckpt, or set the models in {pipeline} "
-            "(or FACEHALL_RUNS, the folder of the reference runs)"
+        hint = (
+            f"export it with: facehall export onnx --scale {scale or 4} -o {path}"
+            if path.suffix == ".onnx"
+            else "FACEHALL_RUNS: the folder of the reference runs"
         )
-    enhancer = Enhancer.from_checkpoint(path, config, select_device(device))
+        raise FileNotFoundError(
+            f"{path}: no model; pass --ckpt, or set the models in {pipeline} ({hint})"
+        )
+    enhancer = Enhancer.load(path, config, device)
     if scale is not None and enhancer.scale != scale:
         raise ValueError(f"{path} is a x{enhancer.scale} model, not x{scale}")
     report(f"model {enhancer.info['name']} (x{enhancer.scale}), {len(jobs)} input(s)")

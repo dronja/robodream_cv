@@ -86,7 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
     model.add_argument(
         "--scale", type=int, choices=(4, 8), help="model scale from the pipeline config (4)"
     )
-    model.add_argument("--ckpt", type=Path, help="restoration checkpoint (.safetensors)")
+    model.add_argument(
+        "--ckpt",
+        type=Path,
+        help="restoration model: a checkpoint (.safetensors) or an ONNX export (.onnx)",
+    )
     enhance.add_argument(
         "--pipeline",
         type=Path,
@@ -99,7 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="override a pipeline value, e.g. --set color_correction=true (repeatable)",
+        help="override a pipeline value, e.g. --set models.backend=onnx (the ONNX exports of "
+        "the reference models, without PyTorch) or --set color_correction=true (repeatable)",
     )
     faces = enhance.add_mutually_exclusive_group()
     faces.add_argument(

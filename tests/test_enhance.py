@@ -237,7 +237,7 @@ def test_cli_rejects_landmarks_for_several_images_and_missing_models(
             ["enhance", str(tmp_path / "a.png"), "-o", str(tmp_path / "o2")]
             + ["--set", "models.x4=missing/best.safetensors", "--device", "cpu"]
         )
-    assert "no checkpoint" in capsys.readouterr().err
+    assert "no model; pass --ckpt" in capsys.readouterr().err
 
 
 def test_a_failing_image_does_not_stop_the_others(tmp_path: Path, checkpoint: Path) -> None:

@@ -32,7 +32,9 @@ METRICS = ("psnr_y", "ssim_y", "lpips", "identity")
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--ckpt", type=Path, required=True, help="restoration checkpoint")
+    parser.add_argument(
+        "--ckpt", type=Path, required=True, help="restoration checkpoint or ONNX export"
+    )
     parser.add_argument("--pipeline", type=Path, default=Path("configs/pipeline/default.yaml"))
     parser.add_argument("--data", type=Path, default=Path("configs/data/celeba_128.yaml"))
     parser.add_argument("--split", default="val")
@@ -70,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     device = resolve_device(args.device)
     data = load_config(args.data, DataConfig)
     config = load_config(args.pipeline, PipelineConfig)
-    enhancer = Enhancer.from_checkpoint(args.ckpt, config, device)
+    enhancer = Enhancer.load(args.ckpt, config, str(device))
     metrics: dict[str, Metric] = {}
     if not args.no_perceptual:
         metrics["lpips"] = Lpips("alex", device)

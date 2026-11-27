@@ -61,8 +61,12 @@ def parity_inputs(
     return rng.random((count, 3, lr_size, lr_size), dtype=np.float32)
 
 
-def session(model: Path | bytes, providers: Sequence[str] = ("CPUExecutionProvider",)) -> Any:
-    """An ONNX Runtime session of a model file or of serialized model bytes."""
+def session(
+    model: Path | bytes,
+    providers: Sequence[str | tuple[str, dict[str, str]]] = ("CPUExecutionProvider",),
+) -> Any:
+    """An ONNX Runtime session of a model file or of serialized model bytes; ``providers`` as
+    ONNX Runtime takes them (names, or (name, options) pairs)."""
     import onnxruntime as ort
 
     options = ort.SessionOptions()

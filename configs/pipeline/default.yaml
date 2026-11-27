@@ -16,8 +16,12 @@ mask:                        # feathered ellipse in normalized crop coordinates;
   radius_y: 0.44             # reaches 0.99 of the crop height at the chin
   feather: 0.25              # outer quarter of the elliptic radius fades out (smoothstep)
 models:                      # the references (configs/gate.yaml); FACEHALL_RUNS: their folder
+  backend: torch             # torch: the checkpoints; onnx: their ONNX exports, no PyTorch (D34)
   x4: ${oc.env:FACEHALL_RUNS,runs}/srresnet_id_perc_robust_x4-20261126-121325/best.safetensors  # D29
   x8: ${oc.env:FACEHALL_RUNS,runs}/srresnet_id_robust_x8-20261125-174436/best.safetensors  # D25
+  # facehall export onnx --scale 4 -o models/x4.onnx; FACEHALL_MODELS: their folder
+  onnx_x4: ${oc.env:FACEHALL_MODELS,models}/x4.onnx
+  onnx_x8: ${oc.env:FACEHALL_MODELS,models}/x8.onnx
 video:                       # facehall enhance on videos (PR 4.5)
   smooth: true               # alpha-beta filter of each face track (PR 4.5, on synthetic clips)
   alpha: 0.5

@@ -23,21 +23,24 @@
   detection order.
 - **Colour correction** (optional, off by default) shifts the per-channel mean of the restored
   face, inside the mask, to that of the bicubic upscale of its LR crop.
+- **Backends** (PR 5.2, ``facehall.restorer``): a PyTorch checkpoint or its ONNX export. This
+  module does not import PyTorch, so with an ONNX model the pipeline runs without it (D34).
 
 The output is a plausible reconstruction, not a recovery of the true details (``CLAUDE.md``
 §11); ``facehall.marking`` marks it (PR 4.4).
 """
 
+import math
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
 
 import cv2
 import numpy as np
 import numpy.typing as npt
-import torch
-from torch import nn
 
 from facehall.align.detect import Face, YuNet, box_landmarks
 from facehall.align.similarity import (
@@ -51,6 +54,7 @@ from facehall.align.similarity import (
 )
 from facehall.align.template import CELEBA_TEMPLATE, YUNET_BOX_LANDMARKS, YUNET_TEMPLATES
 from facehall.align.warp import alignment_matrix, resample_crop, unwarp
+from facehall.restorer import Restorer, TorchRestorer, load_restorer
 from facehall.weights import yunet_weights
 
 Image = npt.NDArray[np.uint8]  # (H, W, 3) RGB
@@ -86,16 +90,40 @@ class MaskConfig:
 
 @dataclass
 class ModelsConfig:
-    """Restoration checkpoints per scale, for ``facehall enhance --scale`` without ``--ckpt``."""
+    """Restoration models per scale, for ``facehall enhance --scale`` without ``--ckpt``: the
+    PyTorch checkpoints, and their ONNX exports, which ``backend`` selects (D34)."""
 
+    backend: str = "torch"  # "torch": the checkpoints; "onnx": the exports, without PyTorch
     x4: str = ""
     x8: str = ""
+    onnx_x4: str = ""
+    onnx_x8: str = ""
+
+    def __post_init__(self) -> None:
+        if self.backend not in BACKENDS:
+            raise ValueError(f"models.backend must be one of {BACKENDS}, got {self.backend!r}")
 
     def checkpoint(self, scale: int) -> str:
-        path = {4: self.x4, 8: self.x8}.get(scale, "")
+        """The PyTorch checkpoint of ``scale``."""
+        return self._get(scale, {4: self.x4, 8: self.x8}, "checkpoint")
+
+    def onnx(self, scale: int) -> str:
+        """The ONNX export of ``scale``."""
+        return self._get(scale, {4: self.onnx_x4, 8: self.onnx_x8}, "ONNX model")
+
+    def path(self, scale: int) -> str:
+        """The model file of ``scale`` for the configured backend."""
+        return self.onnx(scale) if self.backend == "onnx" else self.checkpoint(scale)
+
+    @staticmethod
+    def _get(scale: int, paths: dict[int, str], what: str) -> str:
+        path = paths.get(scale, "")
         if not path:
-            raise ValueError(f"no restoration model configured for scale {scale}")
+            raise ValueError(f"no restoration {what} configured for scale {scale}")
         return path
+
+
+BACKENDS = ("torch", "onnx")
 
 
 @dataclass
@@ -180,6 +208,7 @@ class Enhanced:
     image: Image  # (scale * H, scale * W, 3)
     faces: list[FaceResult]
     scale: int
+    seconds: dict[str, float] = field(default_factory=dict)  # detect, restore, paste (wall time)
 
 
 Box = tuple[float, float, float, float]  # left, top, width, height (input pixels, box edges)
@@ -265,41 +294,30 @@ class Enhancer:
 
     def __init__(
         self,
-        model: nn.Module,
-        scale: int,
+        restorer: Restorer,
         config: PipelineConfig,
         *,
-        hr_size: int = 128,
-        device: torch.device | str = "cpu",
         detector: Detector | None = None,
         box_detector: Detector | None = None,
     ) -> None:
-        if hr_size % scale:
-            raise ValueError(f"HR size {hr_size} is not a multiple of scale {scale}")
-        self.model = model.to(device).eval()
-        self.scale, self.hr_size, self.lr_size = scale, hr_size, hr_size // scale
+        self.restorer = restorer
+        self.scale, self.hr_size, self.lr_size = restorer.scale, restorer.hr_size, restorer.lr_size
         self.config = config
-        self.device = torch.device(device)
-        self.mask = ellipse_mask(hr_size, config.mask)
+        self.device = restorer.device
+        self.mask = ellipse_mask(self.hr_size, config.mask)
         self._detector = detector
         self._box_detector = box_detector if box_detector is not None else detector
         self._track_detector = detector
-        self.info: dict[str, Any] = {"scale": scale}  # model provenance for output marking
+        self.info: dict[str, Any] = restorer.info  # model provenance for output marking
 
     @classmethod
-    def from_checkpoint(
-        cls, path: Path, config: PipelineConfig, device: torch.device | str = "cpu"
-    ) -> "Enhancer":
-        from facehall.train.checkpoint import load_checkpoint, model_record
-        from facehall.train.config import experiment_from_dict
+    def from_checkpoint(cls, path: Path, config: PipelineConfig, device: str = "cpu") -> "Enhancer":
+        return cls(TorchRestorer.from_checkpoint(path, device), config)
 
-        model, info = load_checkpoint(path, device)
-        experiment = experiment_from_dict(info["config"])
-        enhancer = cls(
-            model, experiment.scale, config, hr_size=experiment.data.hr_size, device=device
-        )
-        enhancer.info = model_record(path, info)
-        return enhancer
+    @classmethod
+    def load(cls, path: Path, config: PipelineConfig, device: str = "auto") -> "Enhancer":
+        """An enhancer for a model file: an ONNX export (``.onnx``) or a PyTorch checkpoint."""
+        return cls(load_restorer(path, device), config)
 
     def _yunet(self, threshold: float) -> YuNet:
         d = self.config.detector
@@ -357,6 +375,7 @@ class Enhancer:
             )
         if sum(v is not None for v in (landmarks, boxes, detections)) > 1:
             raise ValueError("give landmarks, face boxes or detections, not more than one")
+        start = time.perf_counter()
         found: list[tuple[Points, str, float | None, Points]] = []
         if detections is not None:
             template = self.yunet_template()
@@ -394,8 +413,11 @@ class Enhancer:
             crops.append(crop)
             templates.append(template)
 
+        detected = time.perf_counter()
+        pixels_sr = self.restore(crops)
+        done = time.perf_counter()
         frame = upscale(image, self.scale)
-        restored = iter(zip(self.restore(crops), templates, strict=True))
+        restored = iter(zip(pixels_sr, templates, strict=True))
         results: list[FaceResult] = []
         for face in faces:
             if face.restored:
@@ -408,7 +430,12 @@ class Enhancer:
                 else:
                     face = replace(face, region=region)
             results.append(face)
-        return Enhanced(frame, results, self.scale)
+        seconds = {
+            "detect": detected - start,
+            "restore": done - detected,
+            "paste": time.perf_counter() - done,
+        }
+        return Enhanced(frame, results, self.scale, seconds)
 
     def yunet_template(self) -> Points:
         if self.scale not in YUNET_TEMPLATES:
@@ -445,26 +472,50 @@ class Enhancer:
                 found.append((points, "box", None, template))
         return found
 
-    @torch.no_grad()
     def restore(self, crops: Sequence[Image]) -> list[npt.NDArray[np.float32]]:
         """Restored HR crops (float RGB in [0, 255]) of LR crops."""
         out: list[npt.NDArray[np.float32]] = []
         for start in range(0, len(crops), self.config.batch_size):
             batch = np.stack(crops[start : start + self.config.batch_size])
-            lr = torch.from_numpy(batch).permute(0, 3, 1, 2).float().div(255.0).to(self.device)
-            sr = self.model(lr).float().clamp(0.0, 1.0)
+            lr = batch.transpose(0, 3, 1, 2).astype(np.float32) / np.float32(255.0)
+            sr = np.clip(self.restorer(lr), 0.0, 1.0)
             if self.config.color_correction:
                 sr = self.correct_color(sr, lr)
-            pixels = (sr * 255.0).permute(0, 2, 3, 1).cpu().numpy().astype(np.float32)
-            out.extend(pixels)
+            pixels = (sr * np.float32(255.0)).transpose(0, 2, 3, 1)
+            out.extend(np.ascontiguousarray(pixels, dtype=np.float32))
         return out
 
-    def correct_color(self, sr: torch.Tensor, lr: torch.Tensor) -> torch.Tensor:
+    def correct_color(
+        self, sr: npt.NDArray[np.float32], lr: npt.NDArray[np.float32]
+    ) -> npt.NDArray[np.float32]:
         """Shift the mean colour of ``sr`` inside the mask to that of the bicubic LR upscale."""
-        reference = torch.nn.functional.interpolate(
-            lr, size=sr.shape[-2:], mode="bicubic", align_corners=False
-        ).clamp(0.0, 1.0)
-        weights = torch.from_numpy(self.mask).to(sr.device)[None, None]
-        total = weights.sum()
-        shift = ((reference - sr) * weights).sum(dim=(2, 3), keepdim=True) / total
-        return (sr + shift).clamp(0.0, 1.0)
+        resize = bicubic_matrix(lr.shape[-1], sr.shape[-1])
+        reference = np.clip(resize @ lr @ resize.T, 0.0, 1.0)
+        weights = self.mask[None, None]
+        shift = ((reference - sr) * weights).sum(axis=(2, 3), keepdims=True) / weights.sum()
+        return np.asarray(np.clip(sr + shift, 0.0, 1.0), dtype=np.float32)
+
+
+@lru_cache(maxsize=8)
+def bicubic_matrix(size_in: int, size_out: int) -> npt.NDArray[np.float32]:
+    """(size_out, size_in) weights of PyTorch's bicubic resize along one axis
+    (``F.interpolate(mode="bicubic", align_corners=False)``: a = -0.75, half-pixel centres,
+    border samples repeated), so ``m @ image @ m.T`` resizes a square image like it does."""
+    a = -0.75
+    out = np.zeros((size_out, size_in), dtype=np.float64)
+    ratio = size_in / size_out
+    for j in range(size_out):
+        source = ratio * (j + 0.5) - 0.5
+        first = math.floor(source)
+        t = source - first
+        weights = (
+            ((a * (t + 1) - 5 * a) * (t + 1) + 8 * a) * (t + 1) - 4 * a,
+            ((a + 2) * t - (a + 3)) * t * t + 1,
+            ((a + 2) * (1 - t) - (a + 3)) * (1 - t) * (1 - t) + 1,
+            ((a * (2 - t) - 5 * a) * (2 - t) + 8 * a) * (2 - t) - 4 * a,
+        )
+        for offset, weight in zip(range(-1, 3), weights, strict=True):
+            out[j, min(max(first + offset, 0), size_in - 1)] += weight
+    matrix: npt.NDArray[np.float32] = out.astype(np.float32)
+    matrix.flags.writeable = False
+    return matrix

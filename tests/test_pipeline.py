@@ -33,6 +33,7 @@ from facehall.pipeline import (
     to_frame,
     upscale,
 )
+from facehall.restorer import TorchRestorer
 
 # A face with 8 px between the eyes (the x4 input size) in a 64 x 64 image.
 FACE = CELEBA_TEMPLATE * 32 - 0.5 + np.array([16.0, 16.0])
@@ -82,7 +83,7 @@ def photo(size: int = 64, seed: int = 0) -> npt.NDArray[np.uint8]:
 
 def enhancer(model: nn.Module, **kwargs: object) -> Enhancer:
     config = PipelineConfig(**kwargs)  # type: ignore[arg-type]
-    return Enhancer(model, 4, config, detector=StubDetector([]))
+    return Enhancer(TorchRestorer(model, 4), config, detector=StubDetector([]))
 
 
 def test_default_config_file_matches_the_schema_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +192,9 @@ def test_detected_faces_use_the_yunet_template() -> None:
     image = photo()
     detected = alignment_matrix(FACE, CELEBA_TEMPLATE, 32)  # FACE in CelebA convention
     stub = StubDetector([Face((10, 10, 40, 40), FACE, 0.9)])
-    result = Enhancer(Constant(4, 1.0), 4, PipelineConfig(), detector=stub).enhance(image)
+    result = Enhancer(TorchRestorer(Constant(4, 1.0), 4), PipelineConfig(), detector=stub).enhance(
+        image
+    )
     assert stub.calls == 1
     face = result.faces[0]
     assert face.source == "detected" and face.score == pytest.approx(0.9) and face.restored
@@ -221,7 +224,10 @@ def test_face_boxes_use_a_detection_inside_or_the_box_landmarks() -> None:
     tiny = Face((30.0, 30.0, 4.0, 4.0), FACE, 0.95)  # centre inside, far too small
     boxes = StubDetector([tiny, elsewhere, inside])
     model = Enhancer(
-        Constant(4, 1.0), 4, PipelineConfig(), detector=StubDetector([]), box_detector=boxes
+        TorchRestorer(Constant(4, 1.0), 4),
+        PipelineConfig(),
+        detector=StubDetector([]),
+        box_detector=boxes,
     )
     face = model.enhance(image, boxes=[box]).faces[0]
     assert face.source == "box-detected" and face.score == pytest.approx(0.4)
@@ -229,8 +235,7 @@ def test_face_boxes_use_a_detection_inside_or_the_box_landmarks() -> None:
     assert boxes.calls == 1
 
     model = Enhancer(
-        Constant(4, 1.0),
-        4,
+        TorchRestorer(Constant(4, 1.0), 4),
         PipelineConfig(),
         detector=StubDetector([]),
         box_detector=StubDetector([elsewhere]),
@@ -253,14 +258,16 @@ def test_enhance_input_checks() -> None:
 def test_detection_needs_a_template_for_the_scale() -> None:
     model = Constant(2, 1.0)
     with pytest.raises(ValueError, match="no YuNet template for scale 2"):
-        Enhancer(model, 2, PipelineConfig(), detector=StubDetector([])).enhance(photo(32))
+        Enhancer(TorchRestorer(model, 2), PipelineConfig(), detector=StubDetector([])).enhance(
+            photo(32)
+        )
 
 
 def test_invalid_input() -> None:
     with pytest.raises(ValueError, match="RGB uint8"):
         enhancer(Bicubic(4)).enhance(np.zeros((8, 8), dtype=np.uint8))
     with pytest.raises(ValueError, match="multiple"):
-        Enhancer(Bicubic(3), 3, PipelineConfig())
+        TorchRestorer(Bicubic(3), 3)
 
 
 def test_color_correction_moves_the_mean_back() -> None:
@@ -285,7 +292,7 @@ def test_end_to_end_evaluation(
     assert len(rows) == 3 and len(read_manifest(root)) == 3
     points = rows[0][1]
     stub = StubDetector([])  # never finds the face: "detected" stays bicubic
-    model = Enhancer(Bicubic(4), 4, PipelineConfig(), detector=stub)
+    model = Enhancer(TorchRestorer(Bicubic(4), 4), PipelineConfig(), detector=stub)
     results = evaluate(model, samples(rows, 4, 128, SceneDegradation(), seed=0))
     assert results["scenes"] == 3 and results["detected"] == 0.0 and results["restored"] == 0.0
     variants = results["variants"]

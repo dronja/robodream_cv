@@ -245,14 +245,14 @@ def test_cli_enhances_a_video_with_audio_and_marks(
     make_video(source)
     target = tmp_path / "out" / "clip.mp4"
     detector = StubDetector([face()])
-    original = Enhancer.from_checkpoint
+    original = Enhancer.load
 
     def with_stub(*args: object, **kwargs: object) -> Enhancer:
         enhancer = original(*args, **kwargs)  # type: ignore[arg-type]
         stub(enhancer, detector)
         return enhancer
 
-    monkeypatch.setattr(Enhancer, "from_checkpoint", with_stub)
+    monkeypatch.setattr(Enhancer, "load", with_stub)
     code = main(
         ["enhance", str(source), "-o", str(target), "--ckpt", str(checkpoint), "--device", "cpu"]
         + ["--set", "video.smooth=false", "--set", "video.hold=0"]

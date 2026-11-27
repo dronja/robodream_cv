@@ -318,7 +318,7 @@ with open("photo.jpg", "rb") as f:
         "http://127.0.0.1:8000/enhance?scale=4", data=f.read(), method="POST"
     )
 with urllib.request.urlopen(request, timeout=150) as answer:
-    print(answer.headers["X-Facehall-Faces"])   # e.g. "3 faces, 3 restored"
+    print(answer.headers["X-Facehall-Faces"])  # e.g. "3 faces, 3 restored"
     open("enhanced.png", "wb").write(answer.read())
 ```
 

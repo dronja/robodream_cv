@@ -1,7 +1,7 @@
 # facehall — project overview
 
 > **Single source of truth** for facts, current state, environment, data and the work plan.
-> Last updated: **2026-11-26**.
+> Last updated: **2026-11-27**.
 >
 > - Rules of work and product requirements: [`CLAUDE.md`](../CLAUDE.md) (it imports this file).
 > - Decisions with dates and reasons: [`DECISIONS.md`](DECISIONS.md).
@@ -40,7 +40,7 @@
 
 ## 2. Status snapshot
 
-As of 2026-11-26:
+As of 2026-11-27:
 
 - **Phase 0 (repository hygiene): done.** Merged into `main` via PR #3 on 2026-11-23 (merge
   commit `0ac43f9`), CI green.
@@ -93,7 +93,7 @@ As of 2026-11-26:
     `34f0a89`). Result: no weight meets the val rule either (§9).
   - By its "done when" criterion, Phase 3 is met: both references passed the gate (D25, D29).
     The remaining items (prior-guided model, NME, skin tone) come later (D30).
-- **Phase 4 (inference pipeline): in progress** (D30).
+- **Phase 4 (inference pipeline): done** on 2026-11-27 (D30).
   - Merged: PR 4.1 (face detection with five landmarks: YuNet, D31; PR #28, `558fdd1`).
     Result: an upscale by the model scale finds 95–99% of faces of the model input size, but
     the alignment error often exceeds the training jitter (§9).
@@ -112,9 +112,11 @@ As of 2026-11-26:
     when" criterion.
   - Decided: detector threshold 0.8 in the pipeline (D33). At D31's 0.6, about half the small
     detections at ×8 on real photos were not faces, and the model drew faces on them.
-  - In review: PR 4.5 (videos frame by frame, face tracks, flicker measure; branch
-    `feat/video`). Face tracking lowers the flicker that detection jitter adds, but the
-    restored faces still flicker more than a bicubic upscale (§9). It is the last Phase 4 item.
+  - Merged: PR 4.5 (videos frame by frame, face tracks, flicker measure; PR #32, `49d0e65`).
+    Face tracking lowers the flicker that detection jitter adds, but the restored faces still
+    flicker more than a bicubic upscale (§9). It was the last Phase 4 item.
+- **CI:** in review: installing `ffmpeg`, so the video tests run there too (branch `ci/ffmpeg`,
+  PR #33).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -143,7 +145,8 @@ robodream_cv/
 │                              # models of `facehall enhance`, PR 4.2, 4.4)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
-├── .github/workflows/ci.yml   # uv sync --locked → ruff check, ruff format --check → mypy → pytest
+├── .github/workflows/ci.yml   # uv sync --locked → apt ffmpeg → ruff check, ruff format --check
+│                              # → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train
 │                              # [--resume], eval, enhance)
 │   ├── provenance.py          # file sha256, git commit, package versions
@@ -209,6 +212,9 @@ robodream_cv/
   import scripts through the `load_script` fixture (`tests/conftest.py`).
 - CI runs on pushes to `main` and on every pull request. It installs the CPU build
   (`uv sync --locked --extra cpu`) and sets `UV_NO_SYNC=1`, so `uv run` keeps that build.
+- CI also installs Ubuntu's `ffmpeg` package for the tests that encode video (PR #33). On
+  2026-11-27 the runner image `ubuntu-26.04` got the same package as this machine
+  (`7:8.0.1-3ubuntu2`): 81 packages, 66.4 MB, 19 s.
 - The target layout (configs/, data/, align/, models/, …) is described in `CLAUDE.md` §6.
 
 ## 4. Development environment
@@ -1432,7 +1438,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - On synthetic CelebA scenes 0.8 costs little: ×8 degraded 0.950 → 0.900 detected, ×4
       0.993 → 0.987.
     - A team photo at ×4: 66 faces restored, all real (seen, not measured).
-- **Videos (PR 4.5, in review).** Interface, measurements, selection rules and reasons in
+- **Videos (PR 4.5, done).** Interface, measurements, selection rules and reasons in
   `DECISIONS.md` ("Video: frame by frame, face tracks and the flicker measure (PR 4.5)").
   - **Command:** `facehall enhance` takes video files (`.mp4 .mov .mkv .avi .webm .m4v`) like
     images, also in folders. The output is MP4 by default (`--video-format mkv|mov`).
@@ -1661,7 +1667,8 @@ by D32.
   the published ID numbers must be recomputed.
 - ID similarity is computed with a model that was itself trained on face photos; it measures
   closeness to the reference, not identity "recovery", and it may be biased across subgroups.
-- CI time: about 40 s with the CPU build of torch (PR #4); watch it as the tests grow.
+- CI time: about 1.4 min per run on 2026-11-27 (PR #33): 29 s of tests (352), 19 s to install
+  ffmpeg, the rest setup and checks. Watch it as the tests grow.
 - DataLoader workers use `fork`, the Linux default. Python 3.12 warns that forking a
   multi-threaded process may deadlock (seen in the tests). The one deadlock found so far is the
   OpenCV one (§9), and the trainer avoids it. Python 3.14 changes the default to `forkserver`;
@@ -1692,7 +1699,8 @@ by D32.
   frame. There is no real video set. Expressions, head turns, lighting changes, occlusion and
   scene cuts are not measured. There is no cut detection: a track continues across a cut only
   if a detection overlaps its predicted box there.
-- Videos need the system `ffmpeg`; tests that encode video are skipped without it. Inputs with
+- Videos need the system `ffmpeg`; tests that encode video are skipped without it (CI installs
+  it, PR #33). Inputs with
   a variable frame rate are written at OpenCV's frame rate, which is not verified (PR 4.5).
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to

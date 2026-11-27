@@ -2366,3 +2366,18 @@ would need a separate decision and a review of the CelebA, VGGFace2 and facenet 
   - semver for the package;
   - a version for each released model, with the checksums of its weights and ONNX file;
   - a review of `docs/DATA.md` and `docs/THIRD_PARTY_LICENSES.md`.
+
+### D40 — The image outputs of the legacy notebook are removed (closes Q16)
+**Decision** (the user, 2026-11-27): the two image outputs of `legacy/FH.ipynb` (cells 23 and 24,
+the FNet and SRGAN result figures) are removed in one commit, as an exception to the rule that
+`legacy/` is read only. A test keeps the notebook free of images.
+
+**Why:** both figures show the face of the same real person from the legacy dataset as the
+README figures removed by D38.
+
+**What stays:**
+- the code of every cell;
+- the text outputs: the Keras model summaries, whose parameter counts the PyTorch ports were
+  checked against (PR 1.5), and the training logs behind the legacy timings (`PROJECT.md` §5).
+
+The notebook shrinks from 456 KB to 127 KB. Git history is not rewritten (D7).

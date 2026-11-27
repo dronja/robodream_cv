@@ -126,8 +126,10 @@ As of 2026-11-27:
     `127.0.0.1` (`DECISIONS.md`, "Phase 5 plan and defaults").
   - Merged: PR 5.1 (ONNX export with a parity check; PR #34, `81a639c`). Both references
     export within 9.5e-07 of PyTorch on real crops, against the 1e-3 gate (§9).
-  - In review: PR 5.2 (ONNX Runtime in the pipeline, without PyTorch; branch
-    `feat/onnx-pipeline`).
+  - Merged: PR 5.2 (ONNX Runtime in the pipeline, without PyTorch; PR #35, `a856473`). ONNX
+    Runtime gives PyTorch's CPU output on CPU and CUDA; end to end it is as fast as PyTorch on
+    CUDA and 4–17% slower on CPU (§9).
+  - In review: PR 5.3 (the REST API, `facehall serve`; branch `feat/serve`).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -152,14 +154,14 @@ robodream_cv/
 │                              # gate.yaml (quality gate, D23),
 │                              # eval/celeba128_[{light,medium,heavy}_]x{4,8}.yaml,
 │                              # eval/wider_real_x{4,8}.yaml (real-world, no reference),
-│                              # pipeline/default.yaml (inference pipeline and the reference
-│                              # models of `facehall enhance`, PR 4.2, 4.4)
+│                              # pipeline/default.yaml (inference pipeline, the reference
+│                              # models of `facehall enhance`, PR 4.2, 4.4; `serve` limits, PR 5.3)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
 ├── .github/workflows/ci.yml   # uv sync --locked → apt ffmpeg → ruff check, ruff format --check
 │                              # → mypy → pytest
 ├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train
-│                              # [--resume], eval, enhance, export onnx)
+│                              # [--resume], eval, enhance, export onnx, serve)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
@@ -188,6 +190,8 @@ robodream_cv/
 │   ├── marking.py             # output marks: PNG text, XMP, EXIF, video tags, visible mark
 │   ├── weights.py             # pinned third-party weights (download, checksums)
 │   ├── export/                # onnx.py: ONNX export, model record, parity check (PR 5.1)
+│   ├── serve/                 # app.py: the REST API (FastAPI; queue, limits); `facehall serve`
+│                              # (PR 5.3)
 │   └── align/                 # similarity.py (Umeyama, matrices), template.py,
 │                              # warp.py (warp, inverse warp, resample_crop),
 │                              # detect.py (YuNet face detector, D31; tiles and
@@ -208,17 +212,18 @@ robodream_cv/
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
 │                              # degradation matching, quality gate, losses, spectrum,
 │                              # face detection, inference pipeline, enhance, video, export,
-│                              # restoration backends (one runs with PyTorch imports blocked)
+│                              # restoration backends, REST API (one test each runs with PyTorch
+│                              # imports blocked)
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
 ```
 
-- Package `facehall` 0.0.0, Python ≥ 3.12. Runtime dependencies: numpy, omegaconf, onnx,
-  onnxruntime, onnxscript, opencv-python-headless, pillow, pyarrow, safetensors, torch,
-  torchmetrics[image], torchvision
+- Package `facehall` 0.0.0, Python ≥ 3.12. Runtime dependencies: fastapi, numpy, omegaconf,
+  onnx, onnxruntime, onnxscript, opencv-python-headless, pillow, pyarrow, safetensors, torch,
+  torchmetrics[image], torchvision, uvicorn
   (versions and licenses: `docs/THIRD_PARTY_LICENSES.md` §4.1). Dev group: ruff, mypy, pytest,
-  pre-commit. Entry point: `facehall = facehall.cli:main`.
+  pre-commit, httpx (FastAPI's `TestClient`). Entry point: `facehall = facehall.cli:main`.
 - PyTorch build: by default torch comes from PyPI (CUDA 13.2 on Linux). The `cpu` extra switches
   to the CPU-only build from `download.pytorch.org/whl/cpu`; the `cpu` and `cuda` extras are
   declared as conflicting, so `uv.lock` holds both builds.
@@ -1554,7 +1559,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       and the bicubic Resize, not in the convolutions. The bicubic as two MatMuls would save
       about 30%. PR 5.2 measures the end-to-end cost first.
   - **Files:** about 6.2 MB (×4) and 6.8 MB (×8), local only (`*.onnx` in `.gitignore`).
-- **ONNX Runtime in the pipeline (PR 5.2, in review).** Defaults, the full table and reasons in
+- **ONNX Runtime in the pipeline (PR 5.2, done).** Defaults, the full table and reasons in
   `DECISIONS.md` ("ONNX Runtime in the pipeline (PR 5.2)").
   - **Code:**
     - `facehall.restorer`: `TorchRestorer` (checkpoint) and `OnnxRestorer` (export, ONNX Runtime
@@ -1593,6 +1598,34 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       (the ×8 CUDA mosaics: 32 instead of 13 ms);
     - the bicubic skip as MatMuls (PR 5.1) would save about 0.1 s of 1.8 s on 64 faces, and is
       not adopted.
+- **The REST API (PR 5.3, in review).** Interface, limits and reasons in `DECISIONS.md` ("The
+  REST API (PR 5.3)").
+  - **Command:** `facehall serve [--host] [--port] [--scale 4|8 …] [--device] [--set …]`
+    (`facehall.serve`): FastAPI on uvicorn, the ONNX models of both scales by default, loaded
+    and warmed up at start-up.
+  - **`POST /enhance`:**
+    - the body is the photo's bytes (`curl --data-binary @photo.jpg`), not a form, so uploads
+      never touch the disk;
+    - query parameters `scale`, `format`, `quality`, `watermark`, `box`;
+    - the answer is the marked image with the notice and face counts in `X-Facehall-*`
+      headers; errors are 400, 413, 415, 422 or 503.
+  - **Other endpoints:** `GET /health`, `GET /version` and `/docs`.
+  - **Limits** (`serve` in `configs/pipeline/default.yaml`):
+    - upload 25 MB;
+    - output 2^27 pixels, checked from the header before decoding;
+    - one enhancement at a time with a queue of 8;
+    - 120 s per request.
+  - **Privacy:**
+    - one log line per request (method, path, status, time); uvicorn's access log is off;
+    - FastAPI's OpenTelemetry telemetry is off;
+    - no authentication, bound to 127.0.0.1.
+  - **Measured:**
+    - the API's output is bit-identical to `facehall enhance` with the same ONNX model;
+    - 12 simultaneous 64-face requests: 9 answered in turn (about 2.4 s each on CPU), 3
+      refused with 503 at once;
+    - on CUDA without PyTorch: warm-up 1.5 s, then 12 ms per single-face photo and 2.0–2.2 s
+      per 64-face mosaic at ×8;
+    - peak memory 2.5 GB (CPU) and 2.9 GB (CUDA) with 34 MP outputs.
 
 ## 10. Roadmap and progress
 
@@ -1731,9 +1764,9 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 5.2** `feat(pipeline):` ONNX Runtime in the pipeline, without PyTorch (D34): `onnx`
       and `torch` backends, a test that the ONNX path imports no torch, end-to-end parity and
       speed on CPU and CUDA (`scripts/compare_backends.py`, §9)
-- [ ] **PR 5.3** `feat(serve):` FastAPI `/enhance` (photos only, D36), `/health`, `/version`:
+- [x] **PR 5.3** `feat(serve):` FastAPI `/enhance` (photos only, D36), `/health`, `/version`:
       size limits, timeouts, input validation; uploads only in memory, and logs contain no
-      images or faces; `facehall serve`
+      images or faces; `facehall serve` (§9)
 - [ ] **PR 5.4** `build(docker):` CPU and GPU images for local use, not published (D13, D35);
       weights mounted read-only. Docker and the NVIDIA Container Toolkit must be installed first
 - [ ] **PR 5.5** latency and memory benchmark of the images
@@ -1828,7 +1861,14 @@ by D32.
   many faces (PR 5.2). The GPU path (`onnxruntime-gpu` with CUDA libraries from pip, D35) works
   on this machine outside a container; in a container it is not yet verified (PR 5.4).
 - ONNX Runtime on CUDA searches cuDNN algorithms once per new batch size (about 20 ms each, at
-  most 32 sizes), so the first requests of a service are slower (PR 5.2).
+  most 32 sizes); `facehall serve` warms all of them up at start-up (PR 5.3).
+- The REST API has no authentication (D13). Bound to another address than 127.0.0.1, anyone
+  who can reach it can send photos; the service only logs a warning.
+- A request that times out still runs to the end if it has started, since a thread cannot be
+  stopped, and the queue waits for it. The output-pixel limit bounds that time (PR 5.3).
+- The `/docs` page loads Swagger UI from a CDN (`cdn.jsdelivr.net`, major version 5, not pinned)
+  and the favicon from `fastapi.tiangolo.com`. Photos go to the local service only, but the
+  browser runs that script on the service's origin (PR 5.3).
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -1838,6 +1878,10 @@ by D32.
 - *Needs verification:* whether rows inside each split follow the official file order
   (`docs/DATA.md` §4.4). This is needed before joining annotations keyed by file name (D10).
 - The legacy weights are still in HEAD (D7).
+- Starlette warns that `httpx` in `TestClient` is deprecated in favour of `httpx2` (tests only,
+  PR 5.3).
+- *Needs verification:* the `/docs` file picker for the binary body of `POST /enhance` was not
+  checked in a browser (PR 5.3).
 - *Needs verification:* the XMP namespace URI of the `Iptc4xmpExt` prefix
   (`http://iptc.org/std/Iptc4xmpExt/2008-02-29/`) was not read verbatim from the IPTC
   specification. The digital source type term was (PR 4.4).
@@ -1918,8 +1962,14 @@ uv run python scripts/match_degradations.py --spec configs/degrade/search/realis
     --real configs/eval/wider_real_x8.yaml     # degradation tuning on WIDER val, outputs/ (local)
 ```
 
-Planned (target interface):
+REST API (PR 5.3):
 
 ```bash
-uv run facehall serve --port 8000
+uv run facehall export onnx --scale 4 -o models/x4.onnx   # the models it serves (and x8)
+uv run facehall serve                          # http://127.0.0.1:8000, docs at /docs
+uv run facehall serve --scale 4 --port 9000 --set serve.queue=2   # x4 only
+curl --data-binary @photo.jpg "http://127.0.0.1:8000/enhance?scale=4" -o enhanced.png
+curl --data-binary @photo.jpg "http://127.0.0.1:8000/enhance?scale=8&format=jpeg&box=120,80,18,22" \
+    -o enhanced.jpg                            # a face the detector misses
+curl http://127.0.0.1:8000/version             # models, limits, notice
 ```

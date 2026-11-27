@@ -105,6 +105,24 @@ uv run facehall enhance photo.jpg -o out.png --scale 8 --set models.backend=onnx
 
 `--device cuda` needs `onnxruntime-gpu` instead of `onnxruntime`.
 
+### A local REST API
+
+`facehall serve` runs the ONNX models of both scales behind a small HTTP API, for local use:
+
+```bash
+uv run facehall serve                                   # http://127.0.0.1:8000, try it at /docs
+curl --data-binary @photo.jpg "http://127.0.0.1:8000/enhance?scale=4" -o enhanced.png
+```
+
+- **The request body is the photo itself**, not a form. The photo is processed in memory: it is
+  not written to disk and is not kept after the answer. The log holds no image data, file names,
+  face boxes or face positions.
+- **The answer** is marked like the output of `facehall enhance`. Its `X-Facehall-Notice` header
+  repeats that the faces are a plausible reconstruction.
+- **No authentication:** keep it on `127.0.0.1`.
+- **Limits:** upload size, output pixels and a short queue (`serve` in
+  `configs/pipeline/default.yaml`).
+
 ---
 
 ## 📂 Dataset

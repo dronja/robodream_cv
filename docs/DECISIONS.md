@@ -1997,3 +1997,90 @@ pipeline with YuNet detection; the outputs are compared with PyTorch on CPU. Med
   in every run, mostly the mosaics' upscaled images; the torch-free CUDA run peaked at 2.5–2.6 GB.
 - **The PyTorch backend is unchanged by the refactor:** on a grid of 16 faces at each scale (on
   CUDA), its outputs are bit-identical to those of the PR 5.1 code.
+
+### The REST API (PR 5.3)
+**Decision** (defaults taken without a separate question, 2026-11-27; D36 and the Phase 5 plan
+set the scope): `facehall serve` (`facehall.serve`), FastAPI on uvicorn.
+- **`POST /enhance`:**
+  - **Body:** the photo's bytes themselves, not a multipart form. Starlette spools form
+    uploads above 1 MB to a temporary file, which `CLAUDE.md` §11 rules out (no uploads on
+    disk). `curl --data-binary @photo.jpg` sends one; a form gets a 415 that says so.
+  - **Query parameters:**
+    - `scale`: 4 or 8; the default is the smallest served;
+    - `format`: png, jpeg or webp; PNG by default;
+    - `quality` and `watermark`;
+    - `box`: repeatable, the `--box` of `facehall enhance`.
+
+    No landmarks: the box is the fallback for faces the detector misses (`CLAUDE.md` §6).
+  - **Answer:** the image, marked like the outputs of `facehall enhance`. The record is
+    built by the same code, `facehall.enhance.marked`.
+  - **Headers:**
+    - `X-AI-Enhanced: true`;
+    - `X-Facehall-Notice`: the notice of `CLAUDE.md` §11;
+    - `X-Facehall-Model`;
+    - `X-Facehall-Faces`: the face counts;
+    - `Cache-Control: no-store`.
+  - **Errors** (JSON `detail`):
+    - 400: bad parameters, or a photo that does not decode;
+    - 413: upload or output too large;
+    - 415: not a supported image, or a form;
+    - 422: invalid parameter values (FastAPI);
+    - 503 with `Retry-After`: busy.
+- **`GET /health`** gives the status, the scales and the pending requests. **`GET /version`**
+  gives the models' records (no local paths), the runtime versions, the limits and the notice.
+  `/docs` stays (D37).
+- **Models:** the ONNX exports by default (`models.backend=onnx` is applied before `--set`, so
+  `--set models.backend=torch` serves the checkpoints). Every scale of `serve.scales` (4 and 8)
+  is loaded at start-up; a missing one stops the start with the export command.
+- **One enhancement at a time**, in one worker thread (`Worker`). YuNet's OpenCV detector is
+  not thread-safe, and the pipeline already uses the CPU cores or the GPU.
+- **Limits** (`serve` in `configs/pipeline/default.yaml`, `ServeConfig`):
+  - upload 25 MB, checked against `Content-Length` and while reading;
+  - output 2^27 pixels (134 MP), checked from the image header before decoding. That admits
+    a 4K photo at ×4 and a 1080p one at ×8, which took 8.1 s and 3.3 GB in PR 4.4;
+  - a queue of 8 requests behind the running one; more get a 503 at once;
+  - 120 s per request, waiting included, then a 503.
+  - **The time limit does not stop work that has started:** a thread cannot be stopped, so
+    the next request waits for it. Work whose request was already answered is skipped.
+  - Accepted formats: PNG, JPEG (also MPO, as some cameras write it), WebP, BMP, TIFF.
+- **Warm-up at start-up:** the detector once; on CUDA, the models once per batch size (1–32),
+  so no request pays ONNX Runtime's cuDNN search (PR 5.2).
+- **Privacy** (`CLAUDE.md` §11):
+  - uploads stay in memory (tested with every `tempfile` function failing);
+  - the log has one line per request: method, path, status, time;
+  - uvicorn's access log is off, because its lines carry the query string, which may hold
+    face boxes (tested);
+  - `facehall.enhance.parameters` leaves the `serve` settings out of the output record.
+- **FastAPI's telemetry is off.** FastAPI 0.165 records spans, metrics and logs of every
+  request through OpenTelemetry (including validation failures with the request body). It does
+  so as soon as an OpenTelemetry SDK is configured in the process, or exports to an OTLP
+  endpoint with `FASTAPI_OTEL_AUTO_CONFIGURE=true`. The project installs only
+  `opentelemetry-api` (a dependency of FastAPI, Apache-2.0) and no SDK. The app also passes
+  `telemetry` with every signal off, which a test checks with a configured provider simulated.
+- **No authentication**, bound to 127.0.0.1 (Phase 5 defaults); another host logs a warning.
+  `server_header` is off.
+- **Dependencies:** fastapi 0.165.0 and uvicorn 0.54.0 at runtime; httpx 0.29.0 in the dev
+  group for FastAPI's `TestClient`. All of their packages are MIT, BSD-3-Clause or Apache-2.0
+  (`THIRD_PARTY_LICENSES.md` §4).
+
+**Measured** (commit of this PR, Ryzen 9 9950X and RTX 6000 Ada):
+- **Output:** the photo through the API is bit-identical to `facehall enhance` with the same
+  ONNX model: a grid of 16 CelebA faces at ×4 and ×8, 0.21–0.22 s per request on CPU.
+- **Queue,** on CPU with the ×4 model: 12 requests at once, each a mosaic of 64 faces (1,464 px,
+  a 34 MP output). 9 were answered one after another, about 2.4 s each (the last after 21.3 s),
+  and 3 got a 503 within 7 ms. Peak resident memory 2.5 GB.
+- **CUDA,** in the torch-free environment with `onnxruntime-gpu` (PR 5.2) plus fastapi and
+  uvicorn:
+  - the warm-up of both scales took 1.5 s;
+  - a ×8 mosaic of 51–64 faces takes 2.0–2.2 s per request, the same on the first and the
+    second request, so the warm-up removed the cuDNN search;
+  - a single-face photo takes 12 ms per request after the first (35 ms);
+  - peak resident memory 2.9 GB.
+
+**Not done:**
+- The `/docs` page is FastAPI's default. The browser loads Swagger UI (Apache-2.0, major version
+  5, not pinned) from `cdn.jsdelivr.net` and the favicon from `fastapi.tiangolo.com`; photos
+  sent from the page go to the local service only. Serving those files locally, or pinning
+  them with checksums, is open.
+- *Needs verification:* the file picker for the binary body on the `/docs` page was not
+  checked in a browser; the OpenAPI schema declares it (`type: string, format: binary`).

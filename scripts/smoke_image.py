@@ -102,15 +102,22 @@ def run(args: argparse.Namespace, models: Path, scales: list[int]) -> dict[str, 
     weights = yunet_weights().parent
     check(weights.is_dir(), f"YuNet weights in {weights} (scripts/download_weights.py yunet)")
     name = f"facehall-smoke-{os.getpid()}"
-    command = ["run", "-d", "--name", name, "--read-only", "--tmpfs", "/tmp"]
-    command += ["-p", f"127.0.0.1:{args.port}:8000"]
-    command += [
+    options = ["--read-only", "--tmpfs", "/tmp"]
+    options += [
         "-v",
         f"{models.resolve()}:/models:ro",
         "-v",
         f"{weights.resolve()}:/weights/yunet:ro",
     ]
-    command += ["--gpus", "all"] if args.gpu else []
+    options += ["--gpus", "all"] if args.gpu else []
+    # What the container runtime itself adds to the root (the NVIDIA runtime injects the driver
+    # files and rebuilds the ldconfig cache): the same container running `true`.
+    docker(args.docker, "run", "--name", f"{name}-base", *options, args.image, "true")
+    try:
+        baseline = set(docker(args.docker, "diff", f"{name}-base").stdout.splitlines())
+    finally:
+        docker(args.docker, "rm", "-f", f"{name}-base", check=False)
+    command = ["run", "-d", "--name", name, *options, "-p", f"127.0.0.1:{args.port}:8000"]
     command += [args.image, "facehall", "serve", "--host", "0.0.0.0", "--port", "8000"]
     command += ["--device", "cuda" if args.gpu else "cpu"]
     command += [f"--scale={s}" for s in scales]
@@ -152,11 +159,10 @@ def run(args: argparse.Namespace, models: Path, scales: list[int]) -> dict[str, 
         probe = "import importlib.util as u; print(u.find_spec('torch') is None)"
         torch_free = docker(args.docker, "exec", name, "python", "-c", probe).stdout.strip()
         check(torch_free == "True", "no PyTorch in the image")
-        changed = [
-            line.split(maxsplit=1)[-1]
-            for line in docker(args.docker, "diff", name).stdout.splitlines()
-        ]
-        check(all(path.startswith("/tmp") for path in changed), "nothing written outside /tmp")
+        changes = set(docker(args.docker, "diff", name).stdout.splitlines()) - baseline
+        changed = sorted(line.split(maxsplit=1)[-1] for line in changes)
+        outside = [path for path in changed if not path.startswith("/tmp")]
+        check(not outside, f"nothing written outside /tmp {outside[:5] if outside else ''}".strip())
         logs = docker(args.docker, "logs", name, check=False)
         text = logs.stdout + logs.stderr
         check(BOX not in text and "box=" not in text, "no face boxes in the logs")

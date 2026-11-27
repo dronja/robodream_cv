@@ -42,6 +42,10 @@ PARITY_CROPS = 16
 PARITY_SEED = 0
 MAX_BATCH = 4096  # upper bound of the dynamic batch axis
 QUIET_LOGGERS = ("onnxscript", "onnx_ir")
+# ONNX Runtime's intra-op threads spin after each run by default. In the pipeline the face
+# detector (OpenCV) runs between restorations, and the spinning threads slowed it 2.7x on CPU
+# (PR 5.2), so they sleep instead.
+SESSION_CONFIG = {"session.intra_op.allow_spinning": "0"}
 
 
 @dataclass(frozen=True)
@@ -61,12 +65,18 @@ def parity_inputs(
     return rng.random((count, 3, lr_size, lr_size), dtype=np.float32)
 
 
-def session(model: Path | bytes, providers: Sequence[str] = ("CPUExecutionProvider",)) -> Any:
-    """An ONNX Runtime session of a model file or of serialized model bytes."""
+def session(
+    model: Path | bytes,
+    providers: Sequence[str | tuple[str, dict[str, str]]] = ("CPUExecutionProvider",),
+) -> Any:
+    """An ONNX Runtime session of a model file or of serialized model bytes; ``providers`` as
+    ONNX Runtime takes them (names, or (name, options) pairs)."""
     import onnxruntime as ort
 
     options = ort.SessionOptions()
     options.log_severity_level = 3
+    for key, value in SESSION_CONFIG.items():
+        options.add_session_config_entry(key, value)
     source = str(model) if isinstance(model, Path) else model
     return ort.InferenceSession(source, sess_options=options, providers=list(providers))
 

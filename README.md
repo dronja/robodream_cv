@@ -95,7 +95,15 @@ uv run facehall export onnx --ckpt runs/<id>/best.safetensors -o models/<name>.o
 ```
 
 The export is checked against PyTorch and refused if the outputs differ by more than 1e-3. The
-ONNX file records its source model and checksum in its metadata.
+ONNX file records its source model and checksum in its metadata. `facehall enhance` runs ONNX
+models through ONNX Runtime, without PyTorch:
+
+```bash
+uv run facehall enhance photo.jpg -o out.png --ckpt models/x4.onnx
+uv run facehall enhance photo.jpg -o out.png --scale 8 --set models.backend=onnx   # models/x8.onnx
+```
+
+`--device cuda` needs `onnxruntime-gpu` instead of `onnxruntime`.
 
 ---
 

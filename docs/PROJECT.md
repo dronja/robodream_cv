@@ -124,9 +124,10 @@ As of 2026-11-27:
     - no Gradio demo for now.
   - Plan: PRs 5.1–5.5 (§10). Defaults: weights mounted, not built in; no authentication, bound to
     `127.0.0.1` (`DECISIONS.md`, "Phase 5 plan and defaults").
-  - In review: PR 5.1 (ONNX export with a parity check; branch `feat/onnx-export`). Both
-    references export within 9.5e-07 of PyTorch on real crops, against the 1e-3 gate. ONNX
-    Runtime on CPU is 2.7–4.2× slower than PyTorch on CPU (§9).
+  - Merged: PR 5.1 (ONNX export with a parity check; PR #34, `81a639c`). Both references
+    export within 9.5e-07 of PyTorch on real crops, against the 1e-3 gate (§9).
+  - In review: PR 5.2 (ONNX Runtime in the pipeline, without PyTorch; branch
+    `feat/onnx-pipeline`).
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -179,7 +180,9 @@ robodream_cv/
 │   │                          # detection.py (detection and alignment measures, D31),
 │   │                          # endtoend.py (pipeline on synthetic scenes, PR 4.2),
 │   │                          # temporal.py (flicker on synthetic clips, PR 4.5)
-│   ├── pipeline.py            # end-to-end inference: detect, align, restore, paste back (PR 4.2)
+│   ├── pipeline.py            # end-to-end inference: detect, align, restore, paste back (PR 4.2);
+│                              # no PyTorch import (PR 5.2, D34)
+│   ├── restorer.py            # restoration backends: PyTorch checkpoint, ONNX Runtime (PR 5.2)
 │   ├── enhance.py             # `facehall enhance`: files and folders, outputs (PR 4.4, 4.5)
 │   ├── video.py               # videos: face tracks, frames through ffmpeg, marks (PR 4.5)
 │   ├── marking.py             # output marks: PNG text, XMP, EXIF, video tags, visible mark
@@ -196,14 +199,16 @@ robodream_cv/
 │                              # preview_degradations.py, protocol_digest.py,
 │                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
 │                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2),
-│                              # measure_temporal.py (PR 4.5), measure_onnx.py (PR 5.1)
+│                              # measure_temporal.py (PR 4.5), measure_onnx.py (PR 5.1),
+│                              # compare_backends.py (PR 5.2)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
 │                              # alignment (similarity, template, warp), config, degrade, kernels,
 │                              # dataset, models, train, eval, WIDER preparation, real-world eval,
 │                              # degradation matching, quality gate, losses, spectrum,
-│                              # face detection, inference pipeline, enhance, video, export
+│                              # face detection, inference pipeline, enhance, video, export,
+│                              # restoration backends (one runs with PyTorch imports blocked)
 ├── docs/                      # PROJECT.md, DECISIONS.md, DATA.md, THIRD_PARTY_LICENSES.md
 ├── images/                    # figures used by README: CNET, FNET, PULSE, SRgan (.png)
 └── legacy/                    # read only: FH.ipynb, FNet_24.keras, CNet_24.keras, SRgan_20.pth
@@ -1524,7 +1529,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - no authentication, bound to `127.0.0.1`.
   - **Images:** CPU (onnxruntime) and GPU (onnxruntime-gpu, D35), without weights; models and
     YuNet are mounted read-only.
-- **ONNX export (PR 5.1, in review).** Defaults, the full table and reasons in `DECISIONS.md`
+- **ONNX export (PR 5.1, done).** Defaults, the full table and reasons in `DECISIONS.md`
   ("ONNX export and its parity check (PR 5.1)").
   - **Command:** `facehall export onnx (--ckpt CKPT | --scale 4|8) -o OUT.onnx`
     (`facehall.export`):
@@ -1549,6 +1554,45 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       and the bicubic Resize, not in the convolutions. The bicubic as two MatMuls would save
       about 30%. PR 5.2 measures the end-to-end cost first.
   - **Files:** about 6.2 MB (×4) and 6.8 MB (×8), local only (`*.onnx` in `.gitignore`).
+- **ONNX Runtime in the pipeline (PR 5.2, in review).** Defaults, the full table and reasons in
+  `DECISIONS.md` ("ONNX Runtime in the pipeline (PR 5.2)").
+  - **Code:**
+    - `facehall.restorer`: `TorchRestorer` (checkpoint) and `OnnxRestorer` (export, ONNX Runtime
+      on CPU or CUDA), chosen by the file suffix (`load_restorer`, `Enhancer.load`);
+    - `facehall.pipeline` imports no PyTorch: batch preparation and colour correction are numpy
+      (`bicubic_matrix` equals PyTorch's bicubic within 1e-5);
+    - `models.backend: torch | onnx` and `models.onnx_x{4,8}` (`${FACEHALL_MODELS:-models}`) in
+      `configs/pipeline/default.yaml`; `facehall enhance` keeps `torch` by default, because the
+      project's `onnxruntime` runs on CPU only;
+    - CUDA provider with TF32 off; ONNX Runtime threads do not spin between runs;
+    - marks of ONNX models add the ONNX sha256 and the runtime; `Enhanced.seconds` holds the
+      time per stage;
+    - `scripts/compare_backends.py`: the backends end to end on synthetic CelebA scenes.
+  - **Without PyTorch:** a test runs `facehall enhance` with an ONNX model while every `torch`
+    import fails. A torch-free environment with `onnxruntime-gpu[cuda,cudnn]` (2.7 GB, almost all
+    NVIDIA libraries from pip) restores on the CUDA provider on this machine (D35; a container
+    is PR 5.4).
+  - **Measured** (commit `c462750`; 100 single-face scenes and 5 mosaics of 64 faces per scale;
+    medians):
+
+    | Scale, backend | Single face: total (ms) | 64 faces: total (s) | Restore per face (ms) | Outputs vs PyTorch CPU |
+    |---|---|---|---|---|
+    | ×4 PyTorch CPU / ONNX Runtime CPU | 10.1 / 10.5 | 1.56 / 1.82 | 2.55 / 6.10 | ≤ 1 level in 1.3e-07 of values |
+    | ×4 PyTorch CUDA / ONNX Runtime CUDA | 4.9 / 4.5 | 1.43 / 1.42 | 0.20 / 0.26 | ≤ 1 level in 7.2e-05 / 1.4e-07 |
+    | ×8 PyTorch CPU / ONNX Runtime CPU | 9.4 / 10.5 | 1.51 / 1.78 | 2.13 / 5.84 | ≤ 1 level in 1.6e-07 of values |
+    | ×8 PyTorch CUDA / ONNX Runtime CUDA | 4.9 / 4.5 | 1.42 / 1.45 | 0.18 / 0.41 | ≤ 1 level in 8.4e-05 / 1.9e-07 |
+
+  - **Observations:**
+    - every backend restores the same faces, and ONNX Runtime gives PyTorch's CPU output on
+      either device;
+    - on CPU, ONNX Runtime restores 2.4–2.7× slower per face, but end to end that is +4–12% on
+      a single face and +17% on 64 faces; on CUDA the backends are equal;
+    - with many faces, detection dominates: 1.4 s of YuNet on the tiled ×4 upscale of a 1,464 px
+      image, on every backend;
+    - the cuDNN algorithm search of ONNX Runtime costs about 20 ms once per new batch size
+      (the ×8 CUDA mosaics: 32 instead of 13 ms);
+    - the bicubic skip as MatMuls (PR 5.1) would save about 0.1 s of 1.8 s on 64 faces, and is
+      not adopted.
 
 ## 10. Roadmap and progress
 
@@ -1684,9 +1728,9 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 5.1** `feat(export):` `facehall export onnx`: dynamic batch, the model record in the
       ONNX metadata, parity check on every export (max abs diff ≤ 1e-3);
       `scripts/measure_onnx.py` on real crops (§9)
-- [ ] **PR 5.2** `feat(pipeline):` ONNX Runtime in the pipeline, without PyTorch (D34): `onnx`
+- [x] **PR 5.2** `feat(pipeline):` ONNX Runtime in the pipeline, without PyTorch (D34): `onnx`
       and `torch` backends, a test that the ONNX path imports no torch, end-to-end parity and
-      speed on CPU and CUDA
+      speed on CPU and CUDA (`scripts/compare_backends.py`, §9)
 - [ ] **PR 5.3** `feat(serve):` FastAPI `/enhance` (photos only, D36), `/health`, `/version`:
       size limits, timeouts, input validation; uploads only in memory, and logs contain no
       images or faces; `facehall serve`
@@ -1779,10 +1823,12 @@ by D32.
 - Videos need the system `ffmpeg`; tests that encode video are skipped without it (CI installs
   it, PR #33). Inputs with
   a variable frame rate are written at OpenCV's frame rate, which is not verified (PR 4.5).
-- ONNX Runtime on CPU runs the restoration models 2.7–4.2× slower than PyTorch on CPU (PR 5.1),
-  so the CPU image may be slower than `facehall enhance` with PyTorch today. The GPU image
-  depends on `onnxruntime-gpu` with CUDA libraries from pip, which is not yet verified on this
-  machine (D35).
+- ONNX Runtime on CPU restores a face 2.4–2.7× slower than PyTorch on CPU. End to end the CPU
+  image is therefore 4–17% slower than `facehall enhance` with PyTorch, the most on photos with
+  many faces (PR 5.2). The GPU path (`onnxruntime-gpu` with CUDA libraries from pip, D35) works
+  on this machine outside a container; in a container it is not yet verified (PR 5.4).
+- ONNX Runtime on CUDA searches cuDNN algorithms once per new batch size (about 20 ms each, at
+  most 32 sizes), so the first requests of a service are slower (PR 5.2).
 - The mirror has no checksum from the original CelebA release. Integrity rests on the row and
   identity counts. The sha256 of every shard is recorded in `docs/DATA.md` §2, so later changes to
   the local copy are detectable.
@@ -1852,6 +1898,12 @@ uv run facehall export onnx --scale 4 -o models/x4.onnx   # ONNX with the parity
 uv run facehall export onnx --ckpt runs/<id>/best.safetensors -o models/<name>.onnx
 uv run python scripts/measure_onnx.py --ckpt runs/<id>/best.safetensors   # parity on real crops
                                                # and speed (PR 5.1), ~1 min
+uv run facehall enhance photo.jpg -o out.png --ckpt models/x4.onnx   # ONNX Runtime, no PyTorch
+uv run facehall enhance photos/ -o out/ --scale 8 --set models.backend=onnx   # models/x8.onnx
+uv run python scripts/compare_backends.py scenes --scale 4   # synthetic scenes (local)
+uv run python scripts/compare_backends.py run --model models/x4.onnx --device cpu \
+    --scenes outputs/backends/scenes_x4 --label onnx-cpu \
+    --reference outputs/backends/runs_x4/torch-cpu   # backends end to end (PR 5.2)
 uv run python scripts/measure_detection.py --parts box   # box landmarks and their error (PR 4.4)
 uv run python scripts/measure_detection.py --parts wider # false faces on WIDER photos (D33), ~15 min
 uv run python scripts/make_results.py          # docs/RESULTS.md + local grids in outputs/results/

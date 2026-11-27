@@ -129,7 +129,13 @@ As of 2026-11-27:
   - Merged: PR 5.2 (ONNX Runtime in the pipeline, without PyTorch; PR #35, `a856473`). ONNX
     Runtime gives PyTorch's CPU output on CPU and CUDA; end to end it is as fast as PyTorch on
     CUDA and 4–17% slower on CPU (§9).
-  - In review: PR 5.3 (the REST API, `facehall serve`; branch `feat/serve`).
+  - Merged: PR 5.3 (the REST API, `facehall serve`; PR #36, `ec21d30`).
+  - In review: PR 5.4 (Docker CPU and GPU images; branch `build/docker`). The CPU image and the
+    GPU image in CPU mode pass the end-to-end check; CUDA in a container waits for the NVIDIA
+    Container Toolkit (§11).
+  - Found in PR 5.4: ONNX Runtime sends telemetry to Microsoft by default, also on Linux. facehall
+    now turns it off on import, and so do the images (`DECISIONS.md`, "ONNX Runtime telemetry
+    off").
 - **Scope:** the product is used locally only, with no production deployment (D13).
 - Legacy weights are still tracked in `legacy/`; uploading them to GitHub Releases needs a separate
   confirmation (D7).
@@ -158,10 +164,15 @@ robodream_cv/
 │                              # models of `facehall enhance`, PR 4.2, 4.4; `serve` limits, PR 5.3)
 ├── .python-version            # 3.12
 ├── .pre-commit-config.yaml    # whitespace, yaml, toml, large files; ruff and mypy via `uv run`
-├── .github/workflows/ci.yml   # uv sync --locked → apt ffmpeg → ruff check, ruff format --check
-│                              # → mypy → pytest
-├── src/facehall/              # __init__.py (version 0.0.0), cli.py (--version, train
-│                              # [--resume], eval, enhance, export onnx, serve)
+├── .github/workflows/ci.yml   # job check: uv sync --locked → apt ffmpeg → ruff check,
+│                              # ruff format --check → mypy → pytest; job image: the CPU image
+│                              # built and checked (scripts/smoke_image.py --tiny), PR 5.4
+├── .dockerignore              # build context: pyproject, uv.lock, README, LICENSE, src/,
+│                              # the pipeline config only
+├── docker/                    # Dockerfile.cpu, Dockerfile.gpu: the service images (PR 5.4)
+├── src/facehall/              # __init__.py (version 0.0.0; ONNX Runtime telemetry off),
+│                              # cli.py (--version, train [--resume], eval, enhance,
+│                              # export onnx, serve)
 │   ├── provenance.py          # file sha256, git commit, package versions
 │   ├── data/                  # manifest.py, celeba.py, config.py (schemas), degrade.py,
 │   │                          # kernels.py (blur), dataset.py (AlignedFaces), preview.py,
@@ -204,7 +215,7 @@ robodream_cv/
 │                              # match_degradations.py (PR 2.6), quality_gate.py (D23),
 │                              # measure_detection.py (D31), evaluate_pipeline.py (PR 4.2),
 │                              # measure_temporal.py (PR 4.5), measure_onnx.py (PR 5.1),
-│                              # compare_backends.py (PR 5.2)
+│                              # compare_backends.py (PR 5.2), smoke_image.py (PR 5.4)
 ├── tests/                     # conftest (load_script, synthetic prepared dataset); import, CLI,
 │                              # legacy layout, dependency
 │                              # smoke, license report, provenance, manifest, CelebA preparation,
@@ -224,6 +235,10 @@ robodream_cv/
   torchmetrics[image], torchvision, uvicorn
   (versions and licenses: `docs/THIRD_PARTY_LICENSES.md` §4.1). Dev group: ruff, mypy, pytest,
   pre-commit, httpx (FastAPI's `TestClient`). Entry point: `facehall = facehall.cli:main`.
+- Dependency groups `image-cpu` and `image-gpu` (PR 5.4): what the service images install from
+  `uv.lock`, without PyTorch: fastapi, numpy, omegaconf, opencv-python-headless, pillow, uvicorn,
+  and `onnxruntime` or `onnxruntime-gpu[cuda,cudnn]`. A test keeps their bounds equal to the
+  package's.
 - PyTorch build: by default torch comes from PyPI (CUDA 13.2 on Linux). The `cpu` extra switches
   to the CPU-only build from `download.pytorch.org/whl/cpu`; the `cpu` and `cuda` extras are
   declared as conflicting, so `uv.lock` holds both builds.
@@ -237,6 +252,8 @@ robodream_cv/
 - CI also installs Ubuntu's `ffmpeg` package for the tests that encode video (PR #33). On
   2026-11-27 the runner image `ubuntu-26.04` got the same package as this machine
   (`7:8.0.1-3ubuntu2`): 81 packages, 66.4 MB, 19 s.
+- A second CI job (PR 5.4) builds the CPU image and checks it end to end with a tiny random model
+  and the YuNet weights (230 kB, pinned sha256). The GPU image is not built in CI.
 - The target layout (configs/, data/, align/, models/, …) is described in `CLAUDE.md` §6.
 
 ## 4. Development environment
@@ -251,7 +268,7 @@ robodream_cv/
 | Locked dev tools | ruff 0.17.2, mypy 2.4.0, pytest 9.1.1 |
 | GitHub CLI | gh 2.46.0, authenticated (git protocol: ssh) |
 | Pushing | The gh OAuth token has no `workflow` scope, so HTTPS pushes that touch `.github/workflows/` are rejected. SSH works (`git@github.com:dronja/robodream_cv.git`). Fix: `gh auth refresh -h github.com -s workflow`, or switch `origin` to SSH |
-| Docker | not installed (needed in Phase 5) |
+| Docker | Ubuntu `docker.io` 29.1.3 and `docker-buildx` 0.30.1, installed 2026-11-27, with the containerd image store; data in `/var/lib/docker` on `/`. The user is in the `docker` group (in this session: `sg docker -c "…"`). NVIDIA Container Toolkit: not installed yet (PR 5.4) |
 | FFmpeg | system `ffmpeg` / `ffprobe` 8.0.1 (Ubuntu package `7:8.0.1-3ubuntu2`, with libx264, libx265 and AAC), needed for videos only (PR 4.5) |
 | Data root | `/mnt/storage/AI/Face` (~18 TB free): `celeba_eurecom/` (raw mirror), `celeba/` (prepared, §6.2), `wider_face/{raw,realworld}/` (§6.5). The repo `data/` directory is gitignored |
 | Weights root | `/mnt/storage/AI/Face/weights` (`$FACEHALL_WEIGHTS`): `buffalo_l/w600k_r50.onnx` + `SOURCE.json` (D18), `inception/weights-inception-2015-12-05-6726825d.pth` (D21), `vgg19/vgg19-dcbb9e9d.pth` (perceptual loss, PR 3.2), `facenet_vggface2/20180402-114759-vggface2.pt` (identity loss, PR 3.3), `yunet/face_detection_yunet_2026may.onnx` (face detector, D31). FID/KID reference features are cached in `outputs/eval/_cache/`. The torchvision AlexNet weights for LPIPS live in `~/.cache/torch/hub/checkpoints/` |
@@ -454,6 +471,8 @@ The authoritative log, with reasons, is [`DECISIONS.md`](DECISIONS.md).
 | D35 | GPU image: `onnxruntime-gpu` with the CUDA execution provider (CUDA libraries from pip) |
 | D36 | REST API: photos only, answered in the same request; videos stay with `facehall enhance` |
 | D37 | No Gradio demo for now; FastAPI's `/docs` page serves for manual tries |
+| — | ONNX Runtime telemetry off: `ORT_DISABLE_TELEMETRY=1` set by facehall on import and by the images (`DECISIONS.md`, PR 5.4) |
+| — | Docker images: `python:3.12.14-slim`, dependency groups from `uv.lock`, no weights inside, non-root, port on the host's 127.0.0.1 (`DECISIONS.md`, PR 5.4) |
 
 ## 8. Licenses — status
 
@@ -474,6 +493,8 @@ The rules and the known-license table are in `CLAUDE.md` §8. The record for eve
 | VGG19 weights for the perceptual loss (torchvision) | Approved and downloaded on 2026-11-25 (PR 3.2). Terms follow the ImageNet training data, *needs verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 | facenet weights for the identity loss (facenet-pytorch, VGGFace2) | Approved and downloaded on 2026-11-25 (PR 3.3) with the weight license unknown: the code of facenet-pytorch and of David Sandberg's facenet is MIT, the weights state no license, and the VGGFace2 terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3). Not to be distributed without a separate review |
 | InceptionV3 weights for FID/KID (torch-fidelity) | Approved and downloaded (D21). Apache 2.0 per the torch-fidelity source; the ImageNet terms *need verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
+| Docker images (PR 5.4) | Local only, not published (D13). The GPU image holds NVIDIA proprietary CUDA libraries, both hold the FFmpeg libraries of the OpenCV wheel, and the Debian packages of the base image are not reviewed (`docs/THIRD_PARTY_LICENSES.md` §4.5). Review before publishing an image |
+| ONNX Runtime telemetry | Its official builds send telemetry to Microsoft by default (`Privacy.md` in the wheel). Turned off in facehall and in the images (PR 5.4) |
 | YuNet face detector (OpenCV Zoo) | Approved and downloaded on 2026-11-26 (D31). MIT per the model directory. Trained on WIDER FACE with landmark labels from InsightFace SCRFD; whether those terms bind the weights *needs verification* (`docs/THIRD_PARTY_LICENSES.md` §3) |
 
 ## 9. Technical design
@@ -1598,7 +1619,7 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
       (the ×8 CUDA mosaics: 32 instead of 13 ms);
     - the bicubic skip as MatMuls (PR 5.1) would save about 0.1 s of 1.8 s on 64 faces, and is
       not adopted.
-- **The REST API (PR 5.3, in review).** Interface, limits and reasons in `DECISIONS.md` ("The
+- **The REST API (PR 5.3, done).** Interface, limits and reasons in `DECISIONS.md` ("The
   REST API (PR 5.3)").
   - **Command:** `facehall serve [--host] [--port] [--scale 4|8 …] [--device] [--set …]`
     (`facehall.serve`): FastAPI on uvicorn, the ONNX models of both scales by default, loaded
@@ -1626,6 +1647,40 @@ The agreed approach. Details are fixed in the corresponding PRs. Phase 1 first, 
     - on CUDA without PyTorch: warm-up 1.5 s, then 12 ms per single-face photo and 2.0–2.2 s
       per 64-face mosaic at ×8;
     - peak memory 2.5 GB (CPU) and 2.9 GB (CUDA) with 34 MP outputs.
+- **Docker images (PR 5.4, in review).** Defaults, measurements and reasons in `DECISIONS.md`
+  ("Docker images (PR 5.4)" and "ONNX Runtime telemetry off").
+  - **Images:** `docker/Dockerfile.cpu` (`onnxruntime`) and `docker/Dockerfile.gpu`
+    (`onnxruntime-gpu` with the CUDA libraries from pip, D35), both on `python:3.12.14-slim`
+    (Debian 13).
+    - **Contents:** the dependency group of the image from `uv.lock`, then facehall without its
+      dependencies; no PyTorch, ONNX exporter, pyarrow, safetensors or ffmpeg.
+    - **Mounts:** no weights inside; the ONNX models at `/models` and YuNet at `/weights/yunet`,
+      read-only, readable by uid 10001.
+    - **Running:** a non-root user, a read-only root with `/tmp` in memory, `serve` on 0.0.0.0
+      inside, the port published on the host's 127.0.0.1, a healthcheck, ONNX Runtime telemetry
+      off. The GPU image serves on `cuda` and fails at start without a GPU.
+  - **Layers:** the dependency environment, facehall as a separate small layer and a BuildKit
+    cache for the uv downloads. A code change rebuilds the GPU image in about 1 s instead of
+    49 s.
+  - **Check:** `scripts/smoke_image.py` runs the container as documented and checks:
+    - `/version`, a marked answer and a readable 415;
+    - a non-root user, no PyTorch, nothing written outside `/tmp`;
+    - no face boxes or telemetry messages in the logs;
+    - the telemetry variable.
+
+    CI runs it on the CPU image with a tiny model (`--tiny`).
+  - **Measured** (2026-11-27):
+    - **Sizes** (CPU / GPU): environment 370 MB / 2.6 GB; compressed image 176 MB / 1.72 GB;
+      on disk 0.70 / 4.62 GB.
+    - **Builds:** cold 39 s and 8 min 22 s, most of the GPU time the download of the CUDA
+      libraries; after a code change 2.6 s and 1.2 s.
+    - **Results:** the CPU container's answers are bit-identical to the development service's,
+      and it is healthy about 1 s after start. Both images pass the check, the GPU image in CPU
+      mode.
+  - **ONNX Runtime telemetry** (found here): its official builds send usage events to Microsoft
+    over HTTPS by default, Linux included (its `Privacy.md`; seen with strace).
+    `ORT_DISABLE_TELEMETRY=1` stops it only if set before `import onnxruntime`, so
+    `facehall/__init__.py` sets it.
 
 ## 10. Roadmap and progress
 
@@ -1767,8 +1822,10 @@ hundred images, 1–2 epochs, under 5 min) comes before every full run. Full tra
 - [x] **PR 5.3** `feat(serve):` FastAPI `/enhance` (photos only, D36), `/health`, `/version`:
       size limits, timeouts, input validation; uploads only in memory, and logs contain no
       images or faces; `facehall serve` (§9)
-- [ ] **PR 5.4** `build(docker):` CPU and GPU images for local use, not published (D13, D35);
-      weights mounted read-only. Docker and the NVIDIA Container Toolkit must be installed first
+- [x] **PR 5.4** `build(docker):` CPU and GPU images for local use, not published (D13, D35);
+      weights mounted read-only; dependency groups from `uv.lock`; `scripts/smoke_image.py`; the
+      CPU image built and checked in CI; ONNX Runtime telemetry off (§9). CUDA in a container is
+      still to be checked (§11)
 - [ ] **PR 5.5** latency and memory benchmark of the images
 - [ ] Gradio demo (optional; deferred, D37)
 
@@ -1859,7 +1916,17 @@ by D32.
 - ONNX Runtime on CPU restores a face 2.4–2.7× slower than PyTorch on CPU. End to end the CPU
   image is therefore 4–17% slower than `facehall enhance` with PyTorch, the most on photos with
   many faces (PR 5.2). The GPU path (`onnxruntime-gpu` with CUDA libraries from pip, D35) works
-  on this machine outside a container; in a container it is not yet verified (PR 5.4).
+  on this machine outside a container. The GPU image passes its check in CPU mode, but CUDA in a
+  container is not verified until the NVIDIA Container Toolkit is installed (PR 5.4).
+- ONNX Runtime's telemetry is off only in processes that import `facehall` before
+  `onnxruntime`, or that have `ORT_DISABLE_TELEMETRY=1` set; other programs on the machine keep
+  ONNX Runtime's default (on). Before PR 5.4 the project's own runs sent its events: every
+  evaluation since PR 1.7 and the ONNX runs of PR 5.1–5.3 (`DECISIONS.md`).
+- The images pin Python and uv by tag, not by digest, and are not rebuilt automatically, so they
+  get Debian's and Python's security fixes only when rebuilt. Published images (D13) would need
+  a rebuild policy.
+- Mounted models and weights must be readable by the container's user (uid 10001); a private
+  folder (mode 0700) makes `serve` fail at start with "Permission denied" (seen in PR 5.4).
 - ONNX Runtime on CUDA searches cuDNN algorithms once per new batch size (about 20 ms each, at
   most 32 sizes); `facehall serve` warms all of them up at start-up (PR 5.3).
 - The REST API has no authentication (D13). Bound to another address than 127.0.0.1, anyone
@@ -1878,6 +1945,8 @@ by D32.
 - *Needs verification:* whether rows inside each split follow the official file order
   (`docs/DATA.md` §4.4). This is needed before joining annotations keyed by file name (D10).
 - The legacy weights are still in HEAD (D7).
+- The build backend (hatchling) is not pinned, here as in every build of the package; the
+  images' runtime packages are (`uv.lock`).
 - Starlette warns that `httpx` in `TestClient` is deprecated in favour of `httpx2` (tests only,
   PR 5.3).
 - *Needs verification:* the `/docs` file picker for the binary body of `POST /enhance` was not
@@ -1960,6 +2029,20 @@ uv run facehall eval --config configs/eval/wider_real_x4.yaml --ckpt runs/<id>/b
                                                # real-world faces, no reference (~15 s)
 uv run python scripts/match_degradations.py --spec configs/degrade/search/realistic.yaml \
     --real configs/eval/wider_real_x8.yaml     # degradation tuning on WIDER val, outputs/ (local)
+```
+
+Docker images (PR 5.4; in this session's shell without a new login: `sg docker -c "…"`):
+
+```bash
+docker build -f docker/Dockerfile.cpu -t facehall:cpu .   # about 40 s the first time
+docker build -f docker/Dockerfile.gpu -t facehall:gpu .   # about 8 min the first time (CUDA libraries)
+docker run --rm -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
+    -v "$PWD/models:/models:ro" -v "$FACEHALL_WEIGHTS/yunet:/weights/yunet:ro" facehall:cpu
+docker run --rm --gpus all -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
+    -v "$PWD/models:/models:ro" -v "$FACEHALL_WEIGHTS/yunet:/weights/yunet:ro" facehall:gpu
+uv run python scripts/smoke_image.py --image facehall:cpu --models models   # end-to-end check
+uv run python scripts/smoke_image.py --image facehall:gpu --models models --gpu
+uv run python scripts/smoke_image.py --image facehall:cpu --tiny   # a tiny random model (CI)
 ```
 
 REST API (PR 5.3):

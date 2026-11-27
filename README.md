@@ -122,6 +122,28 @@ curl --data-binary @photo.jpg "http://127.0.0.1:8000/enhance?scale=4" -o enhance
 - **No authentication:** keep it on `127.0.0.1`.
 - **Limits:** upload size, output pixels and a short queue (`serve` in
   `configs/pipeline/default.yaml`).
+- **No telemetry:** ONNX Runtime sends usage telemetry to Microsoft by default, also on Linux.
+  facehall turns it off (`ORT_DISABLE_TELEMETRY=1`) before ONNX Runtime is loaded. FastAPI's
+  telemetry is off too.
+
+### Docker
+
+Two images run the same API without PyTorch: `docker/Dockerfile.cpu` and
+`docker/Dockerfile.gpu`, which uses the CUDA provider of ONNX Runtime and needs the NVIDIA
+Container Toolkit. They are meant to be built and used locally.
+
+```bash
+docker build -f docker/Dockerfile.cpu -t facehall:cpu .
+docker run --rm -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp \
+    -v "$PWD/models:/models:ro" -v "$FACEHALL_WEIGHTS/yunet:/weights/yunet:ro" facehall:cpu
+```
+
+- **No weights in the images:** mount the exported ONNX models at `/models` and the YuNet
+  detector at `/weights/yunet`. Both are read-only, and the files must be readable by the
+  container's user (uid 10001).
+- **Keep the port on `127.0.0.1`.** The service listens on all addresses inside the container,
+  and it has no authentication.
+- **The GPU image** runs with `--gpus all`, and it stops at start if it finds no GPU.
 
 ---
 
